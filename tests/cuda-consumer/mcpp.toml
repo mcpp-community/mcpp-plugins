@@ -42,6 +42,9 @@ cuda-runtime = "2026.09.05"
 # every device unit, so the clang route needs them even when nothing calls
 # cuRAND. The 10.3.x line pairs with CUDA 12.x.
 "xim:libcurand"         = "10.3.10.19"
+# CCCL (libcu++, cub, thrust): cuRAND's header includes <nv/target> from it.
+# The 12.x toolkits ship it as a separate package; 12.9.27 is the 12.9 line.
+"xim:cuda-cccl"         = "12.9.27"
 "xim:libcuda-host-link" = { linux = "0.0.1" }
 
 [build]
