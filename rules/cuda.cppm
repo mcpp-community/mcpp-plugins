@@ -54,7 +54,7 @@ struct options {
     // Header search paths for the island. Relative entries resolve against the
     // package root; an ABSOLUTE entry is passed through unchanged.
     //
-    // ⭐ THE ABSOLUTE FORM IS FOR A DEPENDENCY'S HEADERS. A device compiler is
+    // THE ABSOLUTE FORM IS FOR A DEPENDENCY'S HEADERS. A device compiler is
     // a separate driver and inherits nothing from the C++ side's include
     // configuration, so a package whose device code includes a dependency's
     // header -- ggml's CUDA backend includes `cublas_v2.h` -- has to name that
@@ -322,7 +322,7 @@ inline bounds read_bounds(std::string_view headerPath) {
 // Does the C library this build compiles against declare the C23 functions
 // `cospi`, `sinpi` and `rsqrt`?
 //
-// ⚠️ Measured 2026-09-05 against glibc 2.44. Toolkit 12.9's
+// Measured 2026-09-05 against glibc 2.44. Toolkit 12.9's
 // `crt/math_functions.h` declares those same names for the host WITHOUT
 // `noexcept`; glibc declares them WITH it, and since C++17 that is part of the
 // function type. nvcc's front end stops with six `exception specification is
@@ -470,7 +470,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         }
         front = { driver_cc, "-x", "cuda", "-std=c++17", "-O2", "-fPIC",
                   "--cuda-path=" + tk->nvcc_root, "-Wno-unknown-cuda-version",
-                  // ⚠️ NVIDIA'S HEADER REFUSES libc++, AND THE REFUSAL IS
+                  // NVIDIA'S HEADER REFUSES libc++, AND THE REFUSAL IS
                   // ABOUT nvcc RATHER THAN ABOUT THIS COMPILER.
                   //
                   //   crt/host_defines.h:67: error: "libc++ is not supported

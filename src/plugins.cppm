@@ -11,6 +11,6 @@ import std;
 
 export namespace mcpp::plugins {
 
-inline constexpr std::string_view version = "0.1.0";
+inline constexpr std::string_view version = "0.1.1";
 
 } // namespace mcpp::plugins

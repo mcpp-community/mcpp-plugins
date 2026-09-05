@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [dependencies.mcpp]
-plugins = { version = "0.1.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.1.1", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp

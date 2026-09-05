@@ -162,7 +162,7 @@ inline std::string run_and_capture(const std::string& cmd) {
     return text;
 }
 
-// ⚠️ THE OPTIMISER IS OPTIONAL AND ITS ABSENCE IS NOT A BUILD ERROR.
+// THE OPTIMISER IS OPTIONAL AND ITS ABSENCE IS NOT A BUILD ERROR.
 //
 // glslang links spirv-opt only when built with `ENABLE_OPT`, and the payload
 // this ecosystem publishes today is not:
@@ -236,7 +236,7 @@ inline std::string symbol_of(std::string_view stem, std::string_view stage) {
     return s;
 }
 
-// ⚠️ NEWLINE-SEPARATED, not `;`. A path may contain a semicolon and cannot
+// NEWLINE-SEPARATED, not `;`. A path may contain a semicolon and cannot
 // contain a newline, which is why the engine chose it — and why a splitter
 // that guesses wrong still works for exactly one shader and silently produces
 // one impossible path for two.
@@ -305,7 +305,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         const auto input  = std::filesystem::path(src).is_absolute()
                           ? src : root + "/" + src;
 
-        // ⚠️ `id` and `description` are raw pointers the action reads at
+        // `id` and `description` are raw pointers the action reads at
         // `submit()`; `arg`/`input`/`output` copy, these two do not. Held in
         // named strings for the life of the statement that submits.
         const std::string id   = "spirv:" + src;
