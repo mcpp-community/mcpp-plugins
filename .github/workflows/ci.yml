@@ -125,9 +125,35 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
-      # THE HOST-LEAK ASSERTION, and it is separate on purpose: both device
-      # rules above compiled successfully on a developer machine while reading
-      # /usr/include, and the only place that was visible was the command line.
+      # THE HOST-LEAK ASSERTION, and what it measures was corrected once.
+      #
+      # Its first form grepped a verbose build for `/usr`. That reported
+      # nothing wrong on a developer machine AND on a runner, while the runner
+      # was in fact compiling the HIP device pass against the host's
+      # `/usr/include/c++/14` -- because an IMPLICIT include search never
+      # appears on a command line. The compiler's own `#include <...> search
+      # starts here` list is where it is visible.
+      #
+      # The criterion is the C++ standard library specifically, not `/usr`
+      # absence: mcpp's own compiles leave `/usr/include` on the list as a last
+      # resort for C headers, and a stricter rule here would be stricter than
+      # the engine it is checking. What must never appear is a C++ library
+      # nothing in this ecosystem chose.
+      - name: no device compile reads a host C++ standard library
+        run: |
+          fail=0
+          for d in tests/cuda-consumer tests/hip-consumer tests/sycl-consumer; do
+            ( cd "$d" && rm -rf target && "$MCPP" build -v > build.log 2>&1 ) || {
+              echo "build failed in $d"; tail -20 "$d/build.log"; exit 1; }
+            hits=$(grep -oE '/(usr|opt)/[^ ]*(c\+\+|include/c\+\+)[^ ]*' "$d/build.log" | sort -u | head -5)
+            if [ -n "$hits" ]; then
+              echo "host C++ standard library reached from $d:"; echo "$hits"; fail=1
+            else
+              echo "ok: $d reads no host C++ standard library"
+            fi
+          done
+          [ "$fail" -eq 0 ]
+
       - name: no device command line reaches the host
         run: |
           for d in tests/cuda-consumer tests/hip-consumer tests/sycl-consumer; do

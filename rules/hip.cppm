@@ -125,14 +125,14 @@ inline target parse_target(std::string_view accel) {
 // ─── The payloads ──────────────────────────────────────────────────────────
 
 struct toolkit {
-    std::string hip_root, nvcc_root, cudart_root, curand_root, cccl_root;
+    std::string hip_root, nvcc_root, cudart_root, curand_root, cccl_root, profiler_root;
 
     std::vector<std::string> include_dirs() const {
         std::vector<std::string> out;
         // HIP first: its `hip/hip_runtime.h` is the entry point, and its
         // `nvidia_detail` headers include the CUDA ones by their own names.
         if (!hip_root.empty()) out.push_back(hip_root + "/include");
-        for (auto const* r : { &cudart_root, &nvcc_root, &cccl_root, &curand_root })
+        for (auto const* r : { &cudart_root, &nvcc_root, &cccl_root, &curand_root, &profiler_root })
             if (!r->empty() && std::filesystem::is_directory(*r + "/include"))
                 out.push_back(*r + "/include");
         if (!cccl_root.empty() && std::filesystem::is_directory(cccl_root + "/include/cccl"))
@@ -237,7 +237,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     }
 
     toolkit tk{ payload("hip-nvidia"), payload("cuda-nvcc"), payload("cuda-cudart"),
-                payload("libcurand"), payload("cuda-cccl") };
+                payload("libcurand"), payload("cuda-cccl"), payload("cuda-profiler-api") };
 
     // Each missing payload is named with the line that adds it. `hip-nvidia`
     // is this rule's own; the other four are the CUDA back end the NVIDIA
@@ -252,6 +252,11 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         { "cuda-cudart", &tk.cudart_root, "12.9.79"     },
         { "libcurand",   &tk.curand_root, "10.3.10.19"  },
         { "cuda-cccl",   &tk.cccl_root,   "12.9.27"     },
+        // `nvidia_hip_runtime_api.h` includes <cuda_profiler_api.h> at its
+        // second line. CUDA ships it in its own component, and a machine with
+        // a host CUDA installation finds it there without saying so -- which
+        // is how this entry came to be missing.
+        { "cuda-profiler-api", &tk.profiler_root, "12.9.79" },
     };
     std::string missing;
     for (auto const& n : needs)
@@ -268,9 +273,21 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
 
     if (auto v = hip_version(tk.hip_root); !v.empty()) mcpp::fact("hip", v.c_str());
 
-    const char* cc = mcpp::compiler();
-    if (!cc || !*cc) {
-        std::println(std::cerr, "mcpp.rules.hip: mcpp named no compiler for this target");
+    // THE TOOLCHAIN'S clang++ BY PATH, NOT `mcpp::compiler()`.
+    //
+    // That function answers with the compiler's IDENTITY -- the string
+    // `clang` -- and putting an identity where an argv[0] belongs runs
+    // whichever `clang` the action's PATH happens to offer. It works on a
+    // machine whose PATH already has the payload and is a host leak
+    // everywhere else. `mcpp.rules.cuda` takes the same path for the same
+    // reason.
+    const std::string tcdir = mcpp::toolchain_dir();
+    const std::string cc = tcdir + "/bin/clang++";
+    if (tcdir.empty() || !std::filesystem::exists(cc)) {
+        std::println(std::cerr,
+            "mcpp.rules.hip: the NVIDIA platform compiles through clang, and this "
+            "project's\n  toolchain has no clang++ at {}.\n"
+            "  Select an LLVM toolchain:  [toolchain] default = \"llvm@22.1.8\"", cc);
         return out;
     }
 
@@ -279,9 +296,48 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // the HIP API onto it inline.
     std::vector<std::string> front{
         cc, "-x", "cuda", "-std=c++17", "-O2", "-fPIC",
-        "-D__HIP_PLATFORM_NVIDIA__",
+        "-D__HIP_PLATFORM_NVIDIA__", "-Wno-unknown-cuda-version",
         "--cuda-path=" + tk.nvcc_root,
     };
+
+    // THE C++ STANDARD LIBRARY IS NAMED, NOT INHERITED, AND THAT IS WHAT THIS
+    // RULE NEEDS AND `mcpp.rules.cuda` DOES NOT.
+    //
+    // A bare CUDA kernel includes no C++ standard library header. The HIP
+    // headers do -- `nvidia_hip_runtime_api.h` reaches <limits> -- so the
+    // device pass compiles one, and WHICH one is decided by the compiler's
+    // defaults unless something says otherwise. Measured: on a developer
+    // machine clang's own configuration supplied this ecosystem's libc++ and
+    // the build was clean; on a runner the same clang fell back to detecting
+    // the host's GCC and read `/usr/include/c++/14`, whose <limits> declares
+    // `__float128` -- which the NVPTX device target does not support:
+    //
+    //   .../include/c++/14/limits:2089:27: error: __float128 is not supported
+    //   on this target
+    //
+    // Nineteen of those, from a header no part of this ecosystem chose. The
+    // include search list is where this is visible; the command line is not,
+    // which is why a check that greps the command line for `/usr` reported
+    // nothing wrong on both machines.
+    {
+        std::error_code ec;
+        const std::string cxx1 = tcdir + "/include/c++/v1";
+        if (std::filesystem::is_directory(cxx1, ec)) {
+            front.push_back("-nostdinc++");
+            front.push_back("-isystem" + cxx1);
+            // The per-triple overlay beside it, whose directory name is the
+            // toolchain's own spelling of the target and not one this rule
+            // can derive: `x86_64-unknown-linux-gnu` where `mcpp::target()`
+            // says `x86_64-linux-gnu`. Found rather than constructed.
+            for (std::filesystem::directory_iterator d{tcdir + "/include", ec}, end;
+                 d != end; d.increment(ec)) {
+                if (!d->is_directory(ec)) continue;
+                const auto over = d->path() / "c++" / "v1";
+                if (std::filesystem::is_directory(over, ec))
+                    front.push_back("-isystem" + over.string());
+            }
+        }
+    }
     for (auto const& a : tg.cuda_archs) front.push_back("--cuda-gpu-arch=" + a);
     for (auto const& inc : tk.include_dirs()) front.push_back("-I" + inc);
     // NVIDIA's own headers refuse libc++ for a nvcc host pass that is not

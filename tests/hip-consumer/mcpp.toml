@@ -39,6 +39,7 @@ cuda-runtime = "2026.09.05"
 "xim:cuda-cudart"       = "12.9.79"
 "xim:libcurand"         = "10.3.10.19"
 "xim:cuda-cccl"         = "12.9.27"
+"xim:cuda-profiler-api" = "12.9.79"
 "xim:libcuda-host-link" = { linux = "0.0.1" }
 
 [build]
