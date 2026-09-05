@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [dependencies.mcpp]
-plugins = { version = "0.1.1", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.2.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -39,14 +39,19 @@ engine's own module family and is not used here.
 | feature | module | since mcpp | what it needs |
 |---|---|---|---|
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.5.2 | the toolkit named in `[xlings.workspace]` (`xim:cuda-nvcc`, `xim:cuda-cudart`, and `xim:libcurand` for the clang route, whose wrapper includes a cuRAND header unconditionally), `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
-| `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action |
+| `rules-hip` | `mcpp.rules.hip` | 2026.9.5.2 | `xim:hip-nvidia` plus the CUDA back end it compiles through (`xim:cuda-nvcc`, `xim:cuda-cudart`, `xim:libcurand`, `xim:cuda-cccl`), `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
+| `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` or `xim:shaderc` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action, and states which of the two compilers produced it |
+| `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.1 | `xim:dpcpp` (the compiler), `xim:gcc` (the C++ standard library the unit compiles against, not a second toolchain) and `xim:cuda-nvcc` for an NVIDIA target; `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. The floor is the release whose device-source table carries `.sycl` |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
 
 The floor is the mcpp release whose engine carries what the member relies on:
 `rules-spirv` needs the device-source table that classifies shader extensions,
-which 2026.9.5.3 introduced, and `tools-embed` needs the fast path to compare a
-declared file input, which 2026.9.5.4 introduced. The index descriptor states the floor; a project
-on an older mcpp is refused at resolution rather than at the first shader.
+which 2026.9.5.3 introduced; `tools-embed` needs the fast path to compare a
+declared file input, which 2026.9.5.4 introduced; and `rules-sycl` needs `.sycl`
+in that same device-source table, which 2026.9.6.1 introduced. The index
+descriptor states the highest floor among the members, so it is the floor of the
+collection rather than of any one feature; a project on an older mcpp is refused
+at resolution rather than at the first shader.
 
 ## How the engine sees this package
 
@@ -66,6 +71,20 @@ rules/<x>.cppm     export module mcpp.rules.<x>;
 tools/<x>.cppm     export module mcpp.tools.<x>;
 tests/<consumer>/  one project per member, built by CI with the pinned mcpp
 ```
+
+## What a rule may drive, and what it may not
+
+A member drives a compiler the ecosystem resolved and no other. `xim:dpcpp` is
+`mcpp.rules.sycl`'s compiler; `xim:gcc` is the C++ standard library it compiles
+against; `xim:cuda-nvcc` is the back end it emits for. None of the three is a
+default: each is read from `mcpp::xpkg_dir`, and a member that cannot find one
+refuses and prints the `[xlings.workspace]` line that would add it.
+
+Two of those three were added because a build that already worked was found to
+be reading the host. Without `--gcc-install-dir` the SYCL unit compiled against
+`/usr/include/c++`; without `--cuda-path` clang found the host's CUDA
+installation. Neither said anything: both are visible only in the compiler's
+own include search list, and only on a machine that has those directories.
 
 ## Adding a member
 

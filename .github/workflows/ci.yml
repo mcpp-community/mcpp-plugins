@@ -9,7 +9,7 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  MCPP_VERSION: 2026.9.5.4
+  MCPP_VERSION: 2026.9.6.1
 
 jobs:
   consumers:
@@ -72,3 +72,45 @@ jobs:
           "$MCPP" build --no-accel
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
+
+      # The same shape one API over: HIP on the NVIDIA platform is a header
+      # layer over the CUDA runtime, so this compiles the same device code
+      # through a different spelling and needs no ROCm. The device object is
+      # asserted to exist, because a rule that submitted no action at all would
+      # otherwise leave a build that "succeeded" and produced nothing.
+      - name: rules-hip through a consumer
+        working-directory: tests/hip-consumer
+        run: |
+          "$MCPP" build
+          test -f target/.build-mcpp/out/saxpy.hip.o
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
+
+      # SYCL is compiled by a second compiler, so this step is the one that
+      # would catch a payload the rule cannot drive. Two objects have to exist:
+      # the unit's own, and the device-link wrapper that registers its image --
+      # without the second the program links and finds no kernel at run time.
+      - name: rules-sycl through a consumer
+        working-directory: tests/sycl-consumer
+        run: |
+          "$MCPP" build
+          test -f target/.build-mcpp/out/saxpy.sycl.o
+          test -f target/.build-mcpp/out/sycl_device_link.o
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
+
+      # THE HOST-LEAK ASSERTION, and it is separate on purpose: both device
+      # rules above compiled successfully on a developer machine while reading
+      # /usr/include, and the only place that was visible was the command line.
+      - name: no device command line reaches the host
+        run: |
+          for d in tests/cuda-consumer tests/hip-consumer tests/sycl-consumer; do
+            ( cd "$d" && rm -rf target && "$MCPP" build -v > build.log 2>&1 )
+            if grep -q '/usr/include\|/usr/lib' "$d/build.log"; then
+              echo "host path on a command line in $d:"
+              grep -o '[^ ]*/usr/[^ ]*' "$d/build.log" | sort -u | head
+              exit 1
+            fi
+          done
