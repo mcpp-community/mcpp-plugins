@@ -229,7 +229,10 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     const std::string cuda  = tg.cuda_archs.empty() ? std::string{} : payload("cuda-nvcc");
 
     std::string missing;
-    if (dpcpp.empty()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
+    // The payload is needed for the COMPILER, so a project that named its own
+    // does not need it. Asking for both would tell someone who has already
+    // solved this to solve it again.
+    if (dpcpp.empty() && opt.compiler.empty()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
     if (gcc.empty())   missing += "    \"xim:gcc\"   = \"15.1.0\"\n";
     if (!tg.cuda_archs.empty() && cuda.empty())
         missing += "    \"xim:cuda-nvcc\" = \"12.9.86\"\n";

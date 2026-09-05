@@ -159,6 +159,9 @@ enum class flavour { none, glslang, glslc };
 struct compiler {
     std::string path;
     flavour     kind = flavour::none;
+    // Set when discovery already said why it failed, so the caller does not
+    // follow a precise message with a generic one that contradicts it.
+    bool        reported = false;
     explicit operator bool() const { return kind != flavour::none && !path.empty(); }
     const char* name() const { return kind == flavour::glslc ? "glslc" : "glslang"; }
 };
@@ -201,7 +204,7 @@ inline compiler find_compiler(const options& opt) {
                 "mcpp.rules.spirv: options::compiler names '{}', which is neither glslang\n"
                 "  nor glslc by program name, and the two share almost no flags. Rename the\n"
                 "  program or point at the real one.", opt.compiler);
-            return {};
+            return { .reported = true };
         }
         return { opt.compiler, k };
     }
@@ -364,6 +367,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
 
     const auto cc = find_compiler(opt);
     if (!cc) {
+        if (cc.reported) return false;
         std::println(stderr,
             "mcpp.rules.spirv: no shader compiler found. Install one into the workspace\n"
             "  [xlings.workspace]\n"
