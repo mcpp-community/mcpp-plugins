@@ -47,6 +47,25 @@ jobs:
           "$MCPP" run | tee run.log
           grep -q '^magic=07230203' run.log
 
+      # THE SECOND COMPILER, THROUGH THE SAME FIXTURE. glslang and glslc share
+      # almost no flags -- glslc's `-mfmt=c` is a bare initialiser list where
+      # glslang's `-x --vn` is a complete declaration, and glslc's `-S` means
+      # "emit assembly" where glslang's names a stage -- so the rule writes the
+      # declaration itself on this route. The program is unchanged, which is the
+      # assertion: one source, two compilers, one answer.
+      - name: rules-spirv through glslc
+        working-directory: tests/spirv-consumer
+        run: |
+          curl -L -fsS --retry 3 --retry-all-errors -o shaderc.tar.gz \
+            "https://github.com/xlings-res/shaderc/releases/download/2026.3/shaderc-2026.3-linux-x86_64.tar.gz"
+          tar -xzf shaderc.tar.gz
+          rm -rf target
+          MCPP_GLSLC="$PWD/shaderc-2026.3/bin/glslc" "$MCPP" build
+          test -f target/.build-mcpp/out/spirv/scale_comp.inc
+          MCPP_GLSLC="$PWD/shaderc-2026.3/bin/glslc" "$MCPP" run | tee run-glslc.log
+          grep -q '^magic=07230203' run-glslc.log
+          rm -rf shaderc.tar.gz shaderc-2026.3
+
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
       # that matters -- editing the data file must reach the binary, which is
