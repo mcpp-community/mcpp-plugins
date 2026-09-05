@@ -9,13 +9,18 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  MCPP_VERSION: 2026.9.5.4
+  MCPP_VERSION: 2026.9.6.1
 
 jobs:
   consumers:
     name: consumers (linux x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # 90 rather than 60: the SYCL fixture pulls three payloads this job did not
+    # need before -- dpcpp (578 MB installed), gcc (265 MB) and cuda-nvcc
+    # (319 MB) -- and a cold cache downloads all of them before the first
+    # compile. The cache key includes the fixtures' manifests, so a run that
+    # changes one of them is always the cold case.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +52,25 @@ jobs:
           "$MCPP" run | tee run.log
           grep -q '^magic=07230203' run.log
 
+      # THE SECOND COMPILER, THROUGH THE SAME FIXTURE. glslang and glslc share
+      # almost no flags -- glslc's `-mfmt=c` is a bare initialiser list where
+      # glslang's `-x --vn` is a complete declaration, and glslc's `-S` means
+      # "emit assembly" where glslang's names a stage -- so the rule writes the
+      # declaration itself on this route. The program is unchanged, which is the
+      # assertion: one source, two compilers, one answer.
+      - name: rules-spirv through glslc
+        working-directory: tests/spirv-consumer
+        run: |
+          curl -L -fsS --retry 3 --retry-all-errors -o shaderc.tar.gz \
+            "https://github.com/xlings-res/shaderc/releases/download/2026.3/shaderc-2026.3-linux-x86_64.tar.gz"
+          tar -xzf shaderc.tar.gz
+          rm -rf target
+          MCPP_GLSLC="$PWD/shaderc-2026.3/bin/glslc" "$MCPP" build
+          test -f target/.build-mcpp/out/spirv/scale_comp.inc
+          MCPP_GLSLC="$PWD/shaderc-2026.3/bin/glslc" "$MCPP" run | tee run-glslc.log
+          grep -q '^magic=07230203' run-glslc.log
+          rm -rf shaderc.tar.gz shaderc-2026.3
+
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
       # that matters -- editing the data file must reach the binary, which is
@@ -72,3 +96,60 @@ jobs:
           "$MCPP" build --no-accel
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
+
+      # The same shape one API over: HIP on the NVIDIA platform is a header
+      # layer over the CUDA runtime, so this compiles the same device code
+      # through a different spelling and needs no ROCm. The device object is
+      # asserted to exist, because a rule that submitted no action at all would
+      # otherwise leave a build that "succeeded" and produced nothing.
+      - name: rules-hip through a consumer
+        working-directory: tests/hip-consumer
+        run: |
+          "$MCPP" build
+          test -f target/.build-mcpp/out/saxpy.hip.o
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
+
+      # SYCL is compiled by a second compiler, so this step is the one that
+      # would catch a payload the rule cannot drive. Two objects have to exist:
+      # the unit's own, and the device-link wrapper that registers its image --
+      # without the second the program links and finds no kernel at run time.
+      - name: rules-sycl through a consumer
+        working-directory: tests/sycl-consumer
+        run: |
+          "$MCPP" build
+          test -f target/.build-mcpp/out/saxpy.sycl.o
+          test -f target/.build-mcpp/out/sycl_device_link.o
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
+
+      # THE HOST-LEAK ASSERTION, and what it measures was corrected once.
+      #
+      # Its first form grepped a verbose build for `/usr`. That reported
+      # nothing wrong on a developer machine AND on a runner, while the runner
+      # was in fact compiling the HIP device pass against the host's
+      # `/usr/include/c++/14` -- because an IMPLICIT include search never
+      # appears on a command line. The compiler's own `#include <...> search
+      # starts here` list is where it is visible.
+      #
+      # The criterion is the C++ standard library specifically, not `/usr`
+      # absence: mcpp's own compiles leave `/usr/include` on the list as a last
+      # resort for C headers, and a stricter rule here would be stricter than
+      # the engine it is checking. What must never appear is a C++ library
+      # nothing in this ecosystem chose.
+      - name: no device compile reads a host C++ standard library
+        run: |
+          fail=0
+          for d in tests/cuda-consumer tests/hip-consumer tests/sycl-consumer; do
+            ( cd "$d" && rm -rf target && "$MCPP" build -v > build.log 2>&1 ) || {
+              echo "build failed in $d"; tail -20 "$d/build.log"; exit 1; }
+            hits=$(grep -oE '/(usr|opt)/[^ ]*(c\+\+|include/c\+\+)[^ ]*' "$d/build.log" | sort -u | head -5)
+            if [ -n "$hits" ]; then
+              echo "host C++ standard library reached from $d:"; echo "$hits"; fail=1
+            else
+              echo "ok: $d reads no host C++ standard library"
+            fi
+          done
+          [ "$fail" -eq 0 ]

@@ -30,15 +30,25 @@
 // give: an artifact output is ordered against the LINK, and the header has to
 // exist before the first translation unit that includes it is compiled.
 //
-// GLSLANG, AND ONLY GLSLANG, DELIBERATELY.
+// TWO COMPILERS, AND THE RULE STATES WHICH ONE IT USED.
 //
-// `glslc` (shaderc) is the other reference compiler and is not supported here.
-// Not for a reason of principle — this rule would take it — but because
-// nothing in this ecosystem publishes it, and a route with no payload behind
-// it is a claim rather than a feature. `xim:glslang` exists and is what the
-// example installs. If glslc is ever packaged, `-mfmt=c` emits a bare
-// initialiser list where glslang's `-x --vn` emits a complete declaration, so
-// the two produce different headers and the rule would have to say which.
+// glslang and glslc are the two reference GLSL compilers and their command
+// lines are not interchangeable. glslang's `-x --vn <name>` emits a COMPLETE C
+// declaration -- `const uint32_t <name>[] = { ... };` -- while glslc's
+// `-mfmt=c` emits a BARE INITIALISER LIST, `{ ... }`, which is not a
+// translation unit on its own. A rule that takes both therefore has to write
+// the declaration around glslc's output itself, which `wrap_glslc_output`
+// below does.
+//
+// An earlier revision of this file supported glslang alone, and said why:
+// nothing in this ecosystem published glslc, "and a route with no payload
+// behind it is a claim rather than a feature". `xim:shaderc` now publishes it,
+// so the route exists. Neither is a default over the other. Discovery takes
+// what the project named, then what the environment named, then whichever
+// payload the workspace installed, and the build log states which it found --
+// two compilers that produce an equivalent header from one shader are still
+// two different answers to "what compiled this".
+
 module;
 #include <cctype>
 #include <cstdio>
@@ -91,6 +101,21 @@ inline std::string_view trim(std::string_view s) {
     return s;
 }
 
+// Split on one character. Written out rather than taken from <ranges> for the
+// reason `mcpp.rules.cuda` records: GCC 16 refuses the ranges split view
+// instantiated inside an exported inline function when build.mcpp imports the
+// module, and clang does not.
+inline std::vector<std::string_view> split(std::string_view s, char sep) {
+    std::vector<std::string_view> out;
+    for (std::size_t i = 0; i <= s.size();) {
+        auto j = s.find(sep, i);
+        out.push_back(s.substr(i, j == std::string_view::npos ? s.size() - i : j - i));
+        if (j == std::string_view::npos) break;
+        i = j + 1;
+    }
+    return out;
+}
+
 inline target parse_target(std::string_view accel) {
     target t;
     for (std::size_t i = 0; i <= accel.size();) {
@@ -122,29 +147,81 @@ inline bool is_file(const std::string& p) {
 // PATH comes last on purpose — a host glslang is a fine fallback and a poor
 // default, because it makes the SPIR-V depend on a machine rather than on a
 // declaration.
-inline std::string find_compiler(const options& opt) {
-    if (!opt.compiler.empty()) return opt.compiler;
-    if (const char* e = std::getenv("MCPP_GLSLANG"); e && *e) return e;
+// WHICH COMPILER, AND WHICH OF THE TWO IT IS.
+//
+// The flavour is decided by the program's own name rather than by asking it,
+// because the answer is needed before any flag can be chosen and the two
+// disagree about almost every flag. A path a project or the environment names
+// is classified the same way, so `MCPP_GLSLC=/opt/bin/glslc` needs no second
+// variable to say what it is.
+enum class flavour { none, glslang, glslc };
 
-    if (const char* dir = mcpp::xpkg_dir("glslang"); dir && *dir) {
-        for (const char* exe : {"glslangValidator", "glslang"}) {
-            auto p = (std::filesystem::path(dir) / "bin" / exe).string();
-            if (is_file(p)) return p;
-        }
+struct compiler {
+    std::string path;
+    flavour     kind = flavour::none;
+    // Set when discovery already said why it failed, so the caller does not
+    // follow a precise message with a generic one that contradicts it.
+    bool        reported = false;
+    explicit operator bool() const { return kind != flavour::none && !path.empty(); }
+    const char* name() const { return kind == flavour::glslc ? "glslc" : "glslang"; }
+};
+
+inline flavour classify(const std::string& path) {
+    const auto stem = std::filesystem::path(path).stem().string();
+    if (stem == "glslc") return flavour::glslc;
+    if (stem == "glslang" || stem == "glslangValidator") return flavour::glslang;
+    return flavour::none;
+}
+
+inline std::string first_on_path(const char* exe) {
+    const char* path = std::getenv("PATH");
+    if (!path || !*path) return {};
+    std::string_view sv(path);
+    for (std::size_t i = 0; i <= sv.size();) {
+        auto sep = sv.find(':', i);
+        auto dir = sv.substr(i, sep == std::string_view::npos ? sv.size() - i : sep - i);
+        i = sep == std::string_view::npos ? sv.size() + 1 : sep + 1;
+        if (dir.empty()) continue;
+        auto p = (std::filesystem::path(dir) / exe).string();
+        if (is_file(p)) return p;
     }
-    for (const char* exe : {"glslangValidator", "glslang"}) {
-        if (const char* path = std::getenv("PATH"); path && *path) {
-            std::string_view sv(path);
-            for (std::size_t i = 0; i <= sv.size();) {
-                auto sep = sv.find(':', i);
-                auto dir = sv.substr(i, sep == std::string_view::npos ? sv.size() - i : sep - i);
-                i = sep == std::string_view::npos ? sv.size() + 1 : sep + 1;
-                if (dir.empty()) continue;
-                auto p = (std::filesystem::path(dir) / exe).string();
-                if (is_file(p)) return p;
-            }
+    return {};
+}
+
+// Discovery, in the order a project can predict: what it named, what the
+// environment named, the payload the workspace installed, then the PATH. The
+// PATH comes last on purpose -- a host shader compiler is a fine fallback and
+// a poor default, because it makes the SPIR-V depend on a machine rather than
+// on a declaration.
+inline compiler find_compiler(const options& opt) {
+    if (!opt.compiler.empty()) {
+        auto k = classify(opt.compiler);
+        if (k == flavour::none) {
+            // Named but unrecognised: taking it as glslang would pass glslang's
+            // flags to something that is not glslang, and the error would name
+            // a flag rather than this decision.
+            std::println(stderr,
+                "mcpp.rules.spirv: options::compiler names '{}', which is neither glslang\n"
+                "  nor glslc by program name, and the two share almost no flags. Rename the\n"
+                "  program or point at the real one.", opt.compiler);
+            return { .reported = true };
         }
+        return { opt.compiler, k };
     }
+    if (const char* e = std::getenv("MCPP_GLSLC");   e && *e) return { e, flavour::glslc };
+    if (const char* e = std::getenv("MCPP_GLSLANG"); e && *e) return { e, flavour::glslang };
+
+    if (const char* dir = mcpp::xpkg_dir("glslang"); dir && *dir)
+        for (const char* exe : {"glslangValidator", "glslang"})
+            if (auto p = (std::filesystem::path(dir) / "bin" / exe).string(); is_file(p))
+                return { p, flavour::glslang };
+    if (const char* dir = mcpp::xpkg_dir("shaderc"); dir && *dir)
+        if (auto p = (std::filesystem::path(dir) / "bin" / "glslc").string(); is_file(p))
+            return { p, flavour::glslc };
+
+    for (const char* exe : {"glslangValidator", "glslang"})
+        if (auto p = first_on_path(exe); !p.empty()) return { p, flavour::glslang };
+    if (auto p = first_on_path("glslc"); !p.empty()) return { p, flavour::glslc };
     return {};
 }
 
@@ -179,16 +256,20 @@ inline bool has_optimizer(const std::string& exe) {
     return out.find("optimizer not linked") == std::string::npos;
 }
 
-inline std::string compiler_version(const std::string& exe) {
-    const std::string text = run_and_capture("\"" + exe + "\" --version 2>/dev/null");
-    for (std::size_t i = 0; i <= text.size();) {
-        auto nl = text.find('\n', i);
-        std::string_view line(text.data() + i,
-                              (nl == std::string::npos ? text.size() : nl) - i);
-        i = nl == std::string::npos ? text.size() + 1 : nl + 1;
-        auto at = line.find("Glslang Version:");
+inline std::string compiler_version(const compiler& cc) {
+    const std::string text = run_and_capture("\"" + cc.path + "\" --version 2>/dev/null");
+    // glslc: `shaderc v2026.3 2fbab05...` on the first line. glslang:
+    // `Glslang Version: 11:15.1.0`, whose first field is the SPIR-V generator
+    // magic and whose second is the release.
+    const std::string_view key = cc.kind == flavour::glslc ? "shaderc v" : "Glslang Version:";
+    for (auto line : split(text, '\n')) {
+        auto at = line.find(key);
         if (at == std::string_view::npos) continue;
-        auto rest = trim(line.substr(at + std::string_view("Glslang Version:").size()));
+        auto rest = trim(line.substr(at + key.size()));
+        if (cc.kind == flavour::glslc) {
+            auto sp = rest.find(' ');
+            return std::string(sp == std::string_view::npos ? rest : rest.substr(0, sp));
+        }
         auto colon = rest.find(':');
         if (colon != std::string_view::npos) rest = rest.substr(colon + 1);
         while (!rest.empty() && (rest.back() == '\n' || rest.back() == '\r'))
@@ -254,24 +335,57 @@ inline std::vector<std::string> device_shaders() {
 
 // ─── The rule ──────────────────────────────────────────────────────────────
 
+// glslc's `-mfmt=c` writes a BARE INITIALISER LIST and nothing else, so the
+// declaration around it has to come from somewhere. It is written here rather
+// than by a shell fragment in the action because an action is an argv, not a
+// command line, and there is no shell in it to redirect or concatenate with.
+//
+// The header this writes is CONSTANT for a given shader name -- it names the
+// symbol and includes the sibling the action produces -- so it is written at
+// plan time, before any action runs. Its content does not depend on the
+// shader's text, which is why nothing has to re-derive it when the shader
+// changes: ninja rebuilds the `.inc`, the `#include` picks it up.
+inline bool wrap_glslc_output(const std::string& header, const std::string& inc,
+                              const std::string& sym) {
+    std::ofstream out{header, std::ios::trunc};
+    if (!out) {
+        std::println(stderr, "mcpp.rules.spirv: cannot write {}", header);
+        return false;
+    }
+    out << "// Generated by mcpp.rules.spirv. glslc emits an initialiser list;\n"
+           "// this declaration is what makes it a translation unit.\n"
+           "#pragma once\n"
+           "#include <cstdint>\n"
+           "static const uint32_t " << sym << "[] =\n"
+           "#include \"" << std::filesystem::path(inc).filename().string() << "\"\n"
+           ";\n";
+    return out.good();
+}
+
 inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     if (shaders.empty()) return true;
 
-    const auto exe = find_compiler(opt);
-    if (exe.empty()) {
+    const auto cc = find_compiler(opt);
+    if (!cc) {
+        if (cc.reported) return false;
         std::println(stderr,
-            "mcpp.rules.spirv: no glslang found. Install one into the workspace\n"
+            "mcpp.rules.spirv: no shader compiler found. Install one into the workspace\n"
             "  [xlings.workspace]\n"
-            "  \"xim:glslang\" = \"15.1.0\"\n"
-            "or name it: MCPP_GLSLANG=/path/to/glslangValidator, or set "
-            "options::compiler.");
+            "  \"xim:glslang\" = \"15.1.0\"     # glslangValidator\n"
+            "  \"xim:shaderc\" = \"2026.3\"     # glslc\n"
+            "or name it: MCPP_GLSLANG=/path/to/glslangValidator, MCPP_GLSLC=/path/to/glslc,\n"
+            "or set options::compiler.");
         return false;
     }
-    if (const auto v = compiler_version(exe); !v.empty())
-        mcpp::fact("glslang", v.c_str());
+    // The fact is keyed on the flavour, not on a shared name: which of the two
+    // compiled a shader is part of the answer, and a build log that recorded
+    // both under one key could not tell them apart.
+    if (const auto v = compiler_version(cc); !v.empty()) mcpp::fact(cc.name(), v.c_str());
 
     bool optimize = opt.optimize;
-    if (optimize && !has_optimizer(exe)) {
+    // glslc always links its optimiser; glslang links spirv-opt only when
+    // built with ENABLE_OPT, and the payload this ecosystem publishes is not.
+    if (optimize && cc.kind == flavour::glslang && !has_optimizer(cc.path)) {
         mcpp::warning("mcpp.rules.spirv: this glslang was built without spirv-opt "
                       "(-Os not available; optimizer not linked); shaders are "
                       "compiled unoptimised");
@@ -294,14 +408,15 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         const auto stage = stage_of(p.extension().string());
         if (stage.empty()) {
             std::println(stderr,
-                "mcpp.rules.spirv: {} has no shader stage. glslang derives the stage from "
-                "the extension; rename it to one of .comp .vert .frag .geom .tesc "
+                "mcpp.rules.spirv: {} has no shader stage. Both compilers derive the stage "
+                "from the extension; rename it to one of .comp .vert .frag .geom .tesc "
                 ".tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall", src);
             return false;
         }
-        const auto sym    = symbol_of(p.stem().string(), stage);
-        const auto header = (std::filesystem::path(gen)
-                             / (p.stem().string() + "_" + std::string(stage) + ".h")).string();
+        const auto sym  = symbol_of(p.stem().string(), stage);
+        const auto base = (std::filesystem::path(gen)
+                           / (p.stem().string() + "_" + std::string(stage))).string();
+        const auto header = base + ".h";
         const auto input  = std::filesystem::path(src).is_absolute()
                           ? src : root + "/" + src;
 
@@ -309,28 +424,54 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // `submit()`; `arg`/`input`/`output` copy, these two do not. Held in
         // named strings for the life of the statement that submits.
         const std::string id   = "spirv:" + src;
-        const std::string desc = "glslang " + src;
+        const std::string desc = std::string(cc.name()) + " " + src;
+        // For glslc the action's output is the initialiser list; for glslang it
+        // is the header itself.
+        const std::string inc    = base + ".inc";
+        const std::string output = cc.kind == flavour::glslc ? inc : header;
+
+        if (cc.kind == flavour::glslc && !wrap_glslc_output(header, inc, sym)) return false;
 
         mcpp::action a;
         a.id          = id.c_str();
         a.role        = "source";     // a header: ordered before compilation
         a.description = desc.c_str();
-        a.arg(exe.c_str());
-        a.arg("-V");
-        a.arg("--target-env"); a.arg(env.c_str());
-        a.arg("-S"); a.arg(std::string(stage).c_str());
-        if (optimize) a.arg("-Os");
+        a.arg(cc.path.c_str());
+        if (cc.kind == flavour::glslc) {
+            // glslc spells it as one token; glslang takes a separate argument.
+            a.arg(("--target-env=" + env).c_str());
+        } else {
+            a.arg("-V");
+            a.arg("--target-env"); a.arg(env.c_str());
+        }
+        // The stage, in each compiler's own spelling of the same idea. glslc
+        // accepts glslang's short names (`comp`, `vert`, ...) so the table
+        // above serves both -- but its `-S` means "emit assembly", so passing
+        // glslang's flag to it would produce a text file the program then
+        // includes as if it were data.
+        if (cc.kind == flavour::glslc) {
+            a.arg(("-fshader-stage=" + std::string(stage)).c_str());
+        } else {
+            a.arg("-S"); a.arg(std::string(stage).c_str());
+        }
+        if (optimize) a.arg(cc.kind == flavour::glslc ? "-O" : "-Os");
         for (auto const& d : opt.defines) a.arg(("-D" + d).c_str());
         for (auto const& i : opt.includes)
             a.arg(("-I" + (std::filesystem::path(i).is_absolute() ? i : root + "/" + i)).c_str());
-        // `-x --vn` is what makes the output a C declaration rather than a
-        // binary: a `const uint32_t <sym>[]` the program includes.
-        a.arg("-x");
-        a.arg("--vn"); a.arg(sym.c_str());
-        a.arg("-o"); a.arg(header.c_str());
+        if (cc.kind == flavour::glslc) {
+            // `-mfmt=c` is the initialiser list; the declaration around it was
+            // written above.
+            a.arg("-mfmt=c");
+        } else {
+            // `-x --vn` is what makes glslang's output a C declaration rather
+            // than a binary: a `const uint32_t <sym>[]` the program includes.
+            a.arg("-x");
+            a.arg("--vn"); a.arg(sym.c_str());
+        }
+        a.arg("-o"); a.arg(output.c_str());
         a.arg(input.c_str());
         a.input(input.c_str());
-        a.output(header.c_str());
+        a.output(output.c_str());
         a.submit();
     }
 
