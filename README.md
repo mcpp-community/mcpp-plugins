@@ -38,7 +38,7 @@ engine's own module family and is not used here.
 
 | feature | module | since mcpp | what it needs |
 |---|---|---|---|
-| `rules-cuda` | `mcpp.rules.cuda` | 2026.9.5.2 | the toolkit named in `[xlings.workspace]` (`xim:cuda-nvcc`, `xim:cuda-cudart`), `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
+| `rules-cuda` | `mcpp.rules.cuda` | 2026.9.5.2 | the toolkit named in `[xlings.workspace]` (`xim:cuda-nvcc`, `xim:cuda-cudart`, and `xim:libcurand` for the clang route, whose wrapper includes a cuRAND header unconditionally), `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action |
 
 The floor is the mcpp release whose engine carries what the member relies on:

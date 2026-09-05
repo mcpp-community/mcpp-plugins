@@ -141,6 +141,13 @@ inline std::vector<std::string> device_sources() {
 // names the compiler and this rule finds the pieces.
 struct toolkit {
     std::string nvcc_root, cudart_root, crt_root, driver_dir;
+    // cuRAND's headers. Not a runtime dependency of a kernel that never calls
+    // cuRAND: clang's own CUDA wrapper (`__clang_cuda_runtime_wrapper.h`)
+    // includes `curand_mtgp32_kernel.h` unconditionally, so the clang route
+    // cannot compile any device unit without them. Measured 2026-09-05: on a
+    // developer machine the header was found in the HOST's /usr/include and
+    // the leak went unnoticed until a runner with no host CUDA refused it.
+    std::string curand_root;
     std::string nvcc() const { return nvcc_root + "/bin/nvcc"; }
     std::string host_config() const {
         for (auto const* r : { &crt_root, &nvcc_root, &cudart_root }) {
@@ -152,7 +159,7 @@ struct toolkit {
     }
     std::vector<std::string> include_dirs() const {
         std::vector<std::string> out;
-        for (auto const* r : { &cudart_root, &crt_root, &nvcc_root })
+        for (auto const* r : { &cudart_root, &crt_root, &nvcc_root, &curand_root })
             if (!r->empty() && std::filesystem::is_directory(*r + "/include"))
                 out.push_back(*r + "/include");
         return out;
@@ -177,6 +184,7 @@ inline std::optional<toolkit> find_toolkit() {
     t.nvcc_root   = xpkg("cuda-nvcc");
     t.cudart_root = xpkg("cuda-cudart");
     t.crt_root    = xpkg("cuda-crt");
+    t.curand_root = xpkg("libcurand");
     t.driver_dir  = xpkg("libcuda-host-link");
     if (t.nvcc_root.empty() || t.cudart_root.empty()) {
         std::println(std::cerr,
@@ -430,6 +438,19 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         driver_cc = tcdir + "/bin/clang++";
         if (!std::filesystem::exists(driver_cc)) {
             std::println(std::cerr, "mcpp.rules.cuda: the clang route needs the toolchain's clang++ at {}", driver_cc);
+            return out;
+        }
+        // Refused here rather than at clang's include error: the header it
+        // would fail on belongs to a payload the project has to name, and the
+        // diagnostic names it. A host copy is never searched for -- that is
+        // how the leak above survived every local build.
+        if (tk->curand_root.empty()
+            || !std::filesystem::exists(tk->curand_root + "/include/curand_mtgp32_kernel.h")) {
+            std::println(std::cerr,
+                "mcpp.rules.cuda: the clang route needs cuRAND's headers, which clang's CUDA "
+                "wrapper includes unconditionally.\n"
+                "  Name the payload under [xlings.workspace] and mcpp provisions it on first use:\n"
+                "    \"xim:libcurand\" = \"10.3.10.19\"   (the 12.9 line; 10.4.x pairs with 13.x)");
             return out;
         }
         front = { driver_cc, "-x", "cuda", "-std=c++17", "-O2", "-fPIC",
