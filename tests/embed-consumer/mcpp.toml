@@ -1,0 +1,20 @@
+# Fixture: a consumer that activates only `tools-embed`. It proves the second
+# half of the collection's naming rule -- a member that is not a rule, imported
+# under `mcpp.tools.<x>` -- and that a feature adds exactly its own unit: this
+# manifest never names a rule and the build program never imports one.
+[package]
+name        = "embed-consumer"
+version     = "0.1.0"
+description = "Fixture: embeds a data file through mcpp.tools.embed"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[dependencies.mcpp]
+plugins = { path = "../..", features = ["tools-embed"], host-module = true }
+
+[targets.embed-consumer]
+kind = "bin"
+main = "src/main.cpp"

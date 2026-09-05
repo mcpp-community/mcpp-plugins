@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.1.0"
+version     = "0.1.1"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -23,6 +23,7 @@ sources = ["src/plugins.cppm"]
 default     = []
 rules-cuda  = { sources = ["rules/cuda.cppm"] }
 rules-spirv = { sources = ["rules/spirv.cppm"] }
+tools-embed  = { sources = ["tools/embed.cppm"] }
 
 [targets.plugins]
 kind = "lib"

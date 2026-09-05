@@ -1,0 +1,10 @@
+import std;
+import mcpp;
+import mcpp.tools.embed;
+
+int main() {
+    mcpp::tools::embed::options opt;
+    opt.name_space     = "fixture";
+    opt.null_terminate = true;
+    return mcpp::tools::embed::file("data/message.txt", opt) ? 0 : 1;
+}
