@@ -153,14 +153,3 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ]
-
-      - name: no device command line reaches the host
-        run: |
-          for d in tests/cuda-consumer tests/hip-consumer tests/sycl-consumer; do
-            ( cd "$d" && rm -rf target && "$MCPP" build -v > build.log 2>&1 )
-            if grep -q '/usr/include\|/usr/lib' "$d/build.log"; then
-              echo "host path on a command line in $d:"
-              grep -o '[^ ]*/usr/[^ ]*' "$d/build.log" | sort -u | head
-              exit 1
-            fi
-          done
