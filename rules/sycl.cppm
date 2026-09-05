@@ -287,6 +287,30 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // See the file header for why this is not `-lstdc++`.
     mcpp::link_lib(":libstdc++.so.6");
 
+    // SPIR-V IS NOT A DEVICE, AND A BUILD THAT NAMES NO DEVICE SHOULD BE TOLD.
+    //
+    // `accel = "sycl"` alone compiles to SPIR-V and leaves the choice of
+    // device to the runtime, which is the right default for a machine with a
+    // Level Zero or OpenCL device. It is NOT right for a machine whose only
+    // device is CUDA: that back end does not consume SPIR-V, and the failure
+    // arrives from inside the SYCL scheduler --
+    // `ProgramManager::getDeviceImage` -- which is neither in the caller's
+    // frame nor in the queue's asynchronous handler, so no amount of care in
+    // the program catches it. Measured on an RTX 4080: `terminate called after
+    // throwing an instance of 'sycl::_V1::exception'`, with no message of the
+    // program's own.
+    //
+    // An advisory rather than a refusal, because the SPIR-V form is correct
+    // and portable and the rule cannot know the machine's devices -- which is
+    // exactly why it is worth saying at build time rather than leaving to a
+    // crash at the first kernel.
+    if (tg.cuda_archs.empty())
+        mcpp::warning("mcpp.rules.sycl: [build] accel names sycl with no device, so the "
+                      "kernels are compiled to SPIR-V and the runtime chooses. A back end "
+                      "that cannot consume SPIR-V -- CUDA is one -- fails inside the SYCL "
+                      "scheduler, where the program cannot catch it. Name the device to "
+                      "compile ahead of time: accel = \"sycl, cuda12.9+{sm_89}\".");
+
     std::println("mcpp.rules.sycl: {} -- {} for {}",
                  tg.cuda_archs.empty() ? "SPIR-V, compiled by the runtime"
                                        : "ahead of time, NVIDIA back end",
