@@ -23,6 +23,7 @@ sources = ["src/plugins.cppm"]
 default     = []
 rules-cuda  = { sources = ["rules/cuda.cppm"] }
 rules-spirv = { sources = ["rules/spirv.cppm"] }
+tools-embed  = { sources = ["tools/embed.cppm"] }
 
 [targets.plugins]
 kind = "lib"

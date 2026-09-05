@@ -1,4 +1,5 @@
 target/
-.mcpp/
-mcpp.lock
 compile_commands.json
+mcpp.lock
+.mcpp/
+*.log
