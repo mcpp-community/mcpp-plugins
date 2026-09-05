@@ -1,0 +1,28 @@
+[package]
+name        = "plugins"
+namespace   = "mcpp"
+version     = "0.1.0"
+description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+repo        = "https://github.com/mcpp-community/mcpp-plugins"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# The lib root alone is compiled for a consumer that activates no feature. Each
+# member of the collection is a module interface unit that one feature adds to
+# the source set; mcpp compiles every interface unit among the resolved
+# sources as a host module under the name the unit declares (2026.9.5.3+).
+[build]
+sources = ["src/plugins.cppm"]
+
+[features]
+default     = []
+rules-cuda  = { sources = ["rules/cuda.cppm"] }
+rules-spirv = { sources = ["rules/spirv.cppm"] }
+
+[targets.plugins]
+kind = "lib"

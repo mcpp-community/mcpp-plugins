@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The mcpp release the consumers build with. Raising it is what admits a
+  # member that relies on a newer engine; the README states each member's floor.
+  MCPP_VERSION: 2026.9.5.3
+
+jobs:
+  consumers:
+    name: consumers (linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the mcpp sandbox
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp
+          key: mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/*/mcpp.toml') }}
+          restore-keys: |
+            mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+
+      - name: Fetch the released mcpp
+        run: |
+          curl -L -fsS --retry 3 --retry-all-errors -o mcpp.tar.gz \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-linux-x86_64.tar.gz"
+          tar -xzf mcpp.tar.gz
+          MCPP="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/bin/mcpp"
+          "$MCPP" --version
+          "$MCPP" self config --mirror GLOBAL
+          echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+
+      # The rule's output is a header holding the SPIR-V module; the program
+      # checks the magic number in its first word, so no Vulkan runtime is
+      # needed and what is tested is the rule and the engine path feeding it.
+      - name: rules-spirv through a consumer
+        working-directory: tests/spirv-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+
+      # Compiles the device unit on a machine with no GPU: the clang route
+      # produces sm_89 code from the payload toolkit. Running it needs a
+      # device, so the run is of the CPU variant, which the same seam serves.
+      - name: rules-cuda through a consumer
+        working-directory: tests/cuda-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
