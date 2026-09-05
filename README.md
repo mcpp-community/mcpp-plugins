@@ -40,10 +40,12 @@ engine's own module family and is not used here.
 |---|---|---|---|
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.5.2 | the toolkit named in `[xlings.workspace]` (`xim:cuda-nvcc`, `xim:cuda-cudart`, and `xim:libcurand` for the clang route, whose wrapper includes a cuRAND header unconditionally), `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action |
+| `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
 
 The floor is the mcpp release whose engine carries what the member relies on:
 `rules-spirv` needs the device-source table that classifies shader extensions,
-which 2026.9.5.3 introduced. The index descriptor states the floor; a project
+which 2026.9.5.3 introduced, and `tools-embed` needs the fast path to compare a
+declared file input, which 2026.9.5.4 introduced. The index descriptor states the floor; a project
 on an older mcpp is refused at resolution rather than at the first shader.
 
 ## How the engine sees this package
