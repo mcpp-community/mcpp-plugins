@@ -1,0 +1,36 @@
+# The consumer that tests mcpp.rules.spirv.
+#
+# No Vulkan runtime is involved: the rule's output is a header holding the
+# SPIR-V module as a `const uint32_t` array, and the program checks the one
+# property that identifies a SPIR-V module without executing it, the magic
+# number 0x07230203 in its first word. What is tested is therefore the rule
+# and the engine path that feeds it -- the constrained glob, the device
+# source list, the `role = "source"` action ordered before compilation --
+# and not a driver.
+[package]
+name        = "spirv-consumer"
+namespace   = "example"
+version     = "0.1.0"
+description = "A GLSL compute shader compiled to a SPIR-V header through mcpp.rules.spirv"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-spirv"], host-module = true }
+
+[xlings.workspace]
+"xim:glslang" = "15.1.0"
+
+[build]
+accel = "vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "shaders/*.comp", accel = "vulkan1.2" },
+]
+
+[targets.spirv-consumer]
+kind = "bin"
+main = "src/main.cpp"

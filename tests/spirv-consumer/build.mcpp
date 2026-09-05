@@ -1,0 +1,10 @@
+import std;
+import mcpp;
+import mcpp.rules.spirv;
+
+int main() {
+    mcpp::rerun_if_changed_glob("shaders/**/*.comp");
+    mcpp::rules::spirv::options opt;
+    opt.includes = { "shaders" };
+    return mcpp::rules::spirv::compile(opt) ? 0 : 1;
+}

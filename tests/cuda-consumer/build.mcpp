@@ -1,0 +1,9 @@
+import std;
+import mcpp;
+import mcpp.rules.cuda;
+
+int main() {
+    mcpp::rules::cuda::options opt;
+    opt.includes = { "include" };
+    return mcpp::rules::cuda::compile(opt) ? 0 : 1;
+}
