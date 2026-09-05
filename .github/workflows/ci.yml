@@ -15,7 +15,12 @@ jobs:
   consumers:
     name: consumers (linux x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # 90 rather than 60: the SYCL fixture pulls three payloads this job did not
+    # need before -- dpcpp (578 MB installed), gcc (265 MB) and cuda-nvcc
+    # (319 MB) -- and a cold cache downloads all of them before the first
+    # compile. The cache key includes the fixtures' manifests, so a run that
+    # changes one of them is always the cold case.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
