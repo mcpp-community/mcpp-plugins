@@ -126,10 +126,36 @@ inline target parse_target(std::string_view accel) {
     return t;
 }
 
+// ─── This rule's share of the device sources ───────────────────────────────
+//
+// `mcpp::device_sources()` is the package's WHOLE device set, not this rule's
+// share of it. A project with two backends puts a `.cu` and a `.comp` in one
+// list, and every rule in that build program reads the same variable. Taking
+// all of it works for exactly as long as a build has one rule in it, and then
+// fails on the second -- not by dropping anything, but by handing a compiler a
+// file it does not accept, with a message about that file's contents rather
+// than about the rule that should have had it.
+//
+// So each rule takes the extensions it CLAIMS and leaves the rest to whoever
+// claims those. A file no rule claims is not silently dropped either: the
+// engine refuses a device source that reached no action, which is the one
+// place that can see every rule's share at once.
+constexpr std::string_view kClaimed[] = { ".cu" };
+
+inline bool claims_extension(std::string_view path) {
+    const auto slash = path.find_last_of("/\\");
+    const auto name  = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    const auto dot   = name.rfind('.');
+    if (dot == std::string_view::npos) return false;
+    const auto ext = name.substr(dot);
+    for (auto e : kClaimed) if (e == ext) return true;
+    return false;
+}
+
 inline std::vector<std::string> device_sources() {
     std::vector<std::string> out;
     for (auto part : split(std::string_view(mcpp::device_sources()), '\n'))
-        if (auto s = trim(part); !s.empty()) out.emplace_back(s);
+        if (auto s = trim(part); !s.empty() && claims_extension(s)) out.emplace_back(s);
     return out;
 }
 
@@ -641,10 +667,17 @@ inline bool submit(std::span<const edge> edges) {
 // the CPU-only variant, and the seam's fallback carries it.
 inline bool compile(options opt = {}) {
     if (!*mcpp::accel()) return true;
+    // Several rules in one build program is the ordinary shape for a project
+    // with several backends, and each is called unconditionally -- the build
+    // program cannot know which backends this build named without parsing
+    // `accel` itself, which is what the rule already does. A rule whose
+    // backend this build does not name has nothing to do, and that is not a
+    // mistake and must not be reported as one.
+    if (!parse_target(mcpp::accel()).present) return true;
     const auto sources = device_sources();
     if (sources.empty()) {
-        mcpp::warning("[build] accel names a device but no constrained glob matched a device "
-                      "source; nothing was compiled for it");
+        mcpp::warning("[build] accel names cuda but no constrained glob matched a `.cu`; "
+                      "nothing was compiled for it");
         return true;
     }
     auto edges = plan(sources, std::move(opt));

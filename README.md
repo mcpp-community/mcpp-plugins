@@ -5,9 +5,17 @@ The build plugins the mcpp project maintains, published as one package,
 imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
-[dependencies.mcpp]
-plugins = { version = "0.2.0", features = ["rules-spirv"], host-module = true }
+[build-dependencies.mcpp]
+plugins = { version = "0.2.2", features = ["rules-spirv"], host-module = true }
 ```
+
+`[build-dependencies]`, not `[dependencies]`. The two keys answer separate
+questions: `host-module = true` says which build-time product is wanted, and
+the section says whether the package reaches the target. A rule package answers
+"no" to the second -- its library must never be linked into the artifact while
+its rule is still needed -- which is the case docs/05 section 2.6.1 exists for.
+Writing it under `[dependencies]` also works, which is precisely why the
+distinction has to be stated rather than left to a failure to teach.
 
 ```cpp
 // build.mcpp
@@ -43,6 +51,29 @@ engine's own module family and is not used here.
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` or `xim:shaderc` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action, and states which of the two compilers produced it |
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.1 | `xim:dpcpp` (the compiler), `xim:gcc` (the C++ standard library the unit compiles against, not a second toolchain) and `xim:cuda-nvcc` for an NVIDIA target; `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. The floor is the release whose device-source table carries `.sycl` |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
+
+### Each rule takes the extensions it claims
+
+`mcpp::device_sources()` is the package's WHOLE device set, not one rule's
+share of it, and every rule in a build program reads the same variable. A
+project with two backends puts a `.cu` and a `.comp` in that one list.
+
+Each rule therefore selects the extensions it claims and leaves the rest:
+
+| feature | claims |
+|---|---|
+| `rules-cuda` | `.cu` |
+| `rules-hip` | `.hip` |
+| `rules-sycl` | `.sycl` |
+| `rules-spirv` | `.comp .vert .frag .geom .tesc .tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall`, and `.glsl` / `.hlsl` so that a stage-less name is refused by name rather than by absence |
+
+A rule whose backend this build does not name returns immediately, so a build
+program may call every rule it imports unconditionally and `--no-accel`
+compiles nothing.
+
+A device source that NO rule claims is not silently dropped: mcpp refuses a
+device source that reached no action, naming the file. That is the engine's
+half of this rule and it needs 2026.9.6.5.
 
 The floor is the mcpp release whose engine carries what the member relies on:
 `rules-spirv` needs the device-source table that classifies shader extensions,

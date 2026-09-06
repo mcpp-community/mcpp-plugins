@@ -1,0 +1,81 @@
+# The consumer that tests TWO rules in one build program.
+#
+# Every other fixture here activates exactly one rule, and one is the case
+# where a rule can take the whole of `mcpp::device_sources()` and be right by
+# accident. This one puts a `.cu` and a `.comp` in the same package, so the
+# list each rule reads holds the other's inputs as well.
+#
+# It is also the shape a LIBRARY has. A program picks its backend at build time
+# and links exactly one; a library is compiled once for consumers whose
+# machines differ, so its backends are additive and land in one artifact.
+[package]
+name         = "multi-rule-consumer"
+namespace    = "example"
+version      = "0.1.0"
+description  = "A CUDA kernel and a GLSL compute shader compiled by two rules in one build program"
+accelerators = ["cuda", "vulkan"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# clang, for the reason cuda-consumer states: the toolchain's own clang++
+# compiles the device unit, so there is no second host compiler to satisfy.
+[toolchain]
+default = "llvm@22.1.8"
+
+# `[build-dependencies]`, not `[dependencies]`: a rule package's library must
+# never reach the target while its rule is still wanted, which is the case
+# docs/05 section 2.6.1 exists for. `host-module = true` says which build-time
+# product is wanted; the section says whether the package reaches the target.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-cuda", "rules-spirv"], host-module = true }
+
+[build]
+# BOTH backends in one build. `accel` is a set, and this is the only fixture
+# whose set has more than one member.
+accel = "cuda12.9+{sm_89}, vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "src/kernels/**/*.cu", accel = "cuda12.9+{sm_89}" },
+  { glob = "shaders/*.comp",      accel = "vulkan1.2" },
+]
+include_dirs = ["include"]
+
+# The payloads, pinned unconditionally.
+#
+# Gating them on the device each is for -- `[target.'cfg(accelerator =
+# "cuda")'.xlings.workspace]` -- is what a project should do, and it needs mcpp
+# 2026.9.6.5. This fixture is pinned to the floor its RULES need, not to the
+# newest engine, so it writes the older spelling; mcpp's own
+# examples/09-heterogeneous/multi-backend shows the gated one.
+[xlings.workspace]
+"xim:cuda-nvcc"         = "12.9.86"
+"xim:cuda-cudart"       = "12.9.79"
+"xim:libcurand"         = "10.3.10.19"
+"xim:cuda-cccl"         = "12.9.27"
+"xim:libcuda-host-link" = { linux = "0.0.1" }
+"xim:glslang"           = "15.1.0"
+
+[dependencies.compat]
+cuda-runtime = "2026.09.05"
+
+[target.'cfg(accelerator = "cuda")'.build]
+ldflags = ["-lcudart_static", "-lrt", "-lpthread", "-ldl"]
+
+# What tells the program a generated shader header exists in THIS build. The
+# define lives beside the payload that produces it, so the two cannot drift.
+[target.'cfg(accelerator = "vulkan")'.build]
+defines = ["HAVE_SPIRV=1"]
+
+# The CPU side of the seam, for `--no-accel`. The shader has no fallback: its
+# product is a header, and a build that names no accelerator does not include
+# one -- which is why `--no-accel` is asserted separately below rather than by
+# running this program.
+[target.'cfg(not(accelerator = "cuda"))'.build]
+sources = ["src/cpu/*.cpp"]
+
+[targets.multi-rule-consumer]
+kind = "bin"
+main = "src/main.cpp"

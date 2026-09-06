@@ -18,7 +18,11 @@ standard   = "c++23"
 modules    = true
 import_std = true
 
-[dependencies.mcpp]
+# `[build-dependencies]`, not `[dependencies]`: a rule package's library must
+# never reach the target while its rule is still wanted, which is the case
+# docs/05 section 2.6.1 exists for. `host-module = true` says which build-time
+# product is wanted; the section says whether the package reaches the target.
+[build-dependencies.mcpp]
 plugins = { path = "../..", features = ["rules-spirv"], host-module = true }
 
 [xlings.workspace]

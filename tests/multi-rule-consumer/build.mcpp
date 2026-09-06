@@ -1,0 +1,30 @@
+import std;
+import mcpp;
+import mcpp.rules.cuda;
+import mcpp.rules.spirv;
+
+// TWO RULES IN ONE BUILD PROGRAM. Every other fixture here has exactly one,
+// and one is the case where a rule can take the whole of
+// `mcpp::device_sources()` and be right by accident.
+//
+// With two, that list holds a `.cu` AND a `.comp`, and a rule that takes all
+// of it hands its compiler a file the compiler does not accept -- glslc
+// refusing a `.cu` for having no shader stage, or nvcc refusing a `.comp`.
+// Each rule therefore takes the extensions it CLAIMS and leaves the rest.
+//
+// Both are called unconditionally and neither is told which backends this
+// build named: each parses `[build] accel` itself and returns immediately when
+// its own is absent. That is what makes `--no-accel` work with two rules
+// present, and why the order here carries no meaning.
+int main() {
+    mcpp::rerun_if_changed_glob("src/kernels/**/*.cu");
+    mcpp::rerun_if_changed_glob("shaders/**/*.comp");
+
+    mcpp::rules::cuda::options cu;
+    cu.includes = { "include" };
+    if (!mcpp::rules::cuda::compile(cu)) return 1;
+
+    mcpp::rules::spirv::options sp;
+    sp.includes = { "shaders" };
+    return mcpp::rules::spirv::compile(sp) ? 0 : 1;
+}
