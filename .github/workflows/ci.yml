@@ -125,6 +125,28 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
+      # TWO RULES IN ONE BUILD PROGRAM, which every step above has exactly
+      # one of. With one, a rule can take the whole of `device_sources()` and
+      # be right by accident; with two, that list holds a `.cu` AND a `.comp`,
+      # and a rule that takes all of it hands its compiler a file the compiler
+      # does not accept. Measured on the unfixed rules: the CUDA rule compiled
+      # `scale.comp` as CUDA and the shader rule then failed on the `.cu`.
+      #
+      # Both device products are asserted to exist, because a rule that
+      # submitted no action would otherwise leave a build that "succeeded".
+      # The `--no-accel` leg is asserted separately: it is what proves a rule
+      # whose backend is absent does nothing rather than complaining.
+      - name: two rules in one build program
+        working-directory: tests/multi-rule-consumer
+        run: |
+          "$MCPP" build
+          test -f target/.build-mcpp/out/saxpy.cu.o
+          test -f target/.build-mcpp/out/spirv/scale_comp.h
+          test ! -f target/.build-mcpp/out/scale.cu.o
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^magic=(no shader in this build)' run.log
+          grep -q '^12 24 36 48' run.log
+
       # THE HOST-LEAK ASSERTION, and what it measures was corrected once.
       #
       # Its first form grepped a verbose build for `/usr`. That reported

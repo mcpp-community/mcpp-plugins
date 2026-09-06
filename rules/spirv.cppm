@@ -321,6 +321,38 @@ inline std::string symbol_of(std::string_view stem, std::string_view stage) {
 // contain a newline, which is why the engine chose it — and why a splitter
 // that guesses wrong still works for exactly one shader and silently produces
 // one impossible path for two.
+// ─── This rule's share of the device sources ───────────────────────────────
+//
+// `mcpp::device_sources()` is the package's WHOLE device set, not this rule's
+// share of it. A project with two backends puts a `.comp` and a `.cu` in one
+// list, and every rule in that build program reads the same variable. Taking
+// all of it works for exactly as long as a build has one rule in it, and then
+// fails on the second -- not by dropping anything, but by handing a compiler a
+// file it does not accept, with a message about that file's contents rather
+// than about the rule that should have had it.
+//
+// So each rule takes the extensions it CLAIMS and leaves the rest to whoever
+// claims those. A file no rule claims is not silently dropped either: the
+// engine refuses a device source that reached no action, which is the one
+// place that can see every rule's share at once.
+constexpr std::string_view kClaimed[] = { ".comp", ".vert", ".frag", ".geom", ".tesc", ".tese", ".mesh", ".task",
+    ".rgen", ".rint", ".rahit", ".rchit", ".rmiss", ".rcall",
+    // Stage-less, and claimed on purpose: `stage_of` refuses them by name
+    // and says which extensions carry a stage. Left unclaimed they would
+    // reach the engine's "no action compiles it" instead, which is true
+    // but says nothing about stages.
+    ".glsl", ".hlsl", };
+
+inline bool claims_extension(std::string_view path) {
+    const auto slash = path.find_last_of("/\\");
+    const auto name  = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    const auto dot   = name.rfind('.');
+    if (dot == std::string_view::npos) return false;
+    const auto ext = name.substr(dot);
+    for (auto e : kClaimed) if (e == ext) return true;
+    return false;
+}
+
 inline std::vector<std::string> device_shaders() {
     std::vector<std::string> out;
     std::string_view all(mcpp::device_sources());
@@ -328,7 +360,7 @@ inline std::vector<std::string> device_shaders() {
         auto sep = all.find('\n', i);
         auto one = trim(all.substr(i, sep == std::string_view::npos ? all.size() - i : sep - i));
         i = sep == std::string_view::npos ? all.size() + 1 : sep + 1;
-        if (!one.empty()) out.emplace_back(one);
+        if (!one.empty() && claims_extension(one)) out.emplace_back(one);
     }
     return out;
 }
@@ -485,6 +517,13 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
 // reason.
 inline bool compile(options opt = {}) {
     if (!*mcpp::accel()) return true;
+    // Several rules in one build program is the ordinary shape for a project
+    // with several backends, and each is called unconditionally -- the build
+    // program cannot know which backends this build named without parsing
+    // `accel` itself, which is what the rule already does. A rule whose
+    // backend this build does not name has nothing to do, and that is not a
+    // mistake and must not be reported as one.
+    if (!parse_target(mcpp::accel()).present) return true;
     const auto shaders = device_shaders();
     if (shaders.empty()) {
         mcpp::warning("[build] accel names vulkan but no constrained glob matched a "
