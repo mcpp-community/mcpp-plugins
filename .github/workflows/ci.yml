@@ -139,34 +139,26 @@ jobs:
       # resort for C headers, and a stricter rule here would be stricter than
       # the engine it is checking. What must never appear is a C++ library
       # nothing in this ecosystem chose.
-      # AND THE C LIBRARY, WHICH THE ASSERTION ABOVE CANNOT SEE.
+      # AND THE C LIBRARY, WHICH THE ASSERTION BELOW CANNOT SEE.
       #
       # "no host C++ standard library" was true of the SYCL rule while its
       # device units compiled against the HOST's C library: dpcpp's clang had
       # no ecosystem glibc on its search list at all, so `/usr/include` was not
-      # a last resort there, it was the only one. The reasoning above -- that
+      # a last resort there, it was the only one. The reasoning below -- that
       # `/usr/include` last is what the engine itself does -- holds only when
       # the ecosystem's own C library is ahead of it.
       #
-      # So the criterion is ORDER, not absence: the ecosystem's glibc must
-      # appear, and before any host path. That is checkable, and it is what
-      # distinguishes a fallback from a dependency.
+      # THE OBJECT IS THE COMPILER'S OWN SEARCH LIST. A build log carries the
+      # ENGINE's compile lines too, and those name the ecosystem glibc, so
+      # grepping the log passes for a rule whose device compile names nothing.
+      # Measured: the HIP rule's device command carries neither `--sysroot` nor
+      # `-isystem <glibc>` and is nonetheless correct, because the compiler it
+      # drives is configured with the ecosystem glibc. Only the search list
+      # separates that from the case that is wrong.
       - name: every device compile finds the ecosystem C library first
         run: |
-          fail=0
-          for d in tests/cuda-consumer tests/hip-consumer tests/sycl-consumer; do
-            ( cd "$d" && rm -rf target && "$MCPP" build -v > clib.log 2>&1 ) || {
-              echo "build failed in $d"; tail -20 "$d/clib.log"; exit 1; }
-            if grep -qE '\-isystem[^ ]*xim-x-glibc[^ ]*/include' "$d/clib.log"; then
-              echo "ok: $d names the ecosystem C library"
-            elif grep -qE '\-\-sysroot=[^ ]*' "$d/clib.log"; then
-              echo "ok: $d forwards a sysroot"
-            else
-              echo "$d names no ecosystem C library and forwards no sysroot"
-              fail=1
-            fi
-          done
-          [ "$fail" -eq 0 ]
+          bash tools/check_device_c_library.sh \
+            tests/cuda-consumer tests/hip-consumer tests/sycl-consumer
 
       - name: no device compile reads a host C++ standard library
         run: |
