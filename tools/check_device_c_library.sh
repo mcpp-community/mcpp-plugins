@@ -21,11 +21,29 @@ fails=0
 
 for d in "$@"; do
     printf -- '--- %s ---\n' "$d"
-    ninja=$(ls "$d"/target/*/*/build.ninja 2>/dev/null | head -1)
+
+    # BUILD IT HERE, AND PICK THE GRAPH THAT HAS A DEVICE ACTION.
+    #
+    # Inspecting whatever a previous step left is a guess about that step. The
+    # fixture steps in CI end with `build --no-accel`, whose build.ninja has no
+    # device action at all, and taking the first directory that sorts found
+    # exactly that -- "declares no action to inspect", three times, for three
+    # fixtures that were correct. The accel build is what this check is about,
+    # so it runs it, and then selects by CONTENT rather than by order.
+    ( cd "$d" && "$MCPP" build >/dev/null 2>&1 ) || {
+        echo "ASSERT-FAIL: $d does not build with its accelerator on"
+        fails=$((fails + 1)); continue; }
+
+    ninja=""
+    for candidate in "$d"/target/*/*/build.ninja; do
+        [ -f "$candidate" ] || continue
+        if grep -q '^rule mcpp_action_' "$candidate"; then ninja="$candidate"; break; fi
+    done
     if [ -z "$ninja" ]; then
-        echo "ASSERT-FAIL: no build.ninja under $d/target (build it first)"
+        echo "ASSERT-FAIL: no build.ninja under $d/target declares a device action"
         fails=$((fails + 1)); continue
     fi
+    printf '  reading %s\n' "$ninja"
 
     # The device compile is the first declared action's command. Its C-library
     # inputs are the flags below; everything else (`-c`, `-o`, the source) is
