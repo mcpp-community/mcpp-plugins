@@ -43,6 +43,12 @@ sycl-runtime = "2026.09.07"
 [xlings.workspace]
 "xim:dpcpp"             = "7.1.0"
 "xim:gcc"               = "15.1.0"
+# The C library the SYCL unit compiles against, and the kernel headers under
+# it. Named for the same reason `xim:gcc` is: dpcpp's clang is not the clang
+# mcpp resolved, and it is configured with neither. Left alone its search list
+# reaches `/usr/include` with no ecosystem glibc anywhere on it -- measured.
+"xim:glibc"             = "2.44"
+"xim:linux-headers"     = "5.11.1"
 "xim:cuda-nvcc"         = "12.9.86"
 
 [build]
