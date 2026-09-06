@@ -227,6 +227,29 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     const std::string dpcpp = payload("dpcpp");
     const std::string gcc   = payload("gcc");
     const std::string cuda  = tg.cuda_archs.empty() ? std::string{} : payload("cuda-nvcc");
+    // THE C LIBRARY IS THE SAME QUESTION AS THE C++ ONE, ONE LAYER DOWN.
+    //
+    // `--gcc-install-dir` below names the C++ standard library because, left
+    // alone, dpcpp's clang reads the host's. Measured 2026-09-06, the C library
+    // was never named, and its search list said so:
+    //
+    //   …/xim-x-gcc/15.1.0/…/include/c++/15.1.0   <- ecosystem, correct
+    //   …/xim-x-dpcpp/7.1.0/lib/clang/22/include
+    //   /usr/local/include                         <- the HOST
+    //   /usr/include/x86_64-linux-gnu
+    //   /usr/include
+    //
+    // No ecosystem glibc path at all. So `<cstdio>` in a `.sycl` unit reached
+    // libstdc++ from the payload and `<stdio.h>` from the host.
+    //
+    // FORWARDING THE SYSROOT DOES NOT ANSWER IT HERE. `toolchain_sysroot()` is
+    // the documented answer for a second compiler, and it is EMPTY under an
+    // llvm toolchain -- which is what a SYCL project pins, because mcpp's own
+    // clang has no SYCL front end. The LLVM payload's clang does not need it
+    // (it is configured with the ecosystem glibc); dpcpp's clang is a
+    // different clang and is not.
+    const std::string glibc = payload("glibc");
+    const std::string uapi  = payload("linux-headers");
 
     std::string missing;
     // The payload is needed for the COMPILER, so a project that named its own
@@ -234,6 +257,17 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // solved this to solve it again.
     if (dpcpp.empty() && opt.compiler.empty()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
     if (gcc.empty())   missing += "    \"xim:gcc\"   = \"15.1.0\"\n";
+    // UNPINNED ON PURPOSE, and this is the one detail that makes the
+    // declaration portable. The C library version is the RUNTIME BINDING's
+    // choice, not the project's: the same tree resolved glibc 2.44 on one
+    // machine and 2.44.2 on a runner. `xpkg_dir` with a pin answers for
+    // exactly that version or for nothing, so a pinned entry here refuses on
+    // the machine whose binding chose the other one -- measured, as a CI
+    // failure telling a project to declare something it had declared.
+    // `""` means "present, any version", which is the only thing a project can
+    // truthfully say about a library it does not select.
+    if (glibc.empty()) missing += "    \"xim:glibc\" = \"\"\n";
+    if (uapi.empty())  missing += "    \"xim:linux-headers\" = \"\"\n";
     if (!tg.cuda_archs.empty() && cuda.empty())
         missing += "    \"xim:cuda-nvcc\" = \"12.9.86\"\n";
     if (!missing.empty()) {
@@ -241,7 +275,10 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             "mcpp.rules.sycl: the SYCL island needs payloads this project has not declared.\n"
             "  Add to mcpp.toml:\n\n  [xlings.workspace]\n{}\n"
             "  `xim:gcc` is not a second toolchain: it is the C++ standard library the SYCL\n"
-            "  unit compiles against. Without it dpcpp's clang reads the HOST's headers.",
+            "  unit compiles against, and `xim:glibc` with `xim:linux-headers` is the C\n"
+            "  library underneath it. Without them dpcpp's clang reads the HOST's headers,\n"
+            "  which is measurable in its include search list and invisible on its command\n"
+            "  line.",
             missing);
         return out;
     }
@@ -278,6 +315,13 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
 
     std::vector<std::string> front{ exe, "-fsycl", "-std=c++17", "-O2", "-fPIC",
                                     "--gcc-install-dir=" + gid };
+    // The C library, ahead of whatever the compiler would have found. This is
+    // the shape mcpp uses for its own translation units, and it puts the
+    // ecosystem's glibc at the front of the search list; `/usr/include` stays
+    // last, as a fallback for C headers no payload provides, which is what the
+    // engine does too.
+    front.push_back("-isystem" + glibc + "/include");
+    front.push_back("-isystem" + uapi + "/include");
     front.insert(front.end(), targeting.begin(), targeting.end());
 
     // The link line gets its directories from here, not from the manifest: the
