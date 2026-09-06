@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.2.2", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.2.3", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -46,6 +46,7 @@ engine's own module family and is not used here.
 
 | feature | module | since mcpp | what it needs |
 |---|---|---|---|
+| `rules-ascendc` | `mcpp.rules.ascendc` | 2026.9.6.5 | `xim:cann-toolkit` in `[xlings.workspace]`, `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. The floor is the release whose device-source table carries `.asc` and whose `mcpp::link_flag` can emit the `-rpath-link` the toolkit's own shared libraries need |
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.5.2 | the toolkit named in `[xlings.workspace]` (`xim:cuda-nvcc`, `xim:cuda-cudart`, and `xim:libcurand` for the clang route, whose wrapper includes a cuRAND header unconditionally), `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-hip` | `mcpp.rules.hip` | 2026.9.5.2 | `xim:hip-nvidia` plus the CUDA back end it compiles through (`xim:cuda-nvcc`, `xim:cuda-cudart`, `xim:libcurand`, `xim:cuda-cccl`), `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` or `xim:shaderc` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action, and states which of the two compilers produced it |
@@ -62,6 +63,7 @@ Each rule therefore selects the extensions it claims and leaves the rest:
 
 | feature | claims |
 |---|---|
+| `rules-ascendc` | `.asc`, `.cce` |
 | `rules-cuda` | `.cu` |
 | `rules-hip` | `.hip` |
 | `rules-sycl` | `.sycl` |
