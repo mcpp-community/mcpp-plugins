@@ -22,14 +22,32 @@ fails=0
 for d in "$@"; do
     printf -- '--- %s ---\n' "$d"
 
-    # BUILD IT HERE, AND PICK THE GRAPH THAT HAS A DEVICE ACTION.
+    # BUILD IT HERE, INTO AN EMPTY TARGET DIRECTORY.
     #
     # Inspecting whatever a previous step left is a guess about that step. The
     # fixture steps in CI end with `build --no-accel`, whose build.ninja has no
     # device action at all, and taking the first directory that sorts found
     # exactly that -- "declares no action to inspect", three times, for three
     # fixtures that were correct. The accel build is what this check is about,
-    # so it runs it, and then selects by CONTENT rather than by order.
+    # so it runs it.
+    #
+    # SELECTING BY CONTENT WAS NOT ENOUGH EITHER, AND THAT IS WHY `target/` IS
+    # REMOVED FIRST. A build directory is named by a fingerprint, so a tree that
+    # has been built more than once holds one per configuration AND one per
+    # engine or payload version it was built with. Selecting the first that
+    # declares an action therefore answered from a directory this run did not
+    # write: measured 2026-09-07 on the SYCL example, where the graph the check
+    # read had been produced the previous day by mcpp.plugins 0.2.0 -- before
+    # the fix this check exists to guard -- while the graph the same command had
+    # just written carried both `-isystem` flags. The check reported a defect in
+    # a build that was correct, and would have reported success for a broken one
+    # just as readily.
+    #
+    # The object of a check has to be produced by the check. Removing `target/`
+    # costs a full rebuild of one fixture and buys the guarantee that exactly
+    # one graph exists to read.
+    printf '  removing %s/target so the graph read is the graph this run wrote\n' "$d"
+    rm -rf "$d/target"
     ( cd "$d" && "$MCPP" build >/dev/null 2>&1 ) || {
         echo "ASSERT-FAIL: $d does not build with its accelerator on"
         fails=$((fails + 1)); continue; }
