@@ -47,8 +47,11 @@ sycl-runtime = "2026.09.07"
 # it. Named for the same reason `xim:gcc` is: dpcpp's clang is not the clang
 # mcpp resolved, and it is configured with neither. Left alone its search list
 # reaches `/usr/include` with no ecosystem glibc anywhere on it -- measured.
-"xim:glibc"             = "2.44"
-"xim:linux-headers"     = "5.11.1"
+# UNPINNED: the C library version is the runtime binding's choice, not this
+# project's. Pinning it refuses on a machine whose binding chose another --
+# 2.44 here, 2.44.2 on a CI runner. `""` means "present, any version".
+"xim:glibc"             = ""
+"xim:linux-headers"     = ""
 "xim:cuda-nvcc"         = "12.9.86"
 
 [build]

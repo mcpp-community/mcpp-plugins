@@ -257,8 +257,17 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // solved this to solve it again.
     if (dpcpp.empty() && opt.compiler.empty()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
     if (gcc.empty())   missing += "    \"xim:gcc\"   = \"15.1.0\"\n";
-    if (glibc.empty()) missing += "    \"xim:glibc\" = \"2.44\"\n";
-    if (uapi.empty())  missing += "    \"xim:linux-headers\" = \"5.11.1\"\n";
+    // UNPINNED ON PURPOSE, and this is the one detail that makes the
+    // declaration portable. The C library version is the RUNTIME BINDING's
+    // choice, not the project's: the same tree resolved glibc 2.44 on one
+    // machine and 2.44.2 on a runner. `xpkg_dir` with a pin answers for
+    // exactly that version or for nothing, so a pinned entry here refuses on
+    // the machine whose binding chose the other one -- measured, as a CI
+    // failure telling a project to declare something it had declared.
+    // `""` means "present, any version", which is the only thing a project can
+    // truthfully say about a library it does not select.
+    if (glibc.empty()) missing += "    \"xim:glibc\" = \"\"\n";
+    if (uapi.empty())  missing += "    \"xim:linux-headers\" = \"\"\n";
     if (!tg.cuda_archs.empty() && cuda.empty())
         missing += "    \"xim:cuda-nvcc\" = \"12.9.86\"\n";
     if (!missing.empty()) {
