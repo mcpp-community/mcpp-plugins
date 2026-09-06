@@ -55,17 +55,33 @@ for d in "$@"; do
         fails=$((fails + 1)); continue
     fi
     exe=$(printf '%s' "$cmd" | awk '{print $1}')
-    keep=$(printf '%s\n' $cmd | grep -E '^(--sysroot=|-isystem|--gcc-install-dir=|-x|cuda|c\+\+|--cuda-path=|-fsycl)$|^-isystem' | tr '\n' ' ')
-    # `-x <lang>` arrives as two tokens; keep whichever language the rule chose.
-    lang=$(printf '%s\n' $cmd | grep -A 1 -x -- '-x' | tail -1)
-    [ -n "$lang" ] || lang=c++
 
-    list=$("$exe" $keep -x "$lang" -E -v /dev/null 2>&1 |
+    # ONLY THE FLAGS THAT MOVE THE C LIBRARY, and the probe asks in plain C++.
+    #
+    # Carrying the rule's language machinery over was a mistake: the CUDA and
+    # HIP commands start with `-x cuda`, the probe added its own `-x c++`, and
+    # a compiler given two of them prints no search list at all -- which the
+    # check then reported as a defect in three fixtures, two of which were
+    # correct. Where `features.h` comes from does not depend on the language
+    # being compiled, so the probe does not name one.
+    keep=$(printf '%s\n' $cmd |
+           grep -E '^(--sysroot=|--gcc-install-dir=|-isystem)' | tr '\n' ' ')
+
+    probe_err="$(mktemp)"
+    list=$("$exe" $keep -x c++ -E -v /dev/null 2>"$probe_err" |
            sed -n '/#include <...> search starts here/,/End of search list/p')
     if [ -z "$list" ]; then
-        echo "ASSERT-FAIL: $exe printed no search list"
+        # `-v` writes the search list to stderr, so read it there too before
+        # concluding the compiler said nothing.
+        list=$(sed -n '/#include <...> search starts here/,/End of search list/p' "$probe_err")
+    fi
+    if [ -z "$list" ]; then
+        echo "ASSERT-FAIL: $exe printed no search list; it said:"
+        head -5 "$probe_err" | sed 's/^/    /'
+        rm -f "$probe_err"
         fails=$((fails + 1)); continue
     fi
+    rm -f "$probe_err"
 
     # THE C LIBRARY SPECIFICALLY, not "any ecosystem path". The compiler's own
     # resource directory lives in the store too, so a looser pattern matched
