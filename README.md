@@ -274,8 +274,8 @@ The entry points are marked where they are defined, and the signature exists
 once:
 
 ```c
-// src/kernels/saxpy.cu
-#include "myapp.kernels.h"          // generated; defines the marker as nothing
+// src/kernels/saxpy.cu -- no include: the generated header arrives through the
+// compiler's forced-include flag, which is what defines the marker as nothing.
 
 MCPP_EXPORT_C
 int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n) { ... }
@@ -327,17 +327,44 @@ until mcpp writes it.
 
 **The check that include used to do is still there.** The compiler sees the
 declarations, so a definition whose signature drifted from its declaration fails
-where it was written rather than at the link. Verified against the fixture with
-a hand-written entry list declaring `double n` where the definition says
-`unsigned n`:
+where it was written rather than at the link:
 
 ```
 src/kernels/saxpy.c:22:5: error: conflicting types for 'scale_device'
 ```
 
-That check is only reachable on the `emit` path, where the list and the
-definition are separate things. Under `scan` the header is generated *from* the
-definition, so the two cannot disagree at all.
+**A seam has two halves, and `scan` is where they are compared.** A device
+island and a host fallback implement one `extern "C"` boundary, and exactly one
+of them is in any link. A build program hands `scan` both, unconditionally --
+both files exist on disk in either build, and which one is compiled is the
+manifest's decision rather than a condition the build program repeats:
+
+```cpp
+const std::vector<std::string> islands{
+    std::string(mcpp::manifest_dir()) + "/src/kernels/saxpy.cu",
+    std::string(mcpp::manifest_dir()) + "/src/cpu/saxpy.cpp",
+};
+```
+
+Entries are merged by name, so the two halves produce one set of declarations.
+Two definitions of one name that declare it **differently** are refused, naming
+both files and both signatures:
+
+```
+mcpp.tools.island: two definitions of `scale_device` declare it differently.
+  src/kernels/saxpy.c
+    int scale_device(float a, float* out, unsigned n)
+  src/cpu/saxpy.c
+    int scale_device(float a, float* out, double n)
+  C language linkage does not mangle, so these never meet at the link:
+  whichever one is in the artifact reads its arguments by its own signature.
+```
+
+Nothing else in the toolchain catches that. The two halves are never in one
+translation unit and never in one link, and C linkage does not mangle, so a
+build with disagreeing halves is clean and the artifact reads its arguments by
+whichever signature it was compiled with. `scan` is the only point at which both
+texts exist at once.
 
 **The declaration still exists once.** Without this, a project writes it twice --
 in a header, and again wherever the C++ side reaches it. C language linkage does

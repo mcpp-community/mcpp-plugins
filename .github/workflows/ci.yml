@@ -243,16 +243,14 @@ jobs:
           # island reads the generated header through the compiler's
           # forced-include flag -- so a project using this generator has no
           # header in its source tree and no line naming one.
-          if grep -rn '#include' src/main.cpp src/kernels/saxpy.c; then
+          if grep -rn '#include' src/main.cpp src/kernels/saxpy.c src/cpu/saxpy.c; then
             echo "FAIL: a source names an include; the generator exists to remove it"
             exit 1
           fi
           # AND THE CHECK THAT INCLUDE USED TO DO IS STILL THERE. The compiler
-          # sees the declarations, so a definition whose signature drifted fails
-          # where it was written. Verified by hand against this fixture with a
-          # hand-written entry list declaring `double n` where the definition
-          # says `unsigned n`: `saxpy.c:22: error: conflicting types for
-          # 'scale_device'`, at the definition rather than at the link.
+          # sees the declarations, so a definition whose signature drifted from
+          # the generated header fails where it was written rather than at the
+          # link.
           grep -q 'include' build.mcpp \
             || { echo "FAIL: the build program no longer forces the header in"; exit 1; }
           # THE MARKER SELECTS, AND THE UNMARKED MUST NOT TRAVEL. The island has
@@ -274,6 +272,77 @@ jobs:
           grep -q 'int scale_device(float a, float\* out, unsigned n);' \
             "$d/island_interface.kernels.h"
           echo "ok: one declaration, two generated artefacts, and only what was marked"
+
+      # THE SEAM'S OTHER HALF, AND THE DISAGREEMENT THAT NOTHING ELSE CATCHES.
+      #
+      # A seam has two implementations of one `extern "C"` boundary -- a device
+      # island and a host fallback -- and exactly one of them is in any link.
+      # `build.mcpp` hands `scan` both files unconditionally, because both exist
+      # on disk in either build and the manifest decides which is compiled. A
+      # build program that asked `mcpp::accel()` instead would carry a second
+      # copy of a decision the manifest already states.
+      #
+      # The CPU leg is not a variant of the step above. It is the build in which
+      # the device half is ABSENT, so a generator that read only the file it was
+      # given first would produce an empty boundary and the C++ side would fail
+      # on an unresolved name.
+      - name: the same boundary, generated from the half the build selected
+        working-directory: tests/island-interface
+        run: |
+          rm -rf target
+          "$MCPP" build --no-accel > cpu.log 2>&1 || {
+            echo "FAIL: the CPU leg does not build"; tail -25 cpu.log; exit 1; }
+          "$MCPP" run --no-accel | tee cpurun.log
+          grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' cpurun.log
+          grep -q '^all ok' cpurun.log
+          # ONE set of declarations, not two. Both files mark the same two entry
+          # points; a merge that appended would declare each twice, which the
+          # module rejects as a redefinition and the header silently accepts.
+          d=target/.build-mcpp/out/island
+          n=$(grep -c '^export using ::' "$d/island_interface.kernels.cppm")
+          [ "$n" = 2 ] || {
+            echo "FAIL: the module re-exports $n names; the two halves declare 2"
+            cat "$d/island_interface.kernels.cppm"; exit 1; }
+          echo "ok: the CPU leg reaches the same generated boundary"
+
+      # AND THE REVERSE LEG, WHICH IS THE POINT OF SCANNING BOTH.
+      #
+      # C language linkage does not mangle and the two halves are never in one
+      # link, so two declarations of one name that disagree produce a clean
+      # build and an artifact that reads its arguments by whichever signature it
+      # happened to be compiled with. `scan` is the only place both texts exist
+      # at once, so it is the only place that can refuse.
+      - name: two halves that disagree are refused where both texts exist
+        working-directory: tests/island-interface
+        run: |
+          cp src/cpu/saxpy.c /tmp/cpu_saxpy.bak
+          sed -i 's/^int scale_device(float a, float\* out, unsigned n) {/int scale_device(float a, float* out, double n) {/' \
+            src/cpu/saxpy.c
+          grep -q 'double n' src/cpu/saxpy.c || {
+            echo "FAIL: the fixture was not perturbed; this step would assert nothing"
+            cp /tmp/cpu_saxpy.bak src/cpu/saxpy.c; exit 1; }
+          rm -rf target
+          set +e
+          "$MCPP" build > neg.log 2>&1
+          rc=$?
+          set -e
+          cp /tmp/cpu_saxpy.bak src/cpu/saxpy.c
+          [ "$rc" != 0 ] || { echo "FAIL: the disagreement was accepted"; tail -20 neg.log; exit 1; }
+          grep -q 'declare it differently' neg.log || {
+            echo "FAIL: refused, but not for this reason"; tail -20 neg.log; exit 1; }
+          # Both file names, because a diagnostic naming one leaves the reader
+          # to find the other.
+          grep -q 'src/kernels/saxpy.c' neg.log
+          grep -q 'src/cpu/saxpy.c' neg.log
+          echo "ok: refused, naming both definitions and both signatures"
+          # And it builds again once they agree, so this step cannot leave a
+          # fixture that refuses everything.
+          rm -rf target
+          "$MCPP" build > restored.log 2>&1 || {
+            echo "FAIL: the fixture no longer builds after the perturbation was undone"
+            tail -20 restored.log; exit 1; }
+          rm -f neg.log restored.log cpu.log cpurun.log
+          echo "ok: and it builds again once the two agree"
 
       # NO BUILD PROGRAM AT ALL, WHICH IS WHAT THE TWO KEYS BUY.
       #

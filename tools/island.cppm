@@ -159,9 +159,25 @@ inline std::string entry_name(std::string_view decl) {
 // point that produced no declaration would leave the island defining a function
 // nothing declares, and the consumer's failure would be an unresolved name in a
 // different file.
+//
+// SEVERAL SOURCES MAY DEFINE THE SAME ENTRY POINT, AND THEY MUST AGREE.
+//
+// That is the ordinary shape of a seam: a device island and a host fallback
+// define one boundary, and exactly one of them is in any given link. A build
+// program hands both to this function and gets one set of declarations back,
+// so it does not have to ask which build it is in.
+//
+// Two definitions of one name whose declarations differ are REFUSED here,
+// naming both files. Nothing else in the toolchain catches that: C language
+// linkage does not mangle, so the two never meet at the link, and whichever
+// one is present reads its arguments by its own idea of the signature. This is
+// the only point at which both texts exist at once.
 inline std::optional<std::vector<std::string>>
 scan(std::span<const std::string> sources, const options& opt) {
     std::vector<std::string> entries;
+    // Where each entry was found, for the disagreement diagnostic. Parallel to
+    // `entries`, which is the return value and cannot carry it.
+    std::vector<std::string> origin;
     for (auto const& src : sources) {
         std::ifstream in(src);
         if (!in) {
@@ -226,7 +242,33 @@ scan(std::span<const std::string> sources, const options& opt) {
                     flat += c;
                 }
             }
-            if (!flat.empty()) entries.push_back(std::move(flat));
+            if (flat.empty()) continue;
+
+            // MERGED BY ENTRY NAME. A second definition of a name already seen
+            // is either the same declaration -- the seam's two halves agreeing,
+            // which is the expected case -- or a disagreement that has to stop
+            // the build here.
+            const auto name = entry_name(flat);
+            std::size_t seen = entries.size();
+            for (std::size_t k = 0; k < entries.size(); ++k)
+                if (entry_name(entries[k]) == name) { seen = k; break; }
+
+            if (seen == entries.size()) {
+                entries.push_back(std::move(flat));
+                origin.push_back(src);
+                continue;
+            }
+            if (entries[seen] == flat) continue;   // both halves agree
+
+            std::cerr << std::format(
+                "mcpp.tools.island: two definitions of `{}` declare it differently.\n"
+                "  {}\n    {}\n"
+                "  {}\n    {}\n"
+                "  C language linkage does not mangle, so these never meet at the "
+                "link:\n  whichever one is in the artifact reads its arguments by its "
+                "own signature.\n",
+                name, origin[seen], entries[seen], src, flat);
+            return std::nullopt;
         }
     }
     return entries;

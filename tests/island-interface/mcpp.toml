@@ -21,6 +21,7 @@ name        = "island-interface"
 namespace   = "example"
 version     = "0.1.0"
 description = "An extern \"C\" island reached through a generated module"
+accelerators = ["vulkan"]
 
 [language]
 standard   = "c++23"
@@ -30,8 +31,21 @@ import_std = true
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = ["tools-island"], host-module = true }
 
+# ONE BOUNDARY, TWO IMPLEMENTATIONS, AND EXACTLY ONE OF THEM IN ANY LINK.
+#
+# This is the arrangement every seam in `examples/09-heterogeneous` has, and it
+# is what the generator has to serve without the project writing a condition:
+# `build.mcpp` hands `scan` both files unconditionally, because both exist on
+# disk in either build, and the manifest decides which one is compiled.
 [build]
-sources = ["src/*.cpp", "src/kernels/*.c"]
+accel   = "vulkan1.2"
+sources = ["src/*.cpp"]
+
+[target.'cfg(accelerator = "vulkan")'.build]
+sources = ["src/kernels/*.c"]
+
+[target.'cfg(not(accelerator = "vulkan"))'.build]
+sources = ["src/cpu/*.c"]
 
 [targets.island-interface]
 kind = "bin"
