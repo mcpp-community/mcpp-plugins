@@ -715,11 +715,35 @@ struct options {
 };
 
 struct emitted {
-    std::string header_file;      // what the device translation unit includes
+    std::string header_file;      // the generated boundary header
     std::string interface_file;   // the `.cppm`; empty when `emit_module` is false
     std::string include_dir;      // for `mcpp::include_dir`
     std::string module_name;      // empty when `emit_module` is false
 };
+
+// The flags that make a compiler read the generated header before the island's
+// first line, so the island writes neither an include nor anything else.
+//
+// WHY THIS IS THE DEFAULT RATHER THAN AN INCLUDE LINE. The header is generated:
+// it is not in the source tree, and a project using this generator has no
+// hand-written header at all. An `#include` of it is therefore a line naming a
+// file its author never opens, and it buys no self-containment -- that `.c`
+// could not be compiled outside mcpp with or without it, because the file it
+// names does not exist until mcpp writes it.
+//
+// NOTHING IS LOST BY REMOVING IT. The compiler still sees the declarations, so
+// a definition whose signature drifted from its declaration still fails where it
+// was written rather than at the link, which is the second job the include did.
+// A project that prefers the line keeps it: the header carries a guard, so
+// including it as well is a no-op.
+//
+// `/FI` takes the path as one token and `-include` takes it as two, which is why
+// this returns a vector rather than a string.
+inline std::vector<std::string> force_include_flags(const std::string& header,
+                                                    std::string_view compilerId) {
+    if (compilerId == "msvc") return { "/FI" + header };
+    return { "-include", header };
+}
 
 // The identifier immediately before the first `(`. That is the whole parse this
 // needs: the module re-exports the NAME and the header carries the signature

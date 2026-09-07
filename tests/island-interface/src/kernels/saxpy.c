@@ -1,13 +1,16 @@
-/* The island.
+/* The island. No include, and no header in this project at all.
  *
  * The signatures live HERE, beside the definitions, and exist once. The marker
- * is what the generator finds them by; the generated header defines it as
- * nothing, so this file compiles with no other arrangement.
+ * is what the generator finds them by, and the generated boundary header
+ * reaches this file through the compiler's forced-include flag rather than
+ * through a line naming a file that is not in the source tree.
+ *
+ * That header still declares these functions, so a definition whose signature
+ * drifted from its declaration fails here rather than at the link.
  *
  * `scale_device` deliberately wraps across lines: a signature that did not fit
  * on one is the shape a line-oriented scan gets wrong, and the generator
  * matches parentheses rather than reading lines. */
-#include "island_interface.kernels.h"
 
 MCPP_EXPORT_C
 int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n) {

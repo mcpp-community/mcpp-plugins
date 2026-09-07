@@ -313,18 +313,29 @@ visibility attribute where this expands to nothing. It is configurable through
 parenthesis closing the parameter list, matching nesting, so a signature that
 wraps across lines or carries a macro travels through unexamined.
 
-**The island includes the generated header, and that line is not new.** Today a
-project writes `#include "saxpy/saxpy.h"` *and* writes that header; here the
-include stays and the header is what became generated. It earns its place twice
-over: it defines the marker, and it declares the entry points, so a definition
-whose signature drifted from its declaration fails where it was written rather
-than at the link.
+**The island writes no `#include` either.** `force_include_flags` returns the
+flags that make the compiler read the generated header before the island's first
+line -- `-include <path>` for gcc and clang, `/FI<path>` for MSVC -- so a project
+using this generator has no header in its source tree and no line naming one.
 
-A rule can remove it by passing `-include <generated header>` to the device
-compiler, which every compiler this package drives accepts. That is left as an
-option rather than made the default: a file whose marker comes from a flag is no
-longer self-contained, and opening it says nothing about where `MCPP_EXPORT_C`
-came from.
+An `#include` of the generated header would name a file its author never opens,
+and it buys no self-containment: that translation unit could not be compiled
+outside mcpp with or without the line, because the file it names does not exist
+until mcpp writes it.
+
+**The check that include used to do is still there.** The compiler sees the
+declarations, so a definition whose signature drifted from its declaration fails
+where it was written rather than at the link. Verified against the fixture with
+a hand-written entry list declaring `double n` where the definition says
+`unsigned n`:
+
+```
+src/kernels/saxpy.c:22:5: error: conflicting types for 'scale_device'
+```
+
+That check is only reachable on the `emit` path, where the list and the
+definition are separate things. Under `scan` the header is generated *from* the
+definition, so the two cannot disagree at all.
 
 **The declaration still exists once.** Without this, a project writes it twice --
 in a header, and again wherever the C++ side reaches it. C language linkage does

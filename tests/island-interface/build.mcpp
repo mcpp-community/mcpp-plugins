@@ -2,15 +2,17 @@ import std;
 import mcpp;
 import mcpp.plugins;
 
-// THE ENTRY POINTS ARE READ FROM WHERE THEY ARE DEFINED.
+// THE ENTRY POINTS ARE READ FROM WHERE THEY ARE DEFINED, AND THE ISLAND WRITES
+// NOTHING ELSE.
 //
-// `island::scan` takes them out of the island's own source, so the signature
-// sits beside the definition and exists once. The alternative -- and what
-// `island::emit` takes directly -- is a list written here, which is exact but
-// puts the signatures somewhere other than the code they describe.
+// `island::scan` takes the marked declarations out of the island's own source,
+// so the signature sits beside the definition and exists once. `island::emit`
+// then writes the boundary header and the module, and the forced-include flags
+// below make the island's compiler read that header before the island's first
+// line -- so the island has no `#include` either.
 //
-// Without either, a project writes each declaration twice: in a header for the
-// island's compiler and again wherever the C++ side reaches it. C language
+// Without any of this a project writes each declaration twice: in a header for
+// the island's compiler and again wherever the C++ side reaches it. C language
 // linkage does not mangle, so two copies that disagree are one symbol: the link
 // is clean and each side reads the arguments by its own ABI.
 int main() {
@@ -35,8 +37,14 @@ int main() {
     const auto out = mcpp::plugins::island::emit(*entries, opt);
     if (!out) return 1;
 
-    // The header goes on the include path so the island can include it, and the
-    // module joins the build.
+    // The C island reads the generated header through `-include`, so the marker
+    // is defined and the declarations are visible -- which is what keeps a
+    // signature that drifted from its definition an error where it was written
+    // rather than at the link.
+    for (auto const& f : mcpp::plugins::island::force_include_flags(
+                             out->header_file, mcpp::compiler()))
+        mcpp::cflag(f.c_str());
+
     mcpp::include_dir(out->include_dir.c_str());
     mcpp::generated(out->interface_file.c_str());
     return 0;
