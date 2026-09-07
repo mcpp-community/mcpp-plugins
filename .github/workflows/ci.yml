@@ -274,8 +274,14 @@ jobs:
           # examples/09-heterogeneous has.
           grep -q '^import island_interface.kernels;' src/app.cppm \
             || { echo "FAIL: the seam no longer imports the generated module"; exit 1; }
-          if grep -q 'saxpy_device\|scale_device' src/main.cpp; then
+          # CODE, NOT TEXT. `src/main.cpp` explains in a comment that it names
+          # no boundary symbol, and a plain grep matches that sentence -- the
+          # criterion then reports the file for saying what it does. Comment
+          # lines are stripped first, which is the difference between asking
+          # "does this file mention the name" and "does this file use it".
+          if sed 's://.*::' src/main.cpp | grep -q 'saxpy_device\|scale_device'; then
             echo "FAIL: the consumer names a boundary symbol; the seam exists to hide it"
+            sed 's://.*::' src/main.cpp | grep -n 'saxpy_device\|scale_device'
             exit 1
           fi
           # AND THE CHECK THAT INCLUDE USED TO DO IS STILL THERE. The compiler
