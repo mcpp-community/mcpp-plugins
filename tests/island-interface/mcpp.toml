@@ -1,4 +1,4 @@
-# The consumer that tests `mcpp.plugins.island`.
+# The consumer that tests `mcpp.tools.island`.
 #
 # WHY THE ISLAND HERE IS A `.c` AND NOT A `.cu`.
 #
@@ -28,7 +28,7 @@ modules    = true
 import_std = true
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", host-module = true }
+plugins = { path = "../..", features = ["tools-island"], host-module = true }
 
 [build]
 sources = ["src/*.cpp", "src/kernels/*.c"]

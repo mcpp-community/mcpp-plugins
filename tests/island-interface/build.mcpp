@@ -1,6 +1,6 @@
 import std;
 import mcpp;
-import mcpp.plugins;
+import mcpp.tools.island;
 
 // THE ENTRY POINTS ARE READ FROM WHERE THEY ARE DEFINED, AND THE ISLAND WRITES
 // NOTHING ELSE.
@@ -21,12 +21,12 @@ int main() {
     };
     for (auto const& f : islands) mcpp::rerun_if_changed(f.c_str());
 
-    mcpp::plugins::island::options opt;
+    mcpp::tools::island::options opt;
     opt.module_name = "island_interface.kernels";
     opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
     opt.produced_by = "the island-interface fixture";
 
-    const auto entries = mcpp::plugins::island::scan(islands, opt);
+    const auto entries = mcpp::tools::island::scan(islands, opt);
     if (!entries) return 1;
     if (entries->size() != 2) {
         std::cerr << std::format("expected two marked entry points, found {}\n",
@@ -34,14 +34,14 @@ int main() {
         return 1;
     }
 
-    const auto out = mcpp::plugins::island::emit(*entries, opt);
+    const auto out = mcpp::tools::island::emit(*entries, opt);
     if (!out) return 1;
 
     // The C island reads the generated header through `-include`, so the marker
     // is defined and the declarations are visible -- which is what keeps a
     // signature that drifted from its definition an error where it was written
     // rather than at the link.
-    for (auto const& f : mcpp::plugins::island::force_include_flags(
+    for (auto const& f : mcpp::tools::island::force_include_flags(
                              out->header_file, mcpp::compiler()))
         mcpp::cflag(f.c_str());
 

@@ -53,6 +53,7 @@ engine's own module family and is not used here.
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; compiles each shader through a `role = "source"` action and states which of the two compilers produced it |
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.6 | `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1 |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
+| `tools-island` | `mcpp.tools.island` | 2026.9.7.1 | nothing beyond mcpp: it reads marked entry points out of an island's own source and writes the `extern "C"` boundary header its compiler reads and the module the C++ side imports. Not a device rule -- it claims no extension, and a project calls it from its own `build.mcpp` |
 
 ### Each rule brings its own environment
 
@@ -261,12 +262,13 @@ before this every translation unit that included one carried its own copy.
 Exactly one translation unit -- the generated implementation -- includes them
 now, and every consumer reaches the same array through the accessor.
 
-## The other generated interface: an island's boundary
+## `tools-island`: an island's boundary
 
 `mcpp::plugins::surface` generates the whole interface for a **data** payload,
 because an address and a size are all there is to decide.
-`mcpp::plugins::island` generates what is mechanical about a **code** island --
-and only that.
+`mcpp.tools.island` generates what is mechanical about a **code** island -- and
+only that. It is a member like `tools-embed` rather than part of the lib root:
+nothing in this collection uses it, a project does.
 
 The entry points are marked where they are defined, and the signature exists
 once:
@@ -281,12 +283,12 @@ int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n
 
 ```cpp
 // build.mcpp
-mcpp::plugins::island::options opt;
+mcpp::tools::island::options opt;
 opt.module_name = "myapp.kernels";
 opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
 
-const auto entries = mcpp::plugins::island::scan(islands, opt);
-const auto out     = mcpp::plugins::island::emit(*entries, opt);
+const auto entries = mcpp::tools::island::scan(islands, opt);
+const auto out     = mcpp::tools::island::emit(*entries, opt);
 mcpp::include_dir(out->include_dir.c_str());
 mcpp::generated(out->interface_file.c_str());
 ```

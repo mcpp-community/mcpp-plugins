@@ -81,11 +81,14 @@ sources           = ["rules/sycl.cppm"]
 rule_module       = "mcpp.rules.sycl"
 device_extensions = [".sycl"]
 
-# NOT a device rule: it embeds files that are already on disk, so it claims no
-# extension and names no rule module. A consumer calls it from its own
+# NOT device rules: these embed or declare things a project already has, so they
+# claim no extension and name no rule module. A consumer calls them from its own
 # `build.mcpp`.
 [features.tools-embed]
 sources = ["tools/embed.cppm"]
+
+[features.tools-island]
+sources = ["tools/island.cppm"]
 
 # ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
 #

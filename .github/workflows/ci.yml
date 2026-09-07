@@ -200,7 +200,7 @@ jobs:
 
       # THE OTHER GENERATED INTERFACE, AND THE ONE THAT IS NOT A PAYLOAD.
       #
-      # `mcpp.plugins.island` generates the boundary a device island is reached
+      # `mcpp.tools.island` generates the boundary a device island is reached
       # across: the `extern "C"` header its compiler includes, and the module the
       # C++ side imports. The entry points are declared once, so the copy that
       # can drift is gone -- and at a C-linkage boundary that copy is the worst
