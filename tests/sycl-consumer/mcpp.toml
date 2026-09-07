@@ -3,7 +3,10 @@ name         = "sycl-consumer"
 namespace    = "example"
 version      = "0.1.0"
 description  = "A SYCL kernel behind a seam module, reaching an NVIDIA device, with a CPU fallback"
-accelerators = ["sycl"]
+# BOTH, for the reason the HIP consumer records: the glob below names the
+# NVIDIA target the SYCL unit is compiled for, so `cuda` is a backend this
+# package's sources are written for.
+accelerators = ["sycl", "cuda"]
 
 [language]
 standard   = "c++23"
@@ -34,29 +37,18 @@ plugins = { path = "../..", features = ["rules-sycl"], host-module = true }
 [dependencies.compat]
 sycl-runtime = "2026.09.07"
 
-# Three payloads, each closing one hole the host would otherwise fill.
+# NO [xlings.workspace]. The rule declares the payloads it drives, under the
+# feature that selects it and the accelerator it serves, so this project names
+# the rule and nothing else. Needs mcpp 2026.9.6.6; before it, a payload a
+# dependency declared was installed and then answered as absent.
 #
-#   dpcpp      the compiler.
-#   gcc        NOT a second toolchain: the C++ standard library the SYCL unit
-#              compiles against. Left alone, dpcpp's clang reads the HOST's
-#              /usr/include/c++ -- measured, and invisible until a machine
-#              without it refuses the build.
-#   cuda-nvcc  the NVIDIA back end's libdevice. Also measured: without
-#              `--cuda-path` clang finds the host's CUDA installation and says
-#              nothing about it.
-[xlings.workspace]
-"xim:dpcpp"             = "7.1.0"
-"xim:gcc"               = "15.1.0"
-# The C library the SYCL unit compiles against, and the kernel headers under
-# it. Named for the same reason `xim:gcc` is: dpcpp's clang is not the clang
-# mcpp resolved, and it is configured with neither. Left alone its search list
-# reaches `/usr/include` with no ecosystem glibc anywhere on it -- measured.
-# UNPINNED: the C library version is the runtime binding's choice, not this
-# project's. Pinning it refuses on a machine whose binding chose another --
-# 2.44 here, 2.44.2 on a CI runner. `""` means "present, any version".
-"xim:glibc"             = ""
-"xim:linux-headers"     = ""
-"xim:cuda-nvcc"         = "12.9.86"
+# `mcpp.rules.sycl` carries five, each closing one hole the host would
+# otherwise fill: dpcpp (the compiler); gcc, glibc and linux-headers (the C++
+# and C libraries the SYCL unit compiles against -- dpcpp's clang is not the
+# clang mcpp resolved and is configured with neither, so left alone its search
+# list reaches /usr/include with no ecosystem glibc on it); and cuda-nvcc,
+# whose libdevice the NVIDIA back end needs -- declared only when the accel
+# actually names cuda, so a SYCL build for another target does not pay for it.
 
 [build]
 # Two chunks: the programming model, and the device. Written `sycl` alone, the

@@ -9,7 +9,16 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  MCPP_VERSION: 2026.9.6.1
+  MCPP_VERSION: 2026.9.6.6
+  # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
+  #
+  # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
+  # reports the extracted tarball's own directory as its home, so every install
+  # landed in `$GITHUB_WORKSPACE/mcpp-<ver>-linux-x86_64/` while the cache
+  # saved and restored `~/.mcpp` -- a directory mcpp never touched. Every run
+  # was therefore the cold case, which is what the 90-minute budget below was
+  # sized for. mcpp's own ci-linux.yml pins it for this reason and says so.
+  MCPP_HOME: /home/runner/.mcpp
 
 jobs:
   consumers:
@@ -39,8 +48,18 @@ jobs:
           tar -xzf mcpp.tar.gz
           MCPP="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/bin/mcpp"
           "$MCPP" --version
+          # THE BUNDLED xlings, NAMED EXPLICITLY BECAUSE `MCPP_HOME` IS PINNED.
+          #
+          # A released tarball carries its own xlings at `registry/bin/xlings`
+          # and finds it there when its home IS that tarball. Pinning the home
+          # elsewhere moves the place mcpp looks, so the first command fails
+          # with `xlings binary not found` -- measured. The override is needed
+          # only for that first call: mcpp copies the binary into the pinned
+          # home and answers from there afterwards.
+          export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/registry/bin/xlings"
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
 
       # The rule's output is a header holding the SPIR-V module; the program
       # checks the magic number in its first word, so no Vulkan runtime is
@@ -146,6 +165,72 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^magic=(no shader in this build)' run.log
           grep -q '^12 24 36 48' run.log
+
+      # THE PAYLOADS CAME FROM THE RULE, NOT FROM THE FIXTURE.
+      #
+      # Every fixture above builds, and that alone does not distinguish "the
+      # rule declared its toolkit" from "the fixture still declares it": a
+      # re-added `[xlings.workspace]` block would keep all of them green while
+      # the claim this package makes stopped being true.
+      #
+      # The object is mcpp's own report of WHERE the entries came from. It
+      # names the pass -- the graph's, not the root's -- so it separates the
+      # two cases directly rather than by reading the manifests back.
+      - name: the rules declare their own payloads
+        run: |
+          set -e
+          # THE PROVISIONING LINE ONLY PRINTS ON A STAMP MISS, and the earlier
+          # steps of this job have already written those stamps. Without
+          # clearing them, the criterion's "no" and "this ran after the
+          # fixtures" are the same reading. Removing them costs nothing: the
+          # packages are still installed, so the re-provision is one xlings
+          # round trip.
+          #
+          # THE PATH IS ASKED FOR, NOT ASSUMED. A released mcpp is
+          # self-contained and its home is the extracted tarball unless
+          # MCPP_HOME says otherwise -- so `rm -rf ~/.mcpp/provisioned` removed
+          # nothing and this step failed on a working build. Measured: a local
+          # rehearsal passed because a DEV build is disqualified from
+          # self-contained mode and does use ~/.mcpp, so the rehearsal and CI
+          # were clearing different directories.
+          HOME_DIR=$("$MCPP" self env | awk -F'= *' '/^MCPP_HOME/{print $2; exit}')
+          [ -n "$HOME_DIR" ] || { echo "FAIL: could not read MCPP_HOME"; exit 1; }
+          echo "clearing provisioning stamps under $HOME_DIR"
+          rm -rf "$HOME_DIR/provisioned"
+          for d in tests/cuda-consumer tests/hip-consumer \
+                   tests/sycl-consumer tests/spirv-consumer; do
+            # No project-side declaration is the first half of the claim, and
+            # it is a property of a file this repository owns.
+            if grep -qE '^\[(target\..*\.)?xlings\.workspace\]' "$d/mcpp.toml"; then
+              echo "FAIL: $d declares payloads itself, so this step proves nothing"
+              exit 1
+            fi
+            ( cd "$d" && rm -rf target && "$MCPP" build > prov.log 2>&1 ) || {
+              echo "build failed in $d"; tail -20 "$d/prov.log"; exit 1; }
+            grep -q 'entries declared by dependencies' "$d/prov.log" || {
+              echo "FAIL: $d installed no payload the rule declared"
+              grep -i 'provisioning' "$d/prov.log" || echo "(no provisioning line at all)"
+              exit 1
+            }
+            echo "ok: $d — $(grep -m1 'entries declared by dependencies' "$d/prov.log")"
+            rm -f "$d/prov.log"
+          done
+          # And the one fixture that DOES override, so the override path is on
+          # this graph too: it declares one entry, and one version is installed.
+          d=tests/multi-rule-consumer
+          grep -q 'xlings.workspace' "$d/mcpp.toml" || {
+            echo "FAIL: $d no longer demonstrates the override"; exit 1; }
+          ( cd "$d" && rm -rf target && "$MCPP" build > prov.log 2>&1 ) || {
+            echo "build failed in $d"; tail -20 "$d/prov.log"; exit 1; }
+          XPKGS="$HOME_DIR/registry/data/xpkgs"
+          n=$(ls -1 "$XPKGS/xim-x-glslang" | wc -l | tr -d ' ')
+          [ "$n" = "1" ] || {
+            echo "FAIL: the override installed $n versions of glslang:"
+            ls -1 "$XPKGS/xim-x-glslang"
+            exit 1
+          }
+          echo "ok: $d — one glslang, $(ls -1 "$XPKGS/xim-x-glslang")"
+          rm -f "$d/prov.log"
 
       # THE HOST-LEAK ASSERTION, and what it measures was corrected once.
       #

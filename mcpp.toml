@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.2.3"
+version     = "0.2.4"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -27,6 +27,106 @@ rules-hip   = { sources = ["rules/hip.cppm"] }
 rules-spirv = { sources = ["rules/spirv.cppm"] }
 rules-sycl  = { sources = ["rules/sycl.cppm"] }
 tools-embed = { sources = ["tools/embed.cppm"] }
+
+# ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
+#
+# A RULE OWNS THE LIST OF PACKAGES IT DRIVES. It is the code that runs the
+# compiler, reads the headers and puts the library directory on the link line,
+# so "which package, and which version of it" is its knowledge. Before this, a
+# project repeated the list in its own `[xlings.workspace]` -- a copy that goes
+# stale silently, because the rule moves and the projects do not.
+#
+# TWO GATES, AND BOTH MUST OPEN BEFORE A BYTE IS DOWNLOADED. The feature says
+# whether this rule is wanted at all; `cfg(accelerator = ...)` says whether this
+# particular build compiles for the device. A CPU-only build of a project that
+# depends on this package with `features = ["rules-cuda"]` opens the first and
+# not the second, and installs nothing -- which is the build CI runs, and the
+# one a multi-gigabyte vendor toolkit would otherwise make the most expensive.
+#
+# THE SHAPE OF EACH DEFAULT IS A JUDGEMENT ABOUT COUPLING, not a style.
+#
+#   - An EXACT version where the payload's version is coupled to something the
+#     rule cannot see. A CUDA runtime must not be newer than the driver it will
+#     meet: the 12.9 line reaches every driver from r525 onward, and the 13.x
+#     line raises that to r580. That is a property of the consumer's machines,
+#     so the rule offers a line it has verified and the project moves it.
+#   - A FLOOR (`>=`) where no such coupling exists and newer is simply newer.
+#
+# mcpp reads the difference: a bare version is a CHOICE, so a project pinning a
+# different one wins and is reported; a `>=` is a REQUIREMENT, so a project
+# pinning below it is refused naming both sides. See "One package, one version"
+# in mcpp's docs/05.
+#
+# WHAT IS NOT HERE: anything the produced PROGRAM chooses to run on. A Vulkan
+# ICD (`xim:mesa-lavapipe`) is a device, not a build tool, and a rule that
+# declared one would force a software renderer onto consumers that have a GPU.
+# The rule declares what it needs to COMPILE; the project declares what it needs
+# to RUN. The runtime adapters (`compat:cuda-runtime`, `compat:sycl-runtime`,
+# `compat:vulkan-runtime`) stay in the project for the same reason and for a
+# second one: this package is a `[build-dependencies]` edge, so its own
+# `[dependencies]` deliberately do not reach the consumer's target.
+
+[target.'cfg(accelerator = "cuda")'.feature-xlings.rules-cuda]
+"xim:cuda-nvcc"   = "12.9.86"
+"xim:cuda-cudart" = "12.9.79"
+# clang's CUDA wrapper includes a cuRAND header for every device unit, and that
+# header includes <nv/target> from CCCL. Neither is called by an ordinary
+# kernel; on a developer machine the host's /usr/include supplied them silently.
+"xim:libcurand"   = "10.3.10.19"
+"xim:cuda-cccl"   = "12.9.27"
+
+# The driver sentinel is Linux-only, and the OS goes in the PREDICATE rather
+# than in the value: a value carrying platform keys under an already-predicated
+# table would state the condition twice and let the two disagree.
+[target.'cfg(all(accelerator = "cuda", linux))'.feature-xlings.rules-cuda]
+"xim:libcuda-host-link" = "0.0.1"
+
+# HIP on the NVIDIA platform is a header layer over the CUDA runtime, so this
+# list is the CUDA one plus the header package HIP includes at its second line.
+[target.'cfg(accelerator = "hip")'.feature-xlings.rules-hip]
+"xim:hip-nvidia"        = "7.2.4"
+"xim:cuda-nvcc"         = "12.9.86"
+"xim:cuda-cudart"       = "12.9.79"
+"xim:libcurand"         = "10.3.10.19"
+"xim:cuda-cccl"         = "12.9.27"
+"xim:cuda-profiler-api" = "12.9.79"
+
+[target.'cfg(all(accelerator = "hip", linux))'.feature-xlings.rules-hip]
+"xim:libcuda-host-link" = "0.0.1"
+
+# A floor: the compiler's version is not coupled to any driver, and the rule
+# needs `-fsycl-link` to behave as it does from 7.1.0 onward.
+[target.'cfg(accelerator = "sycl")'.feature-xlings.rules-sycl]
+"xim:dpcpp" = ">=7.1.0"
+
+# THE SECOND COMPILER MUST BE TOLD WHERE THE C LIBRARY IS. dpcpp's clang is not
+# configured with this ecosystem's glibc, so without these its device units
+# compile against the host's -- which no command line shows, because an implicit
+# include search never appears on one.
+[target.'cfg(all(accelerator = "sycl", linux))'.feature-xlings.rules-sycl]
+"xim:gcc"           = "15.1.0"
+"xim:glibc"         = ""
+"xim:linux-headers" = ""
+
+# Only when the SYCL build actually names an NVIDIA target. `accelerator` is a
+# SET, so this is a conjunction of two membership tests rather than a
+# contradiction -- and without it every SYCL build would download a CUDA
+# toolkit it may have no target for.
+[target.'cfg(all(accelerator = "sycl", accelerator = "cuda"))'.feature-xlings.rules-sycl]
+"xim:cuda-nvcc" = "12.9.86"
+
+# glslang alone: it is the rule's first choice, and `xim:shaderc` is the
+# fallback a project names when it wants glslc instead. Declaring both would
+# install both and use one.
+[target.'cfg(accelerator = "vulkan")'.feature-xlings.rules-spirv]
+"xim:glslang" = ">=15.1.0"
+
+# 8.5.0 is a real floor rather than a preference: the mixed-mode object -- the
+# one carrying both the device binary and a host-callable launcher, which is
+# what lets it join an ordinary link -- and the 38 SoC simulators are what this
+# rule drives, and they are present from that version onward.
+[target.'cfg(accelerator = "ascend")'.feature-xlings.rules-ascendc]
+"xim:cann-toolkit" = ">=8.5.0"
 
 [targets.plugins]
 kind = "lib"

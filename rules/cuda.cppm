@@ -226,8 +226,18 @@ inline std::optional<toolkit> find_toolkit() {
     t.driver_dir  = xpkg("libcuda-host-link");
     if (t.nvcc_root.empty() || t.cudart_root.empty()) {
         std::println(std::cerr,
-            "mcpp.rules.cuda: the toolkit is not declared.\n"
-            "  Name it under [xlings.workspace] and mcpp provisions it on first use:\n"
+            "mcpp.rules.cuda: the toolkit is not installed.\n"
+            "  This rule DECLARES it, so a project normally writes nothing. Three "
+            "things stop\n"
+            "  that from reaching the build, in the order worth checking:\n"
+            "    - mcpp older than 2026.9.6.6, which cannot answer a payload a "
+            "dependency declared;\n"
+            "    - `features = [\"rules-cuda\"]` missing from the "
+            "[build-dependencies] edge;\n"
+            "    - the build names no CUDA accelerator (`--accel \"cuda12.9+{{sm_89}}\"` "
+            "or [build] accel).\n"
+            "  To pin a different line, name it in your own project and it wins:\n"
+            "    [target.'cfg(accelerator = \"cuda\")'.xlings.workspace]\n"
             "    \"xim:cuda-nvcc\"   = \"12.9.86\"\n"
             "    \"xim:cuda-cudart\" = \"12.9.79\"\n"
             "  (found nvcc: '{}', cudart: '{}')", t.nvcc_root, t.cudart_root);
@@ -488,7 +498,9 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             std::println(std::cerr,
                 "mcpp.rules.cuda: the clang route needs cuRAND's headers, which clang's CUDA "
                 "wrapper includes unconditionally, and CCCL's, which they include in turn.\n"
-                "  Name the payloads under [xlings.workspace] and mcpp provisions them on first use:\n"
+                "  This rule declares both; see the note above for why they may not have "
+                "arrived.\n"
+                "  To pin a different line, name it in your own project and it wins:\n"
                 "    \"xim:cuda-cccl\" = \"12.9.27\"       (the 12.9 line; 13.x pairs with 13.x)\n"
                 "    \"xim:libcurand\" = \"10.3.10.19\"   (the 12.9 line; 10.4.x pairs with 13.x)\n"
                 "  (found cccl: '{}', curand: '{}')", tk->cccl_root, tk->curand_root);

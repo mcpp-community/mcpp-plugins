@@ -46,12 +46,58 @@ engine's own module family and is not used here.
 
 | feature | module | since mcpp | what it needs |
 |---|---|---|---|
-| `rules-ascendc` | `mcpp.rules.ascendc` | 2026.9.6.5 | `xim:cann-toolkit` in `[xlings.workspace]`, `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. The floor is the release whose device-source table carries `.asc` and whose `mcpp::link_flag` can emit the `-rpath-link` the toolkit's own shared libraries need |
-| `rules-cuda` | `mcpp.rules.cuda` | 2026.9.5.2 | the toolkit named in `[xlings.workspace]` (`xim:cuda-nvcc`, `xim:cuda-cudart`, and `xim:libcurand` for the clang route, whose wrapper includes a cuRAND header unconditionally), `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
-| `rules-hip` | `mcpp.rules.hip` | 2026.9.5.2 | `xim:hip-nvidia` plus the CUDA back end it compiles through (`xim:cuda-nvcc`, `xim:cuda-cudart`, `xim:libcurand`, `xim:cuda-cccl`), `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
-| `rules-spirv` | `mcpp.rules.spirv` | 2026.9.5.3 | `xim:glslang` or `xim:shaderc` in `[xlings.workspace]`, `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action, and states which of the two compilers produced it |
-| `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.1 | `xim:dpcpp` (the compiler), `xim:gcc` (the C++ standard library the unit compiles against, not a second toolchain) and `xim:cuda-nvcc` for an NVIDIA target; `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. The floor is the release whose device-source table carries `.sycl` |
+| `rules-ascendc` | `mcpp.rules.ascendc` | 2026.9.6.6 | `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. Its own engine needs are `.asc` in the device-source table and `mcpp::link_flag` for the `-rpath-link` the toolkit's shared libraries require, both 2026.9.6.5 |
+| `rules-cuda` | `mcpp.rules.cuda` | 2026.9.6.6 | `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
+| `rules-hip` | `mcpp.rules.hip` | 2026.9.6.6 | `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
+| `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action, and states which of the two compilers produced it |
+| `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.6 | `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1 |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
+
+### Each rule brings its own environment
+
+A project names the rule and nothing else:
+
+```toml
+[build-dependencies.mcpp]
+plugins = { version = "0.2.4", features = ["rules-cuda"], host-module = true }
+```
+
+The payloads each rule drives are declared **here**, under the feature that
+selects the rule and the accelerator it serves:
+
+```toml
+[target.'cfg(accelerator = "cuda")'.feature-xlings.rules-cuda]
+"xim:cuda-nvcc"   = "12.9.86"
+"xim:cuda-cudart" = "12.9.79"
+```
+
+Two gates, and both must open before a byte is downloaded. The feature says
+whether the rule is wanted; the selector says whether this build compiles for
+the device. A CPU-only build opens neither.
+
+**The shape of each default is a judgement about coupling.** An exact version
+where the payload is coupled to something the rule cannot see -- a CUDA runtime
+must not be newer than the driver it will meet, so the 12.9 line is offered and
+a project with newer machines names 13.x itself. A floor (`>=`) where no such
+coupling exists: a shader compiler, a SYCL compiler, a CANN toolkit.
+
+mcpp reads the difference. A bare version is a **choice**, so a project pinning
+a different one wins and the override is reported; a `>=` is a **requirement**,
+so a project pinning below it is refused naming both sides. Either way one
+version is installed. To override:
+
+```toml
+[target.'cfg(accelerator = "cuda")'.xlings.workspace]
+"xim:cuda-nvcc" = "13.3.33"
+```
+
+**What is not here:** anything the produced program chooses to run *on*. A
+Vulkan ICD (`xim:mesa-lavapipe`) is a device, and a rule that declared one would
+force a software renderer onto consumers that have a GPU. The runtime adapters
+(`compat:cuda-runtime`, `compat:sycl-runtime`, `compat:vulkan-runtime`) stay in
+the project for that reason and for a second one: this package is reached
+through a `[build-dependencies]` edge, so its own `[dependencies]` deliberately
+do not reach the consumer's target.
 
 ### Each rule takes the extensions it claims
 
@@ -77,14 +123,20 @@ A device source that NO rule claims is not silently dropped: mcpp refuses a
 device source that reached no action, naming the file. That is the engine's
 half of this rule and it needs 2026.9.6.5.
 
-The floor is the mcpp release whose engine carries what the member relies on:
-`rules-spirv` needs the device-source table that classifies shader extensions,
-which 2026.9.5.3 introduced; `tools-embed` needs the fast path to compare a
-declared file input, which 2026.9.5.4 introduced; and `rules-sycl` needs `.sycl`
-in that same device-source table, which 2026.9.6.1 introduced. The index
-descriptor states the highest floor among the members, so it is the floor of the
-collection rather than of any one feature; a project on an older mcpp is refused
-at resolution rather than at the first shader.
+The floor is the mcpp release whose engine carries what the member relies on.
+From 0.2.4 every rule shares one: **2026.9.6.6**, the release in which a payload
+a DEPENDENCY declared is both installed and answerable. Before it a rule could
+declare `>=8.5.0`, have it installed, and still be told by `xpkg_dir` that
+nothing was there -- which is why each rule's list used to be repeated in every
+project that used it. The earlier per-member floors are still the floors of the
+rules themselves (`rules-spirv` needs the shader extensions in the device-source
+table, 2026.9.5.3; `tools-embed` needs the fast path to compare a declared file
+input, 2026.9.5.4; `rules-sycl` needs `.sycl` in that table, 2026.9.6.1), and
+they are all below the shared one.
+
+The index descriptor states the highest floor among the members, so it is the
+floor of the collection rather than of any one feature; a project on an older
+mcpp is refused at resolution rather than at the first shader.
 
 ## How the engine sees this package
 

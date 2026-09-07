@@ -290,8 +290,13 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             missing += std::format("    \"xim:{}\" = \"{}\"\n", n.pkg, n.version);
     if (!missing.empty()) {
         std::println(std::cerr,
-            "mcpp.rules.hip: the HIP island needs payloads this project has not declared.\n"
-            "  Add to mcpp.toml:\n\n  [xlings.workspace]\n{}\n"
+            "mcpp.rules.hip: the HIP island needs payloads that are not installed.\n"
+            "  This rule DECLARES them, so a project normally writes nothing. Check, in "
+            "order:\n"
+            "  mcpp older than 2026.9.6.6; `features = [\"rules-hip\"]` missing from the\n"
+            "  [build-dependencies] edge; or a build that names no HIP accelerator.\n"
+            "  To pin different versions, name them in your own project and they win:\n\n"
+            "  [target.'cfg(accelerator = \"hip\")'.xlings.workspace]\n{}\n"
             "  They are PAYLOADS: the version is the project's choice, not the machine's.",
             missing);
         return out;

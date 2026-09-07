@@ -25,8 +25,10 @@ import_std = true
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = ["rules-spirv"], host-module = true }
 
-[xlings.workspace]
-"xim:glslang" = "15.1.0"
+# NO [xlings.workspace]. The rule declares the payloads it drives, under the
+# feature that selects it and the accelerator it serves, so this project names
+# the rule and nothing else. Needs mcpp 2026.9.6.6; before it, a payload a
+# dependency declared was installed and then answered as absent.
 
 [build]
 accel = "vulkan1.2"
