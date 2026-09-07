@@ -378,7 +378,21 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         std::filesystem::create_directories(dir, ec);
         const auto base   = (dir / p.stem().string()).string();
         const auto header = base + ".h";
-        const auto inc    = base + ".inc";
+        // SLANGC APPENDS THE EMBEDDING LANGUAGE'S EXTENSION TO `-o`.
+        //
+        // `-o scale.inc` writes `scale.inc.h`, because `-source-embed-language`
+        // defaults to C/C++ and the driver adds that language's suffix unless
+        // the name already ends in it. An action whose declared output is
+        // `scale.inc` therefore names a file the command never writes, and the
+        // failure lands two edges away: the generated implementation includes
+        // the wrapper, the wrapper includes a file that is not there, and the
+        // message is `fatal error: scale.inc: No such file or directory` with
+        // nothing pointing at the flag that caused it.
+        //
+        // Measured against slangc 2026.14.1. Naming the output `.h` outright
+        // makes the file the compiler writes and the file this rule declares
+        // the same one, without depending on that appending rule at all.
+        const auto inc    = base + "_embed.h";
         const auto input  = p.is_absolute() ? src : root + "/" + src;
 
         if (!write_header(header, inc)) return false;

@@ -140,14 +140,15 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 [target.'cfg(all(accelerator = "vulkan", linux))'.feature-xlings.rules-spirv]
 "xim:glslang" = ">=15.1.0"
 
-# AN EXACT VERSION HERE, WHERE LINUX HAS A FLOOR, AND THE REASON IS THE
-# ENGINE'S COMMAND LINE RATHER THAN THE PACKAGE.
+# A FLOOR AGAIN, NOW THAT THE ENGINE ESCAPES THE ARGUMENT FOR cmd.exe.
 #
-# mcpp hands its provisioning request to xlings as a JSON argument on a shell
-# command line. On Windows that line is parsed by cmd.exe, whose quoting rules
-# are not the ones the JSON is escaped for: the `\"` sequences leave cmd's
-# quote state OFF by the time it reaches a `>` in a version constraint, so the
-# `>` is read as a REDIRECTION. Measured on windows-2022 with mcpp 2026.9.6.6:
+# These two were an exact version for one release, and the reason was the
+# engine's command line rather than the package. mcpp hands its provisioning
+# request to xlings as a JSON argument on a shell command line; on Windows that
+# line is parsed by cmd.exe, whose quoting rules are not the ones the JSON is
+# escaped for. The `\"` sequences left cmd's quote state OFF by the time it
+# reached the `>` in a version constraint, so the `>` was read as a REDIRECTION.
+# Measured on windows-2022 with mcpp 2026.9.6.6:
 #
 #   Provisioning [xlings.workspace] entries declared by dependencies
 #       (xim:shaderc@>=2026.3)
@@ -158,16 +159,14 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 # packaging failure. No declaration reachable on Windows had carried a `>`
 # before, which is why the whole `>=` shape had never been exercised there.
 #
-# An exact version is a legitimate declaration and not a workaround in
-# disguise: mcpp reads it as a CHOICE, so a project that wants a different one
-# still wins and the override is reported. macOS takes the same value so the
-# two platforms that use this compiler agree. Both revert to `>=2026.3` once a
-# released engine escapes the argument for cmd.
+# `mcpp.platform.shell` now escapes for both parsers, and MCPP_VERSION below
+# pins the release that carries it, so the constraint these entries were always
+# meant to state is expressible again.
 [target.'cfg(all(accelerator = "vulkan", macos))'.feature-xlings.rules-spirv]
-"xim:shaderc" = "2026.3"
+"xim:shaderc" = ">=2026.3"
 
 [target.'cfg(all(accelerator = "vulkan", windows))'.feature-xlings.rules-spirv]
-"xim:shaderc" = "2026.3"
+"xim:shaderc" = ">=2026.3"
 
 # ONE TABLE FOR ALL THREE PLATFORMS, WHICH `rules-spirv` COULD NOT HAVE.
 #
@@ -175,19 +174,18 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 # aarch64, so this rule does not change compilers by platform the way the GLSL
 # rule does, and one table says everything.
 #
-# AN EXACT VERSION RATHER THAN A FLOOR, AND NOT FOR THE USUAL REASON. Slang's
-# version is coupled to no driver, so the rule this package follows would make
-# it a `>=`. It cannot be one on Windows: mcpp hands the provisioning request to
-# xlings as JSON on a cmd.exe command line, where the `>` is read as a
-# redirection (see the note above `rules-spirv`'s Windows entry).
+# A FLOOR, WHICH IS WHAT THIS PACKAGE'S RULE FOR THE SHAPE ASKS FOR: Slang's
+# version is coupled to no driver, so newer is simply newer.
 #
-# Writing `>=` on the two platforms that tolerate it and an exact version on the
-# third would resolve DIFFERENT payloads for one project depending on which
-# machine built it, which is how a defect comes to exist on one operating system
-# only. A uniform exact version is the weaker constraint honestly applied
-# everywhere; a project that wants a newer Slang names it and wins.
+# It is written once rather than per platform because the engine escapes the
+# constraint for cmd.exe (see the note above), so the `>` survives on all three.
+# An earlier revision of this file pinned it exactly on every platform to avoid
+# that defect, and rejected the obvious alternative of `>=` on the two platforms
+# that tolerated it: a floor holding on two of three would resolve DIFFERENT
+# payloads for one project depending on the machine that built it, which is how
+# a defect comes to exist on one operating system only.
 [target.'cfg(accelerator = "vulkan")'.feature-xlings.rules-slang]
-"xim:slang" = "2026.14.1"
+"xim:slang" = ">=2026.14.1"
 
 # 8.5.0 is a real floor rather than a preference: the mixed-mode object -- the
 # one carrying both the device binary and a host-callable launcher, which is
