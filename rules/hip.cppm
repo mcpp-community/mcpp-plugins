@@ -69,6 +69,17 @@ struct options {
     // the form `mcpp::dep_dir` answers with -- a device compiler is a separate
     // driver and inherits nothing from the C++ side's include configuration.
     std::vector<std::string> includes;
+    // FLAGS FOR THE ISLAND'S COMPILER, PASSED THROUGH UNEXAMINED.
+    //
+    // A device compiler is a separate driver with its own command line, and
+    // `mcpp::cflag`/`mcpp::cxxflag` reach mcpp's compiler rather than this one.
+    // The case this exists for is `mcpp.tools.island`, whose
+    // `force_include_flags` makes the island read its generated boundary header
+    // before its first line -- so the island names no generated file and the
+    // project has no header of its own. Project-wide flags cannot do that job:
+    // forcing a header into every C++ translation unit puts declarations ahead
+    // of `export module`, which no module interface unit accepts.
+    std::vector<std::string> flags;
     std::string out_dir = std::string(mcpp::out_dir());
 };
 
@@ -420,6 +431,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         for (auto const& inc : opt.includes)
             e.command.push_back("-I" + (std::filesystem::path(inc).is_absolute()
                                         ? inc : root + "/" + inc));
+        for (auto const& f : opt.flags) e.command.push_back(f);
         e.command.insert(e.command.end(), { "-c", root + "/" + src, "-o", obj });
         e.inputs  = { root + "/" + src };
         e.outputs = { obj };
