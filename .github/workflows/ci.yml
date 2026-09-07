@@ -18,12 +18,18 @@ env:
   # saved and restored `~/.mcpp` -- a directory mcpp never touched. Every run
   # was therefore the cold case, which is what the 90-minute budget below was
   # sized for. mcpp's own ci-linux.yml pins it for this reason and says so.
-  MCPP_HOME: /home/runner/.mcpp
+  #
+  # Set per JOB rather than here: the path differs by platform, and a
+  # workflow-level `/home/runner/.mcpp` would silently be wrong on the other
+  # two runners -- wrong in the direction that still appears to work, which is
+  # the kind this repository has already paid for once.
 
 jobs:
   consumers:
     name: consumers (linux x86_64)
     runs-on: ubuntu-24.04
+    env:
+      MCPP_HOME: /home/runner/.mcpp
     # 90 rather than 60: the SYCL fixture pulls three payloads this job did not
     # need before -- dpcpp (578 MB installed), gcc (265 MB) and cuda-nvcc
     # (319 MB) -- and a cold cache downloads all of them before the first
@@ -324,3 +330,94 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ]
+
+  # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
+  #
+  # `rules-spirv` is the only member whose payload this ecosystem publishes for
+  # all three, so it is the only one that can be checked on all three. What this
+  # job proves is the claim the per-platform declaration makes: a project writes
+  # the rule edge and nothing else, and the compiler that arrives is whichever
+  # one that platform has -- glslang on Linux, glslc here.
+  #
+  # ONLY THE SPIR-V FIXTURE. The CUDA, HIP and SYCL payloads are Linux-only
+  # upstream, so a matrix that ran every fixture everywhere would be red for a
+  # reason that is not a defect.
+  spirv-cross-platform:
+    name: rules-spirv (${{ matrix.name }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos arm64
+            runs-on: macos-14
+            asset: macosx-arm64.tar.gz
+            dir-suffix: macosx-arm64
+          - name: windows x86_64
+            runs-on: windows-2022
+            asset: windows-x86_64.zip
+            dir-suffix: windows-x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin MCPP_HOME under this runner's home
+        run: echo "MCPP_HOME=$HOME/.mcpp" >> "$GITHUB_ENV"
+
+      - name: Cache the mcpp sandbox
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp
+          key: mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/spirv-consumer/mcpp.toml') }}
+          restore-keys: |
+            mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+
+      - name: Fetch the released mcpp
+        run: |
+          set -e
+          curl -L -fsS --retry 3 --retry-all-errors -o mcpp.pkg \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-${{ matrix.asset }}"
+          case "${{ matrix.asset }}" in
+            *.zip) unzip -q mcpp.pkg ;;
+            *)     tar -xzf mcpp.pkg ;;
+          esac
+          dir="mcpp-${MCPP_VERSION}-${{ matrix.dir-suffix }}"
+          MCPP="$PWD/$dir/bin/mcpp"
+          "$MCPP" --version
+          # The bundled xlings, named explicitly because MCPP_HOME is pinned
+          # away from the tarball. See the Linux job for the measurement.
+          export MCPP_VENDORED_XLINGS="$PWD/$dir/registry/bin/xlings"
+          "$MCPP" self config --mirror GLOBAL
+          echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      - name: rules-spirv through a consumer
+        working-directory: tests/spirv-consumer
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+
+      # The same provenance criterion the Linux job applies: the payload has to
+      # come from the GRAPH, not from the fixture. Without it, a fixture that
+      # quietly regained an `[xlings.workspace]` would keep this green while the
+      # claim stopped being true.
+      - name: the rule declared its own compiler
+        working-directory: tests/spirv-consumer
+        run: |
+          set -e
+          if grep -qE '^\[(target\..*\.)?xlings\.workspace\]' mcpp.toml; then
+            echo "FAIL: the fixture declares payloads itself"; exit 1
+          fi
+          HOME_DIR=$("$MCPP" self env | awk -F'= *' '/^MCPP_HOME/{print $2; exit}')
+          rm -rf "$HOME_DIR/provisioned" target
+          "$MCPP" build > prov.log 2>&1
+          grep -q 'entries declared by dependencies' prov.log || {
+            echo "FAIL: no payload came from the graph"
+            grep -i provisioning prov.log || echo "(no provisioning line at all)"
+            exit 1; }
+          echo "ok: $(grep -m1 'entries declared by dependencies' prov.log)"
