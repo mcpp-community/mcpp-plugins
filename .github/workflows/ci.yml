@@ -90,6 +90,49 @@ jobs:
           grep -q '^magic=07230203' run-glslc.log
           rm -rf shaderc.tar.gz shaderc-2026.3
 
+      # TWO SHADERS THAT DIFFER ONLY BY DIRECTORY.
+      #
+      # The output name is the stem and the stage, so `a/x.vert` and `b/x.vert`
+      # both produce `x_vert.h` declaring `x_vert_spv`. Before this rule checked
+      # for it, ninja caught the duplicate output -- so it was never silent, but
+      # the message named the generated file and neither shader, arrived as a
+      # graph-loading failure rather than as this rule's refusal, and stated no
+      # way out. A project with one shader per stage never meets it, which is
+      # how it survived; a graphics project organising shaders by purpose is the
+      # first to have two.
+      - name: two shaders with one stem are refused, naming both
+        working-directory: tests/spirv-consumer
+        run: |
+          set -e
+          mkdir -p shaders/dup
+          cp shaders/scale.comp shaders/dup/scale.comp
+          # The fixture globs `shaders/*.comp`; widen it for this step only.
+          cp mcpp.toml mcpp.toml.bak
+          sed -i 's#shaders/\*.comp#shaders/**/*.comp#' mcpp.toml
+          rm -rf target
+          if "$MCPP" build > dup.log 2>&1; then
+            echo "FAIL: two shaders mapping to one output were accepted"
+            exit 1
+          fi
+          for needle in 'two shaders map to one output' 'shaders/scale.comp' \
+                        'shaders/dup/scale.comp' 'scale_comp_spv' 'rename one of them'; do
+            grep -q -- "$needle" dup.log || {
+              echo "FAIL: the refusal does not mention '$needle'"
+              tail -20 dup.log
+              exit 1
+            }
+          done
+          echo "ok: refused, naming both shaders, the symbol and the way out"
+          # …and the fixture still builds once the duplicate is gone, so this
+          # step cannot leave a project that refuses everything.
+          mv mcpp.toml.bak mcpp.toml
+          rm -rf shaders/dup target
+          "$MCPP" build > restored.log 2>&1 || {
+            echo "FAIL: the fixture no longer builds after the duplicate was removed"
+            tail -20 restored.log; exit 1; }
+          rm -f dup.log restored.log
+          echo "ok: and it builds again with one shader per stem"
+
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
       # that matters -- editing the data file must reach the binary, which is

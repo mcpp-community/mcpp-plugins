@@ -441,6 +441,49 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     std::error_code ec;
     std::filesystem::create_directories(gen, ec);
 
+    // TWO SHADERS THAT DIFFER ONLY BY DIRECTORY PRODUCE ONE HEADER AND ONE
+    // SYMBOL, AND THAT HAS TO BE REFUSED HERE.
+    //
+    // The output name is the stem and the stage, as this rule documents, so
+    // `shaders/ui/text.vert` and `shaders/world/text.vert` both resolve to
+    // `text_vert.h` declaring `text_vert_spv`. Disambiguating by directory is
+    // not the fix: the SYMBOL would still collide the moment both headers
+    // reached one translation unit, and the naming rule is what consumers write
+    // `#include` lines against.
+    //
+    // Measured before this check existed: ninja caught it -- `multiple rules
+    // generate .../text_vert.h` -- so it was never silent. What it did not do
+    // is name the two SHADERS, say which rule produced them, or state the way
+    // out; and it arrives as a graph-loading failure rather than as this rule's
+    // refusal. A project with one shader per stage never meets it, which is why
+    // it survived: a graphics project organising shaders by purpose is the
+    // first to have two.
+    {
+        std::map<std::string, std::string> seen;   // output stem -> first source
+        for (auto const& src : shaders) {
+            const std::filesystem::path p(src);
+            const auto stage = stage_of(p.extension().string());
+            if (stage.empty()) continue;           // reported below, per source
+            const auto key = p.stem().string() + "_" + std::string(stage);
+            auto [it, fresh] = seen.try_emplace(key, src);
+            if (!fresh) {
+                std::println(std::cerr,
+                    "mcpp.rules.spirv: two shaders map to one output.\n"
+                    "    {}\n"
+                    "    {}\n"
+                    "  both produce `{}.h` declaring `{}`, because the name is the "
+                    "shader's stem\n"
+                    "  and its stage -- the directory is not part of it, and could not "
+                    "be: two\n"
+                    "  headers reaching one translation unit would still collide on the "
+                    "symbol.\n"
+                    "  fix: rename one of them, or compile only one.",
+                    it->second, src, key, symbol_of(p.stem().string(), stage));
+                return false;
+            }
+        }
+    }
+
     for (auto const& src : shaders) {
         const std::filesystem::path p(src);
         const auto stage = stage_of(p.extension().string());
