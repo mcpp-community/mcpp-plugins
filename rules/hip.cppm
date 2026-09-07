@@ -328,7 +328,17 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // everywhere else. `mcpp.rules.cuda` takes the same path for the same
     // reason.
     const std::string tcdir = mcpp::toolchain_dir();
+    // The suffix is the host's. This lane reaches only Linux today -- the
+    // NVIDIA-platform header package is published for it alone -- so the
+    // Windows spelling is not exercised by anything. It is written anyway,
+    // because the alternative is a path that is wrong on a host this rule
+    // will one day be asked about, and a wrong path reports itself as a
+    // missing toolchain.
+#if defined(_WIN32)
+    const std::string cc = tcdir + "/bin/clang++.exe";
+#else
     const std::string cc = tcdir + "/bin/clang++";
+#endif
     if (tcdir.empty() || !std::filesystem::exists(cc)) {
         std::cerr << std::format("mcpp.rules.hip: the NVIDIA platform compiles through clang, and this "
             "project's\n  toolchain has no clang++ at {}.\n"

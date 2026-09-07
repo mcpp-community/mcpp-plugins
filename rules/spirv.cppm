@@ -273,13 +273,38 @@ inline compiler find_compiler(const options& opt) {
 // magic, the second is the release. The release is what a floor compares, and
 // stating it as a fact is what makes a build log answer "which compiler
 // produced this SPIR-V" without anyone having to reproduce the build.
+// `popen` is POSIX and Windows spells it `_popen`; the null device differs
+// too. Both are named here so the call sites below read the same on every
+// host -- the alternative is a `#if` around each one, and the one that gets
+// forgotten is the one nobody compiles.
+inline FILE* open_pipe(const std::string& cmd) {
+#if defined(_WIN32)
+    return ::_popen(cmd.c_str(), "r");
+#else
+    return ::popen(cmd.c_str(), "r");
+#endif
+}
+inline void close_pipe(FILE* p) {
+#if defined(_WIN32)
+    ::_pclose(p);
+#else
+    ::pclose(p);
+#endif
+}
+inline constexpr const char* kNullDevice =
+#if defined(_WIN32)
+    "NUL";
+#else
+    "/dev/null";
+#endif
+
 inline std::string run_and_capture(const std::string& cmd) {
-    FILE* p = ::popen(cmd.c_str(), "r");
+    FILE* p = open_pipe(cmd);
     if (!p) return {};
     std::string text;
     char buf[512];
     while (std::fgets(buf, sizeof buf, p)) text += buf;
-    ::pclose(p);
+    close_pipe(p);
     return text;
 }
 
@@ -301,7 +326,8 @@ inline bool has_optimizer(const std::string& exe) {
 }
 
 inline std::string compiler_version(const compiler& cc) {
-    const std::string text = run_and_capture("\"" + cc.path + "\" --version 2>/dev/null");
+    const std::string text = run_and_capture("\"" + cc.path + "\" --version 2>"
+                                             + std::string(kNullDevice));
     // glslc: `shaderc v2026.3 2fbab05...` on the first line. glslang:
     // `Glslang Version: 11:15.1.0`, whose first field is the SPIR-V generator
     // magic and whose second is the release.

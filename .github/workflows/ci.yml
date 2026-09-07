@@ -461,6 +461,22 @@ jobs:
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
 
+      # FIRST, BECAUSE IT IS THE CHEAPER QUESTION AND THE MORE INFORMATIVE
+      # ANSWER. Every other step here drives one rule end to end and needs
+      # that rule's payload; this one names no accelerator, downloads nothing,
+      # and asks only whether all six modules COMPILE for this host -- which
+      # is the half of a rule that a Linux-only CI never sees. Run after the
+      # end-to-end step, its failure arrived as somebody else's build error:
+      # `no member named 'popen' in the global namespace`, reported against a
+      # consumer that had nothing to do with it.
+      - name: every rule module compiles for this host
+        working-directory: tests/all-rules-compile
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^all-rules-compile ok' run.log
+
       - name: rules-spirv through a consumer
         working-directory: tests/spirv-consumer
         run: |
@@ -473,20 +489,6 @@ jobs:
       # come from the GRAPH, not from the fixture. Without it, a fixture that
       # quietly regained an `[xlings.workspace]` would keep this green while the
       # claim stopped being true.
-      # THE STEP THAT MAKES THIS JOB WORTH ITS NAME. Above it, one rule is
-      # exercised because one rule's compiler is published for these hosts.
-      # Below it, EVERY rule is compiled for them -- including the ones whose
-      # payload reaches a device that macOS and Windows do not both have, and
-      # whose host-dependent code was therefore written without ever being
-      # compiled on the host it was written for.
-      - name: every rule module compiles for this host
-        working-directory: tests/all-rules-compile
-        run: |
-          set -e
-          "$MCPP" build
-          "$MCPP" run | tee run.log
-          grep -q '^all-rules-compile ok' run.log
-
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
         run: |
