@@ -257,8 +257,14 @@ jobs:
           # rehearsal passed because a DEV build is disqualified from
           # self-contained mode and does use ~/.mcpp, so the rehearsal and CI
           # were clearing different directories.
-          HOME_DIR=$("$MCPP" self env | awk -F'= *' '/^MCPP_HOME/{print $2; exit}')
-          [ -n "$HOME_DIR" ] || { echo "FAIL: could not read MCPP_HOME"; exit 1; }
+          # Through a FILE rather than a pipe: on macOS this same expression
+          # killed mcpp with `internal: unhandled exception: failed to write
+          # formatted output`, because `awk ... exit` closes the read end at
+          # the first match. Written the same way on every platform so the two
+          # jobs cannot drift.
+          "$MCPP" self env > mcpp-env.txt
+          HOME_DIR=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' mcpp-env.txt)
+          [ -n "$HOME_DIR" ] || { echo "FAIL: could not read MCPP_HOME"; cat mcpp-env.txt; exit 1; }
           echo "clearing provisioning stamps under $HOME_DIR"
           rm -rf "$HOME_DIR/provisioned"
           for d in tests/cuda-consumer tests/hip-consumer \
@@ -400,7 +406,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Pin MCPP_HOME under this runner's home
-        run: echo "MCPP_HOME=$HOME/.mcpp" >> "$GITHUB_ENV"
+        run: |
+          set -e
+          # The value has to be in the HOST's path syntax, not Git Bash's.
+          # `$HOME` there is `/c/Users/runneradmin`, and mcpp hands this
+          # variable to xlings, which is a native Windows program: it answered
+          # `The filename, directory name, or volume label syntax is
+          # incorrect.` and exited 1, from inside a provisioning step whose own
+          # message named a package rather than a path.
+          H="$HOME/.mcpp"
+          command -v cygpath >/dev/null && H=$(cygpath -m "$H")
+          echo "MCPP_HOME=$H" >> "$GITHUB_ENV"
 
       - name: Cache the mcpp sandbox
         uses: actions/cache@v4
@@ -478,7 +494,13 @@ jobs:
           if grep -qE '^\[(target\..*\.)?xlings\.workspace\]' mcpp.toml; then
             echo "FAIL: the fixture declares payloads itself"; exit 1
           fi
-          HOME_DIR=$("$MCPP" self env | awk -F'= *' '/^MCPP_HOME/{print $2; exit}')
+          # `mcpp self env > file`, not `mcpp self env | awk`. Measured on
+          # macos-15: through a pipe whose reader exits at the first match,
+          # mcpp died with `internal: unhandled exception: failed to write
+          # formatted output` and exit 70. A file has no reader to disappear.
+          "$MCPP" self env > env.txt
+          HOME_DIR=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' env.txt)
+          test -n "$HOME_DIR" || { echo "FAIL: mcpp self env named no MCPP_HOME"; cat env.txt; exit 1; }
           rm -rf "$HOME_DIR/provisioned" target
           "$MCPP" build > prov.log 2>&1
           grep -q 'entries declared by dependencies' prov.log || {
