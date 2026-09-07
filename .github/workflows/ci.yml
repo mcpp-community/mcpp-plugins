@@ -288,7 +288,11 @@ jobs:
           # sees the declarations, so a definition whose signature drifted from
           # the generated header fails where it was written rather than at the
           # link.
-          grep -q 'include' build.mcpp \
+          # THE MECHANISM, NOT THE WORD. `grep 'include'` matched this build
+          # program's own comments and its `mcpp::include_dir` line, so it
+          # would have passed with the forced include removed -- a criterion
+          # that cannot fail is not one.
+          grep -v '^[[:space:]]*//' build.mcpp | grep -q 'force_include_flags' \
             || { echo "FAIL: the build program no longer forces the header in"; exit 1; }
           # THE MARKER SELECTS, AND THE UNMARKED MUST NOT TRAVEL. The island has
           # a static helper and an unmarked external function; a scan that
@@ -392,7 +396,15 @@ jobs:
         working-directory: tests/spirv-zero-config
         run: |
           test ! -f build.mcpp || { echo "FAIL: the fixture has its own build program"; exit 1; }
-          grep -q 'host-module' mcpp.toml && { echo "FAIL: the fixture declares host-module"; exit 1; }
+          # STRIPPED OF COMMENTS, for the same reason the island step is: this
+          # fixture EXPLAINS in its own header that `host-module = true` is not
+          # written and not needed, so a plain grep reports the file for saying
+          # what it does. The property is about the manifest's keys.
+          if grep -v '^[[:space:]]*#' mcpp.toml | grep -q 'host-module'; then
+            echo "FAIL: the fixture declares host-module"
+            grep -v '^[[:space:]]*#' mcpp.toml | grep -n 'host-module'
+            exit 1
+          fi
           "$MCPP" build | tee build.log
           grep -q 'Rules mcpp.rules.spirv' build.log \
             || { echo "FAIL: the build did not report which rule it ran"; exit 1; }
