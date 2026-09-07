@@ -365,8 +365,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macos-15, matching mcpp's own macOS CI, and the reason is a
+          # measured limitation of the older release rather than a preference.
+          #
+          # On macos-14 a build program fails to LINK, with
+          #
+          #   ld64.lld: error: undefined symbol:
+          #       std::__1::__is_posix_terminal(__sFILE*)
+          #
+          # referenced from `std::__1::__print::__is_terminal`. That symbol
+          # lives in the libc++ DYLIB and was added in a version macOS 14 does
+          # not ship, and the build program's link resolves `-lc++` to the
+          # system copy rather than to the LLVM payload's. It is reached
+          # through `import std` itself, so no rule package can avoid it -- the
+          # rules stopped using `std::println` for the same reason and it was
+          # not enough.
+          #
+          # Recorded rather than worked around here: the engine-side half is
+          # `host_link_tokens` returning before it adds the payload's runtime
+          # directories on macOS. Once a release carries that, this moves back
+          # to macos-14, which is the floor mcpp's README states.
           - name: macos arm64
-            runs-on: macos-14
+            runs-on: macos-15
             asset: macosx-arm64.tar.gz
             dir-suffix: macosx-arm64
           - name: windows x86_64
@@ -409,9 +429,17 @@ jobs:
           # `registry/bin/xlings.exe`, and a variable pointing at a file that
           # does not exist produces `error: xlings binary not found` naming
           # three remedies, none of which is the one that applies.
+          # Two host differences, and the second one is the interesting one.
+          # The suffix: the Windows distribution ships `xlings.exe`. The PATH
+          # SHAPE: this job runs under Git Bash, whose `$PWD` is a POSIX path
+          # (`/d/a/...`), while `mcpp` is a native Windows program and reads
+          # this variable as a Windows path. Both failures report the same
+          # `error: xlings binary not found` and offer the same three remedies,
+          # none of which is "the path you gave is in the other syntax".
           XL="$PWD/$dir/registry/bin/xlings"
           [ -f "$XL" ] || XL="$XL.exe"
           test -f "$XL" || { echo "no vendored xlings at $XL"; exit 1; }
+          command -v cygpath >/dev/null && XL=$(cygpath -m "$XL")
           export MCPP_VENDORED_XLINGS="$XL"
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
