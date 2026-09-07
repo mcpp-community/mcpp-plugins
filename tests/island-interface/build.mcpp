@@ -2,29 +2,41 @@ import std;
 import mcpp;
 import mcpp.plugins;
 
-// THE ENTRY POINTS ARE DECLARED ONCE, HERE, AND BOTH ARTEFACTS COME FROM THEM.
+// THE ENTRY POINTS ARE READ FROM WHERE THEY ARE DEFINED.
 //
-// Without this the project writes the same declarations twice: in a header for
-// the island's compiler, and again in whatever the C++ side reaches them
-// through. C language linkage does not mangle, so two copies that disagree are
-// one symbol -- the link is clean and each side reads the arguments by its own
-// ABI. Generating both from one list removes the copy that can drift.
+// `island::scan` takes them out of the island's own source, so the signature
+// sits beside the definition and exists once. The alternative -- and what
+// `island::emit` takes directly -- is a list written here, which is exact but
+// puts the signatures somewhere other than the code they describe.
+//
+// Without either, a project writes each declaration twice: in a header for the
+// island's compiler and again wherever the C++ side reaches it. C language
+// linkage does not mangle, so two copies that disagree are one symbol: the link
+// is clean and each side reads the arguments by its own ABI.
 int main() {
-    const std::vector<std::string> entries{
-        "int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n)",
-        "int scale_device(float a, float* out, unsigned n)",
+    const std::vector<std::string> islands{
+        std::string(mcpp::manifest_dir()) + "/src/kernels/saxpy.c",
     };
+    for (auto const& f : islands) mcpp::rerun_if_changed(f.c_str());
 
     mcpp::plugins::island::options opt;
     opt.module_name = "island_interface.kernels";
     opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
     opt.produced_by = "the island-interface fixture";
 
-    const auto out = mcpp::plugins::island::emit(entries, opt);
+    const auto entries = mcpp::plugins::island::scan(islands, opt);
+    if (!entries) return 1;
+    if (entries->size() != 2) {
+        std::cerr << std::format("expected two marked entry points, found {}\n",
+                                 entries->size());
+        return 1;
+    }
+
+    const auto out = mcpp::plugins::island::emit(*entries, opt);
     if (!out) return 1;
 
-    // The header goes on the include path so the island can include it, and
-    // both generated files join the build.
+    // The header goes on the include path so the island can include it, and the
+    // module joins the build.
     mcpp::include_dir(out->include_dir.c_str());
     mcpp::generated(out->interface_file.c_str());
     return 0;

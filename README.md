@@ -268,22 +268,63 @@ because an address and a size are all there is to decide.
 `mcpp::plugins::island` generates what is mechanical about a **code** island --
 and only that.
 
+The entry points are marked where they are defined, and the signature exists
+once:
+
+```c
+// src/kernels/saxpy.cu
+#include "myapp.kernels.h"          // generated; defines the marker as nothing
+
+MCPP_EXPORT_C
+int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n) { ... }
+```
+
 ```cpp
 // build.mcpp
-const std::vector<std::string> entries{
-    "int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n)",
-};
 mcpp::plugins::island::options opt;
 opt.module_name = "myapp.kernels";
 opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
-const auto out  = mcpp::plugins::island::emit(entries, opt);
+
+const auto entries = mcpp::plugins::island::scan(islands, opt);
+const auto out     = mcpp::plugins::island::emit(*entries, opt);
 mcpp::include_dir(out->include_dir.c_str());
 mcpp::generated(out->interface_file.c_str());
 ```
 
-Two files come out of that one declaration: the `extern "C"` header the device
-translation unit includes, guards and `__cplusplus` dance included, and the
-module the C++ side imports.
+Two files come out of that one marked declaration: the `extern "C"` header the
+device translation unit includes, guards and `__cplusplus` dance included, and
+the module the C++ side imports.
+
+**Three layers, and each overrides the one above.** `scan` reads the marked
+declarations out of the island, which puts the signature beside the definition;
+`emit` takes a list directly, for entry points a scan cannot see; and a project
+that wants neither writes its own header and its own module wrapper. The default
+is the one that keeps the signature in one place.
+
+**The marker selects.** An island has internal functions, and a generator that
+exported whatever the file contained would make the boundary an accident of the
+file's contents. `MCPP_EXPORT_C` names the mechanism rather than the domain --
+what is marked is exported across a generated boundary with C linkage -- and
+deliberately does not end in `_API`, a suffix that conventionally expands to a
+visibility attribute where this expands to nothing. It is configurable through
+`options::marker`.
+
+**The scan is not a C parser.** From the marker it copies verbatim to the
+parenthesis closing the parameter list, matching nesting, so a signature that
+wraps across lines or carries a macro travels through unexamined.
+
+**The island includes the generated header, and that line is not new.** Today a
+project writes `#include "saxpy/saxpy.h"` *and* writes that header; here the
+include stays and the header is what became generated. It earns its place twice
+over: it defines the marker, and it declares the entry points, so a definition
+whose signature drifted from its declaration fails where it was written rather
+than at the link.
+
+A rule can remove it by passing `-include <generated header>` to the device
+compiler, which every compiler this package drives accepts. That is left as an
+option rather than made the default: a file whose marker comes from a flag is no
+longer self-contained, and opening it says nothing about where `MCPP_EXPORT_C`
+came from.
 
 **The declaration still exists once.** Without this, a project writes it twice --
 in a header, and again wherever the C++ side reaches it. C language linkage does

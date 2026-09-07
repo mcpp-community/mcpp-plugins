@@ -690,6 +690,28 @@ struct options {
     // False emits the header alone, for a project that wants the boilerplate
     // removed but keeps a hand-written seam that includes rather than imports.
     bool emit_module = true;
+    // The marker `scan()` looks for. It is defined as nothing by the generated
+    // header, so the island includes that header and then writes the marker in
+    // front of each entry point it exports.
+    //
+    // THE NAME SAYS THE MECHANISM, NOT THE DOMAIN. What is marked is exported
+    // across a generated boundary, with C linkage; both halves are in the name
+    // and neither narrows it. Two alternatives were considered:
+    //
+    //   - `MCPP_ISLAND_EXPORT` is precise inside docs/20's vocabulary and
+    //     narrow outside it. The generator does not know what compiler produced
+    //     the object, and works for any `extern "C"` boundary -- a C library
+    //     shim has one and is not an island.
+    //   - anything ending `_API` was rejected outright. That suffix
+    //     conventionally expands to a visibility attribute
+    //     (`__declspec(dllexport)`, `visibility("default")`), and this expands
+    //     to nothing. Borrowing it would promise something it does not do, and
+    //     would collide with a project that later wants the real thing.
+    //
+    // `MCPP_<verb>_<qualifier>` also leaves room: a future marker read by a
+    // different generator joins the family rather than inventing a second
+    // shape.
+    std::string marker = "MCPP_EXPORT_C";
 };
 
 struct emitted {
@@ -714,6 +736,97 @@ inline std::string entry_name(std::string_view decl) {
         else break;
     }
     return std::string(decl.substr(begin, end - begin));
+}
+
+// THE ENTRY POINTS, TAKEN FROM WHERE THEY ARE DEFINED.
+//
+// `emit` takes a list of declarations, which is exact and requires the project
+// to write each signature in its build program. This reads them out of the
+// island instead, so the signature lives beside the definition and exists once
+// -- which is the arrangement a reader expects and the one that cannot drift.
+//
+// IT IS NOT A C PARSER, AND DOES NOT NEED TO BE. From the marker it copies
+// verbatim up to the parenthesis that closes the parameter list, matching
+// nesting so a function pointer parameter does not end it early. What it copies
+// is what the header will contain, so anything the island's compiler accepts in
+// a declaration -- a macro, a qualifier, a multi-line signature -- travels
+// through unexamined.
+//
+// A marker with no `(` after it is refused rather than skipped: a marked entry
+// point that produced no declaration would leave the island defining a function
+// nothing declares, and the consumer's failure would be an unresolved name in a
+// different file.
+inline std::optional<std::vector<std::string>>
+scan(std::span<const std::string> sources, const options& opt) {
+    std::vector<std::string> entries;
+    for (auto const& src : sources) {
+        std::ifstream in(src);
+        if (!in) {
+            std::cerr << std::format("mcpp.plugins.island: cannot read {}\n", src);
+            return std::nullopt;
+        }
+        std::string text((std::istreambuf_iterator<char>(in)),
+                         std::istreambuf_iterator<char>());
+        for (std::size_t at = text.find(opt.marker); at != std::string::npos;
+             at = text.find(opt.marker, at + 1)) {
+            // The marker's own definition in the generated header is not an
+            // entry point. Skipped by requiring a `(` before the next `;` or
+            // `{`, which a `#define` line does not have.
+            std::size_t i = at + opt.marker.size();
+            int depth = 0;
+            bool sawOpen = false;
+            std::size_t end = std::string::npos;
+            for (; i < text.size(); ++i) {
+                const char c = text[i];
+                if (c == '(') { ++depth; sawOpen = true; }
+                else if (c == ')') {
+                    if (--depth == 0) { end = i; break; }
+                } else if (!sawOpen && (c == ';' || c == '{' || c == '\n')) {
+                    if (c == '\n') continue;   // a signature may wrap
+                    break;                      // `;` or `{` with no `(`
+                }
+            }
+            if (end == std::string::npos) {
+                if (!sawOpen) continue;         // a `#define` of the marker
+                std::cerr << std::format(
+                    "mcpp.plugins.island: {} carries `{}` whose parameter list does not "
+                    "close.\n  A marked entry point is one declaration, and the generator "
+                    "copies it verbatim.\n", src, opt.marker);
+                return std::nullopt;
+            }
+            auto decl = text.substr(at + opt.marker.size(),
+                                    end + 1 - (at + opt.marker.size()));
+            // Collapse the runs of whitespace a wrapped signature carries, so
+            // the header reads as one declaration per line.
+            // INDEXED RATHER THAN A RANGE-FOR, AND THAT IS NOT A STYLE CHOICE.
+            //
+            // `for (char c : decl)` over a `std::string` inside an exported
+            // inline function makes GCC 16 instantiate `std::string::iterator`
+            // in this BMI, and the consumer's build program then fails to
+            // compile with
+            //
+            //   error: inlining failed in call to 'always_inline'
+            //   __normal_iterator<char*, basic_string<char>>::operator*():
+            //   function body not available
+            //
+            // in `<bits/stl_iterator.h>`, naming neither this file nor this
+            // loop. Indexing touches no iterator type and compiles.
+            std::string flat;
+            bool space = false;
+            for (std::size_t k = 0; k < decl.size(); ++k) {
+                const char c = decl[k];
+                if (c == '\n' || c == '\t' || c == '\r' || c == ' ') {
+                    if (!flat.empty()) space = true;
+                } else {
+                    if (space) flat += ' ';
+                    space = false;
+                    flat += c;
+                }
+            }
+            if (!flat.empty()) entries.push_back(std::move(flat));
+        }
+    }
+    return entries;
 }
 
 inline std::optional<emitted> emit(std::span<const std::string> entries,
@@ -759,7 +872,12 @@ inline std::optional<emitted> emit(std::span<const std::string> entries,
                      "// is compiled by a compiler mcpp did not resolve -- so the interface is\n"
                      "// `extern \"C\"`, because the two sides share no C++ ABI.\n"
                      "#ifndef {1}\n#define {1}\n"
-                     "#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n", by, guard);
+                     "// Defined as nothing so the island can mark its entry points and\n"
+                     "// still compile: the marker is for the generator to find, not for\n"
+                     "// the compiler to act on.\n"
+                     "#ifndef {2}\n#define {2}\n#endif\n"
+                     "#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n",
+                     by, guard, opt.marker);
     for (auto const& e : entries) h += e + ";\n";
     h += "\n#ifdef __cplusplus\n}\n#endif\n#endif\n";
 
