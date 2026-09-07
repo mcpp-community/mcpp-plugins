@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.2.6"
+version     = "0.3.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -19,14 +19,76 @@ import_std = true
 [build]
 sources = ["src/plugins.cppm"]
 
+# EACH RULE STATES WHAT IT COMPILES AND HOW TO REACH IT (mcpp 2026.9.7.1+).
+#
+# `device_extensions` says which device sources this rule compiles;
+# `rule_module` says which module a consumer's build program imports to reach
+# it. Two things follow, and neither puts this package's name inside mcpp:
+#
+#   1. A consumer that activates the feature gets those extensions classified
+#      as device sources, so a NEW device language costs no engine change.
+#      Slang measured the alternative: adding `.slang` to the engine's built-in
+#      table cost an mcpp release and a version bump in this file's CI before
+#      the rule could route one file.
+#   2. `host-module = true` is implied, because a feature naming a rule module
+#      has already said that is the only way to use it. A consumer writes
+#      `features = ["rules-spirv"]` and nothing else.
+#
+# The feature is still requested BY NAME. An earlier revision activated it from
+# the extensions a project's sources happened to carry; that was withdrawn
+# because two packages may claim one extension -- a third-party CUDA rule is a
+# thing someone will write -- and because a derived feature set is information
+# a manifest no longer states.
+#
+# A consumer that outgrows the generated build program writes its own
+# `build.mcpp`, which is the same program with edits. Each layer overrides the
+# one above it; none is a different mechanism.
 [features]
-default     = []
-rules-ascendc = { sources = ["rules/ascendc.cppm"] }
-rules-cuda  = { sources = ["rules/cuda.cppm"] }
-rules-hip   = { sources = ["rules/hip.cppm"] }
-rules-spirv = { sources = ["rules/spirv.cppm"] }
-rules-sycl  = { sources = ["rules/sycl.cppm"] }
-tools-embed = { sources = ["tools/embed.cppm"] }
+default = []
+
+[features.rules-ascendc]
+sources           = ["rules/ascendc.cppm"]
+rule_module       = "mcpp.rules.ascendc"
+device_extensions = [".asc", ".cce"]
+
+[features.rules-cuda]
+sources           = ["rules/cuda.cppm"]
+rule_module       = "mcpp.rules.cuda"
+device_extensions = [".cu"]
+
+[features.rules-hip]
+sources           = ["rules/hip.cppm"]
+rule_module       = "mcpp.rules.hip"
+device_extensions = [".hip"]
+
+[features.rules-slang]
+sources           = ["rules/slang.cppm"]
+rule_module       = "mcpp.rules.slang"
+device_extensions = [".slang"]
+
+# `.glsl` and `.hlsl` carry no stage and are claimed on purpose: the rule
+# refuses them by name and says which extensions do carry one, which is a better
+# message than the engine's "no rule compiles it".
+[features.rules-spirv]
+sources           = ["rules/spirv.cppm"]
+rule_module       = "mcpp.rules.spirv"
+device_extensions = [".comp", ".vert", ".frag", ".geom", ".tesc", ".tese",
+                     ".mesh", ".task", ".rgen", ".rint", ".rahit", ".rchit",
+                     ".rmiss", ".rcall", ".glsl", ".hlsl"]
+
+[features.rules-sycl]
+sources           = ["rules/sycl.cppm"]
+rule_module       = "mcpp.rules.sycl"
+device_extensions = [".sycl"]
+
+# NOT device rules: these embed or declare things a project already has, so they
+# claim no extension and name no rule module. A consumer calls them from its own
+# `build.mcpp`.
+[features.tools-embed]
+sources = ["tools/embed.cppm"]
+
+[features.tools-island]
+sources = ["tools/island.cppm"]
 
 # ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
 #
@@ -139,14 +201,15 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 [target.'cfg(all(accelerator = "vulkan", linux))'.feature-xlings.rules-spirv]
 "xim:glslang" = ">=15.1.0"
 
-# AN EXACT VERSION HERE, WHERE LINUX HAS A FLOOR, AND THE REASON IS THE
-# ENGINE'S COMMAND LINE RATHER THAN THE PACKAGE.
+# A FLOOR AGAIN, NOW THAT THE ENGINE ESCAPES THE ARGUMENT FOR cmd.exe.
 #
-# mcpp hands its provisioning request to xlings as a JSON argument on a shell
-# command line. On Windows that line is parsed by cmd.exe, whose quoting rules
-# are not the ones the JSON is escaped for: the `\"` sequences leave cmd's
-# quote state OFF by the time it reaches a `>` in a version constraint, so the
-# `>` is read as a REDIRECTION. Measured on windows-2022 with mcpp 2026.9.6.6:
+# These two were an exact version for one release, and the reason was the
+# engine's command line rather than the package. mcpp hands its provisioning
+# request to xlings as a JSON argument on a shell command line; on Windows that
+# line is parsed by cmd.exe, whose quoting rules are not the ones the JSON is
+# escaped for. The `\"` sequences left cmd's quote state OFF by the time it
+# reached the `>` in a version constraint, so the `>` was read as a REDIRECTION.
+# Measured on windows-2022 with mcpp 2026.9.6.6:
 #
 #   Provisioning [xlings.workspace] entries declared by dependencies
 #       (xim:shaderc@>=2026.3)
@@ -157,16 +220,33 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 # packaging failure. No declaration reachable on Windows had carried a `>`
 # before, which is why the whole `>=` shape had never been exercised there.
 #
-# An exact version is a legitimate declaration and not a workaround in
-# disguise: mcpp reads it as a CHOICE, so a project that wants a different one
-# still wins and the override is reported. macOS takes the same value so the
-# two platforms that use this compiler agree. Both revert to `>=2026.3` once a
-# released engine escapes the argument for cmd.
+# `mcpp.platform.shell` now escapes for both parsers, and MCPP_VERSION below
+# pins the release that carries it, so the constraint these entries were always
+# meant to state is expressible again.
 [target.'cfg(all(accelerator = "vulkan", macos))'.feature-xlings.rules-spirv]
-"xim:shaderc" = "2026.3"
+"xim:shaderc" = ">=2026.3"
 
 [target.'cfg(all(accelerator = "vulkan", windows))'.feature-xlings.rules-spirv]
-"xim:shaderc" = "2026.3"
+"xim:shaderc" = ">=2026.3"
+
+# ONE TABLE FOR ALL THREE PLATFORMS, WHICH `rules-spirv` COULD NOT HAVE.
+#
+# `xim:slang` ships slangc for linux, macosx and windows and for both x86_64 and
+# aarch64, so this rule does not change compilers by platform the way the GLSL
+# rule does, and one table says everything.
+#
+# A FLOOR, WHICH IS WHAT THIS PACKAGE'S RULE FOR THE SHAPE ASKS FOR: Slang's
+# version is coupled to no driver, so newer is simply newer.
+#
+# It is written once rather than per platform because the engine escapes the
+# constraint for cmd.exe (see the note above), so the `>` survives on all three.
+# An earlier revision of this file pinned it exactly on every platform to avoid
+# that defect, and rejected the obvious alternative of `>=` on the two platforms
+# that tolerated it: a floor holding on two of three would resolve DIFFERENT
+# payloads for one project depending on the machine that built it, which is how
+# a defect comes to exist on one operating system only.
+[target.'cfg(accelerator = "vulkan")'.feature-xlings.rules-slang]
+"xim:slang" = ">=2026.14.1"
 
 # 8.5.0 is a real floor rather than a preference: the mixed-mode object -- the
 # one carrying both the device binary and a host-callable launcher, which is

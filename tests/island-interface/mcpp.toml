@@ -1,0 +1,52 @@
+# The consumer that tests `mcpp.tools.island`.
+#
+# WHY THE ISLAND HERE IS A `.c` AND NOT A `.cu`.
+#
+# The generator does not know what compiler produced the object. What it knows
+# is that the boundary is `extern "C"` and that one side is a module -- which is
+# exactly the arrangement a CUDA, HIP, SYCL or Ascend C island has, and is
+# reproducible without a vendor toolkit. A fixture that needed one could only
+# run where that toolkit is published, and the half of this that could break is
+# the generated files rather than the device compiler.
+#
+# What it asserts:
+#
+#   - the header the island includes is GENERATED, so the guard, the
+#     `extern "C"` block and the `__cplusplus` dance are not written by hand;
+#   - the module the C++ side imports is generated too, and re-exports the entry
+#     points by name rather than restating their signatures;
+#   - the consumer never includes the header.
+[package]
+name        = "island-interface"
+namespace   = "example"
+version     = "0.1.0"
+description = "An extern \"C\" island reached through a generated module"
+accelerators = ["vulkan"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["tools-island"], host-module = true }
+
+# ONE BOUNDARY, TWO IMPLEMENTATIONS, AND EXACTLY ONE OF THEM IN ANY LINK.
+#
+# This is the arrangement every seam in `examples/09-heterogeneous` has, and it
+# is what the generator has to serve without the project writing a condition:
+# `build.mcpp` hands `scan` both files unconditionally, because both exist on
+# disk in either build, and the manifest decides which one is compiled.
+[build]
+accel   = "vulkan1.2"
+sources = ["src/*.cppm", "src/*.cpp"]
+
+[target.'cfg(accelerator = "vulkan")'.build]
+sources = ["src/kernels/*.c"]
+
+[target.'cfg(not(accelerator = "vulkan"))'.build]
+sources = ["src/cpu/*.c"]
+
+[targets.island-interface]
+kind = "bin"
+main = "src/main.cpp"

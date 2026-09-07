@@ -9,7 +9,7 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  MCPP_VERSION: 2026.9.6.6
+  MCPP_VERSION: 2026.9.7.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -70,12 +70,90 @@ jobs:
       # The rule's output is a header holding the SPIR-V module; the program
       # checks the magic number in its first word, so no Vulkan runtime is
       # needed and what is tested is the rule and the engine path feeding it.
+      # ONE PACKAGE, ONE VERSION. `mcpp::plugins::version` was `0.1.1` while the
+      # package was `0.2.6`, and nothing noticed because nothing read it. Every
+      # rule now states it with `mcpp::fact`, and this compares the two
+      # spellings so a stale constant is a red build rather than a wrong entry
+      # in every consumer's log.
+      - name: the collection states its own version
+        run: |
+          declared=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' mcpp.toml | head -1)
+          insource=$(sed -n 's/.*version *= *"\(.*\)";.*/\1/p' src/plugins.cppm | head -1)
+          echo "mcpp.toml=$declared  src/plugins.cppm=$insource"
+          if [ "$declared" != "$insource" ]; then
+            echo "FAIL: mcpp.toml says '$declared' and src/plugins.cppm says '$insource'"
+            exit 1
+          fi
+          echo "ok: one version, two files agreeing"
+
       - name: rules-spirv through a consumer
         working-directory: tests/spirv-consumer
         run: |
           "$MCPP" build
           "$MCPP" run | tee run.log
           grep -q '^magic=07230203' run.log
+
+      # THE MODULE SURFACE, AND THE COLLISION IT DISSOLVES.
+      #
+      # This fixture has `shaders/a/scale.comp` and `shaders/b/scale.comp` --
+      # one stem, two directories -- which the step below this one asserts is
+      # REFUSED when the two would produce one output. They no longer do: the
+      # directory is part of the namespace, the generated file's path and the
+      # array's name, so both are built and reached as `shaders::a::scale_comp`
+      # and `shaders::b::scale_comp`.
+      #
+      # The program asserts the two arrays are DISTINCT OBJECTS, not only that
+      # both carry the SPIR-V magic number. Without that assertion this fixture
+      # passed while both accessors returned one array: the two generated data
+      # headers were byte-identical, and GCC's `#pragma once` treats two files
+      # with the same size and content as the same file, so the second include
+      # silently did nothing.
+      - name: rules-spirv through the module surface
+        working-directory: tests/spirv-module-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^a/scale.comp: magic=07230203' run.log
+          grep -q '^b/scale.comp: magic=07230203' run.log
+          grep -q '^default/scale.comp: magic=07230203' run.log
+          grep -q '^all ok' run.log
+          # A DIRECTORY NAMED AFTER A C++ KEYWORD. `a` and `b` are ordinary
+          # identifiers and cannot tell a name filter that knows the keywords
+          # from one that does not; without the guard this is
+          # `namespace default {` and the generated file does not parse.
+          grep -q '^namespace default_ {' \
+            target/.build-mcpp/out/spirv/shader_app.shaders.cppm \
+            || { echo "FAIL: the keyword directory did not get its trailing underscore"
+                 grep -n namespace target/.build-mcpp/out/spirv/shader_app.shaders.cppm
+                 exit 1; }
+          # The point of the surface: a consumer names no generated file.
+          if grep -rn 'scale_comp\.h\|\.inc"' src/; then
+            echo "FAIL: a consumer source names a generated file"
+            exit 1
+          fi
+          echo "ok: the consumer names only the module"
+          # And what it imports really is a generated module interface.
+          #
+          # `shader_app`, while this directory is `spirv-module-consumer`. The
+          # module root is derived from `[package] name`, and the two are
+          # deliberately different here: a derivation that fell back to the
+          # manifest directory's leaf -- which is what this rule did before mcpp
+          # 2026.9.7.1 gave build programs `mcpp::package_name()` -- would write
+          # `spirv_module_consumer.shaders.cppm` and this test would find no file.
+          iface=target/.build-mcpp/out/spirv/shader_app.shaders.cppm
+          test -f "$iface" || {
+            echo "FAIL: no module interface at $iface"
+            find target/.build-mcpp/out/spirv -name '*.cppm' -print
+            exit 1; }
+          grep -q '^export module shader_app.shaders;' "$iface"
+          # The interface must name no standard-library type: one that does
+          # carries that header's templates in every consumer's BMI, measured at
+          # 727 times the size of the std-free form.
+          if grep -n 'std::\|#include <' "$iface"; then
+            echo "FAIL: the generated module interface names a standard-library type"
+            exit 1
+          fi
+          echo "ok: the generated interface is std-free"
 
       # THE SECOND COMPILER, THROUGH THE SAME FIXTURE. glslang and glslc share
       # almost no flags -- glslc's `-mfmt=c` is a bare initialiser list where
@@ -98,15 +176,23 @@ jobs:
 
       # TWO SHADERS THAT DIFFER ONLY BY DIRECTORY.
       #
-      # The output name is the stem and the stage, so `a/x.vert` and `b/x.vert`
-      # both produce `x_vert.h` declaring `x_vert_spv`. Before this rule checked
-      # for it, ninja caught the duplicate output -- so it was never silent, but
-      # the message named the generated file and neither shader, arrived as a
-      # graph-loading failure rather than as this rule's refusal, and stated no
-      # way out. A project with one shader per stage never meets it, which is
-      # how it survived; a graphics project organising shaders by purpose is the
-      # first to have two.
-      - name: two shaders with one stem are refused, naming both
+      # They used to produce one output -- the name was the stem and the stage,
+      # so `a/x.vert` and `b/x.vert` both gave `x_vert.h` declaring
+      # `x_vert_spv` -- and the rule refused, because ninja's duplicate-output
+      # error named the generated file and neither shader.
+      #
+      # THE COLLISION IS GONE, and this step asserts what replaced it. The
+      # shader's directory is part of the generated file's path and of the
+      # array's name, so the two are two things. That change was not made for
+      # ergonomics: two byte-identical generated headers collapse under GCC's
+      # `#pragma once`, which treats two files of the same size and content as
+      # the same file, so the second include silently did nothing and both
+      # accessors returned one array.
+      #
+      # The rule's refusal stays, and its condition is now two shaders with one
+      # name in ONE directory. A single glob cannot construct that; an explicit
+      # `options::base_dir` can.
+      - name: two shaders with one stem are two payloads, not one
         working-directory: tests/spirv-consumer
         run: |
           set -e
@@ -116,21 +202,23 @@ jobs:
           cp mcpp.toml mcpp.toml.bak
           sed -i 's#shaders/\*.comp#shaders/**/*.comp#' mcpp.toml
           rm -rf target
-          if "$MCPP" build > dup.log 2>&1; then
-            echo "FAIL: two shaders mapping to one output were accepted"
-            exit 1
-          fi
-          for needle in 'two shaders map to one output' 'shaders/scale.comp' \
-                        'shaders/dup/scale.comp' 'scale_comp_spv' 'rename one of them'; do
-            grep -q -- "$needle" dup.log || {
-              echo "FAIL: the refusal does not mention '$needle'"
-              tail -20 dup.log
-              exit 1
-            }
-          done
-          echo "ok: refused, naming both shaders, the symbol and the way out"
-          # …and the fixture still builds once the duplicate is gone, so this
-          # step cannot leave a project that refuses everything.
+          "$MCPP" build > dup.log 2>&1 || {
+            echo "FAIL: two shaders differing only by directory were refused"
+            tail -20 dup.log; mv mcpp.toml.bak mcpp.toml; rm -rf shaders/dup; exit 1; }
+          # TWO declarations, and the directory is in the second one's name.
+          # A build that collapsed them would also produce a working binary, so
+          # the criterion is the generated names rather than the run.
+          d=target/.build-mcpp/out/spirv
+          find "$d" -name '*.h' | sort | sed 's/^/  /'
+          grep -rq 'scale_comp_spv' "$d" || {
+            echo "FAIL: the top-level shader lost its declaration"; exit 1; }
+          grep -rq 'dup_scale_comp_spv' "$d" || {
+            echo "FAIL: the shader in dup/ did not take its directory into its name"
+            grep -rho '[a-z_]*scale_comp_spv' "$d" | sort -u
+            exit 1; }
+          echo "ok: two directories sharing a stem are two payloads"
+          # …and the fixture still builds with one shader per stem, so this step
+          # cannot leave a project that refuses everything.
           mv mcpp.toml.bak mcpp.toml
           rm -rf shaders/dup target
           "$MCPP" build > restored.log 2>&1 || {
@@ -138,6 +226,278 @@ jobs:
             tail -20 restored.log; exit 1; }
           rm -f dup.log restored.log
           echo "ok: and it builds again with one shader per stem"
+
+      # THE OTHER GENERATED INTERFACE, AND THE ONE THAT IS NOT A PAYLOAD.
+      #
+      # `mcpp.tools.island` generates the boundary a device island is reached
+      # across: the `extern "C"` header its compiler includes, and the module the
+      # C++ side imports. The entry points are declared once, so the copy that
+      # can drift is gone -- and at a C-linkage boundary that copy is the worst
+      # one available, because nothing mangles and two disagreeing declarations
+      # link cleanly.
+      #
+      # The island here is a `.c` rather than a `.cu`: the generator does not
+      # know what compiler produced the object, and a fixture needing a vendor
+      # toolkit could only run where that toolkit is published.
+      - name: island interfaces are generated, not written
+        working-directory: tests/island-interface
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' run.log
+          grep -q '^all ok' run.log
+          # Neither artefact is written by hand.
+          test ! -f include/island_interface.kernels.h
+          d=target/.build-mcpp/out/island
+          grep -q 'extern "C" {' "$d/island_interface.kernels.h"
+          grep -q '^export using ::saxpy_device;' "$d/island_interface.kernels.cppm"
+          grep -q '^export using ::scale_device;'  "$d/island_interface.kernels.cppm"
+          # The module re-exports NAMES: a second copy of a signature is the
+          # thing this generator exists to remove, so its appearance here is a
+          # regression even though it would compile.
+          if grep -q 'int saxpy_device(' "$d/island_interface.kernels.cppm"; then
+            echo "FAIL: the module restated a signature instead of re-exporting a name"
+            exit 1
+          fi
+          # NEITHER SIDE INCLUDES ANYTHING. The C++ side imports, and the
+          # island reads the generated header through the compiler's
+          # forced-include flag -- so a project using this generator has no
+          # header in its source tree and no line naming one.
+          if grep -rn '#include' src/main.cpp src/app.cppm src/kernels/saxpy.c src/cpu/saxpy.c; then
+            echo "FAIL: a source names an include; the generator exists to remove it"
+            exit 1
+          fi
+          # THE SEAM IS A MODULE OF THIS PROJECT IMPORTING THE GENERATED ONE.
+          # `main.cpp` is not a module unit, so its import said nothing about
+          # ordering two module interfaces where one is written during the
+          # build. `src/app.cppm` is, and it is the shape every example under
+          # examples/09-heterogeneous has.
+          grep -q '^import island_interface.kernels;' src/app.cppm \
+            || { echo "FAIL: the seam no longer imports the generated module"; exit 1; }
+          # CODE, NOT TEXT. `src/main.cpp` explains in a comment that it names
+          # no boundary symbol, and a plain grep matches that sentence -- the
+          # criterion then reports the file for saying what it does. Comment
+          # lines are stripped first, which is the difference between asking
+          # "does this file mention the name" and "does this file use it".
+          if sed 's://.*::' src/main.cpp | grep -q 'saxpy_device\|scale_device'; then
+            echo "FAIL: the consumer names a boundary symbol; the seam exists to hide it"
+            sed 's://.*::' src/main.cpp | grep -n 'saxpy_device\|scale_device'
+            exit 1
+          fi
+          # AND THE CHECK THAT INCLUDE USED TO DO IS STILL THERE. The compiler
+          # sees the declarations, so a definition whose signature drifted from
+          # the generated header fails where it was written rather than at the
+          # link.
+          # THE MECHANISM, NOT THE WORD. `grep 'include'` matched this build
+          # program's own comments and its `mcpp::include_dir` line, so it
+          # would have passed with the forced include removed -- a criterion
+          # that cannot fail is not one.
+          grep -v '^[[:space:]]*//' build.mcpp | grep -q 'force_include_flags' \
+            || { echo "FAIL: the build program no longer forces the header in"; exit 1; }
+          # THE MARKER SELECTS, AND THE UNMARKED MUST NOT TRAVEL. The island has
+          # a static helper and an unmarked external function; a scan that
+          # exported whatever the file contained would still pass every check
+          # above, because both generated files would merely be larger.
+          for name in internal_device unexported_helper; do
+            if grep -q "$name" "$d/island_interface.kernels.h" \
+            || grep -q "$name" "$d/island_interface.kernels.cppm"; then
+              echo "FAIL: $name is not marked and reached the generated boundary"
+              exit 1
+            fi
+          done
+          # The marker is defined by the header, so the island needs no other
+          # arrangement to compile.
+          grep -q '^#define MCPP_EXPORT_C$' "$d/island_interface.kernels.h"
+          # A signature that wrapped across lines survived: the scan matches
+          # parentheses rather than reading lines.
+          grep -q 'int scale_device(float a, float\* out, unsigned n);' \
+            "$d/island_interface.kernels.h"
+          echo "ok: one declaration, two generated artefacts, and only what was marked"
+
+      # THE SEAM'S OTHER HALF, AND THE DISAGREEMENT THAT NOTHING ELSE CATCHES.
+      #
+      # A seam has two implementations of one `extern "C"` boundary -- a device
+      # island and a host fallback -- and exactly one of them is in any link.
+      # `build.mcpp` hands `scan` both files unconditionally, because both exist
+      # on disk in either build and the manifest decides which is compiled. A
+      # build program that asked `mcpp::accel()` instead would carry a second
+      # copy of a decision the manifest already states.
+      #
+      # The CPU leg is not a variant of the step above. It is the build in which
+      # the device half is ABSENT, so a generator that read only the file it was
+      # given first would produce an empty boundary and the C++ side would fail
+      # on an unresolved name.
+      - name: the same boundary, generated from the half the build selected
+        working-directory: tests/island-interface
+        run: |
+          rm -rf target
+          "$MCPP" build --no-accel > cpu.log 2>&1 || {
+            echo "FAIL: the CPU leg does not build"; tail -25 cpu.log; exit 1; }
+          "$MCPP" run --no-accel | tee cpurun.log
+          grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' cpurun.log
+          grep -q '^all ok' cpurun.log
+          # ONE set of declarations, not two. Both files mark the same two entry
+          # points; a merge that appended would declare each twice, which the
+          # module rejects as a redefinition and the header silently accepts.
+          d=target/.build-mcpp/out/island
+          n=$(grep -c '^export using ::' "$d/island_interface.kernels.cppm")
+          [ "$n" = 2 ] || {
+            echo "FAIL: the module re-exports $n names; the two halves declare 2"
+            cat "$d/island_interface.kernels.cppm"; exit 1; }
+          echo "ok: the CPU leg reaches the same generated boundary"
+
+      # AND THE REVERSE LEG, WHICH IS THE POINT OF SCANNING BOTH.
+      #
+      # C language linkage does not mangle and the two halves are never in one
+      # link, so two declarations of one name that disagree produce a clean
+      # build and an artifact that reads its arguments by whichever signature it
+      # happened to be compiled with. `scan` is the only place both texts exist
+      # at once, so it is the only place that can refuse.
+      - name: two halves that disagree are refused where both texts exist
+        working-directory: tests/island-interface
+        run: |
+          cp src/cpu/saxpy.c /tmp/cpu_saxpy.bak
+          sed -i 's/^int scale_device(float a, float\* out, unsigned n) {/int scale_device(float a, float* out, double n) {/' \
+            src/cpu/saxpy.c
+          grep -q 'double n' src/cpu/saxpy.c || {
+            echo "FAIL: the fixture was not perturbed; this step would assert nothing"
+            cp /tmp/cpu_saxpy.bak src/cpu/saxpy.c; exit 1; }
+          rm -rf target
+          set +e
+          "$MCPP" build > neg.log 2>&1
+          rc=$?
+          set -e
+          cp /tmp/cpu_saxpy.bak src/cpu/saxpy.c
+          [ "$rc" != 0 ] || { echo "FAIL: the disagreement was accepted"; tail -20 neg.log; exit 1; }
+          grep -q 'declare it differently' neg.log || {
+            echo "FAIL: refused, but not for this reason"; tail -20 neg.log; exit 1; }
+          # Both file names, because a diagnostic naming one leaves the reader
+          # to find the other.
+          grep -q 'src/kernels/saxpy.c' neg.log
+          grep -q 'src/cpu/saxpy.c' neg.log
+          echo "ok: refused, naming both definitions and both signatures"
+          # And it builds again once they agree, so this step cannot leave a
+          # fixture that refuses everything.
+          rm -rf target
+          "$MCPP" build > restored.log 2>&1 || {
+            echo "FAIL: the fixture no longer builds after the perturbation was undone"
+            tail -20 restored.log; exit 1; }
+          rm -f neg.log restored.log cpu.log cpurun.log
+          echo "ok: and it builds again once the two agree"
+
+      # NO BUILD PROGRAM AT ALL, WHICH IS WHAT THE TWO KEYS BUY.
+      #
+      # `spirv-consumer` and `spirv-module-consumer` both write a `build.mcpp`,
+      # so neither can tell whether mcpp would have written it. This fixture has
+      # a dependency edge naming a feature and nothing else: no `host-module`,
+      # no build program. The step asserts both absences, because a fixture that
+      # gained one by accident would still pass every other check here.
+      - name: rules-spirv with no build program
+        working-directory: tests/spirv-zero-config
+        run: |
+          test ! -f build.mcpp || { echo "FAIL: the fixture has its own build program"; exit 1; }
+          # STRIPPED OF COMMENTS, for the same reason the island step is: this
+          # fixture EXPLAINS in its own header that `host-module = true` is not
+          # written and not needed, so a plain grep reports the file for saying
+          # what it does. The property is about the manifest's keys.
+          if grep -v '^[[:space:]]*#' mcpp.toml | grep -q 'host-module'; then
+            echo "FAIL: the fixture declares host-module"
+            grep -v '^[[:space:]]*#' mcpp.toml | grep -n 'host-module'
+            exit 1
+          fi
+          "$MCPP" build | tee build.log
+          grep -q 'Rules mcpp.rules.spirv' build.log \
+            || { echo "FAIL: the build did not report which rule it ran"; exit 1; }
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          # And the program mcpp wrote is where it says it is, and is the one a
+          # project would take over.
+          test -f target/.build-mcpp/build.mcpp
+          grep -q '^import mcpp.rules.spirv;' target/.build-mcpp/build.mcpp
+          echo "ok: one edge, no program, shaders compiled"
+
+      # WHERE THE BYTES LIVE, TWICE, AGAINST ONE UNCHANGED CONSUMER.
+      #
+      # Both fixtures' `src/main.cpp` has the same shape as the header-stored
+      # one: one import, one call, a `payload` struct. That is the claim -- the
+      # storage is not something a consumer can see -- and it is why these are
+      # separate fixtures rather than options on an existing one.
+      #
+      # `object` is what a project reaches for above roughly 1 MB of total
+      # payload; below that the header route is faster, measured at 1.10s
+      # against 2.17s for 100 shaders of 16 KB.
+      - name: rules-spirv with object storage
+        working-directory: tests/spirv-object-storage
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          # The bytes are a section, so the compiler never saw a C array: the
+          # payload is a bare `.spv` and an `.S` names it with `.incbin`.
+          test -f target/.build-mcpp/out/spirv/scale_comp.spv
+          test -f target/.build-mcpp/out/spirv/spirv_object_storage.shaders.payload.S
+          grep -q '\.incbin' target/.build-mcpp/out/spirv/spirv_object_storage.shaders.payload.S
+          if ls target/.build-mcpp/out/spirv/*.inc >/dev/null 2>&1; then
+            echo "FAIL: object storage still produced a C initialiser list"
+            exit 1
+          fi
+          # `pCode` wants four-byte alignment and a section directive alone does
+          # not promise it.
+          grep -q '\.balign 4' target/.build-mcpp/out/spirv/spirv_object_storage.shaders.payload.S
+          echo "ok: the payload is a section, not generated source"
+
+      - name: rules-spirv with sidecar storage
+        working-directory: tests/spirv-sidecar
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          test -f target/.build-mcpp/out/spirv/scale_comp.spv
+          # THE REVERSE LEG, AND IT IS THE POINT OF THIS STORAGE. The accessor
+          # opens a path relative to the working directory, so the program finds
+          # its shaders from the package root and must not from anywhere else.
+          # Without this half the fixture would pass against an implementation
+          # that had quietly embedded the payload after all.
+          bin=$(ls target/*/*/bin/spirv-sidecar)
+          bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
+          if (cd /tmp && "$bin" > away.log 2>&1); then
+            echo "FAIL: the sidecar program succeeded from the wrong directory"
+            cat /tmp/away.log
+            exit 1
+          fi
+          grep -q 'sidecar payload was not found' /tmp/away.log \
+            || { echo "FAIL: it failed for some other reason"; cat /tmp/away.log; exit 1; }
+          echo "ok: found from the package root, reported missing from elsewhere"
+
+      # SLANG: A DIFFERENT LANGUAGE, THE SAME SURFACE.
+      #
+      # The point of this step is not that Slang compiles -- it is that a
+      # consumer cannot tell which rule produced its shaders. The fixture's
+      # `main.cpp` contains nothing Slang-specific and would compile unchanged
+      # against `mcpp.rules.spirv` if the shader were GLSL.
+      #
+      # It needs an engine that knows the `.slang` extension: a constrained
+      # glob's `accel` key does not make a file a device source, the engine's
+      # own `kDeviceExtensions` table does, and before that table listed
+      # `.slang` the file fell through to the ordinary source scan and was
+      # refused with "mcpp has no role for the extension".
+      - name: rules-slang through a consumer
+        working-directory: tests/slang-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^scale.slang: magic=07230203' run.log
+          grep -q '^all ok' run.log
+          if grep -rn 'scale\.h\|\.inc"' src/; then
+            echo "FAIL: a consumer source names a generated file"
+            exit 1
+          fi
+          grep -q '^export module slang_consumer.shaders;' \
+            target/.build-mcpp/out/slang/slang_consumer.shaders.cppm
+          echo "ok: a Slang shader reached through the same surface as a GLSL one"
 
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
@@ -153,6 +513,32 @@ jobs:
           "$MCPP" run | tee run2.log
           grep -q '^size=8 ' run2.log
           git checkout -- data/message.txt
+
+      # THE SAME SURFACE FROM A TOOL RATHER THAN A RULE.
+      #
+      # `file()` writes a header per input and the consumer includes each by
+      # name; `group()` hands the same headers to the same generator the shader
+      # rules use, so a set of data files and a set of shaders reach a consumer
+      # through one shape.
+      #
+      # The size assertion is the one that matters. `<id>_size` counts ELEMENTS
+      # and the surface reports BYTES, and `null_terminate` appends a byte that
+      # `_size` does not count -- so neither `_size` nor `sizeof` is the answer
+      # on its own. The fixture compares the payload against its exact text, and
+      # a trailing NUL fails it.
+      - name: tools-embed through the module surface
+        working-directory: tests/embed-module-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^alpha.txt: bytes=46 ok' run.log
+          grep -q '^beta.txt: bytes=15 ok' run.log
+          grep -q '^all ok' run.log
+          if grep -rn 'alpha_txt\.h\|beta_txt\.h' src/; then
+            echo "FAIL: a consumer source names a generated file"
+            exit 1
+          fi
+          echo "ok: two payloads, one import, sizes exact"
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
@@ -208,11 +594,24 @@ jobs:
           # added to this package would be covered by a step whose name says it
           # already is. The list is therefore compared against the package's
           # own `[features]` before the build, and the two must be equal.
-          feats=$(sed -n '/^\[features\]/,/^# /p' mcpp.toml \
-                  | grep -oE '^[a-z-]+ +=' | sed 's/ *=//' | grep -v '^default$' | sort)
+          # OFF THE SECTION HEADERS, which is where a feature's name is
+          # since 0.3.0: a feature carries `device_extensions` and
+          # `rule_module` as well as `sources`, and TOML 1.0 forbids a
+          # multi-line inline table, so `[features.<name>]` replaced
+          # `<name> = { ... }`. Reading keys out of the table BODY matched
+          # `sources` once per feature and reported the fixture as
+          # incomplete while the extractor was what broke.
+          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+                  | sed 's/^\[features\.//; s/\]$//' | sort)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
-          [ -n "$feats" ] || { echo "FAIL: read no features out of mcpp.toml"; exit 1; }
+          [ -n "$feats" ] || {
+            echo "FAIL: read no features out of mcpp.toml. The extractor above"
+            echo "      expects [features.<name>] sections and found none, so the"
+            echo "      manifest spelling changed -- the package has not stopped"
+            echo "      having features."
+            grep -n '^\[features' mcpp.toml | head
+            exit 1; }
           [ "$feats" = "$used" ] || {
             echo "FAIL: the fixture does not name every published feature"
             echo "  package: $(echo $feats)"
@@ -492,11 +891,24 @@ jobs:
           # added to this package would be covered by a step whose name says it
           # already is. The list is therefore compared against the package's
           # own `[features]` before the build, and the two must be equal.
-          feats=$(sed -n '/^\[features\]/,/^# /p' mcpp.toml \
-                  | grep -oE '^[a-z-]+ +=' | sed 's/ *=//' | grep -v '^default$' | sort)
+          # OFF THE SECTION HEADERS, which is where a feature's name is
+          # since 0.3.0: a feature carries `device_extensions` and
+          # `rule_module` as well as `sources`, and TOML 1.0 forbids a
+          # multi-line inline table, so `[features.<name>]` replaced
+          # `<name> = { ... }`. Reading keys out of the table BODY matched
+          # `sources` once per feature and reported the fixture as
+          # incomplete while the extractor was what broke.
+          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+                  | sed 's/^\[features\.//; s/\]$//' | sort)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
-          [ -n "$feats" ] || { echo "FAIL: read no features out of mcpp.toml"; exit 1; }
+          [ -n "$feats" ] || {
+            echo "FAIL: read no features out of mcpp.toml. The extractor above"
+            echo "      expects [features.<name>] sections and found none, so the"
+            echo "      manifest spelling changed -- the package has not stopped"
+            echo "      having features."
+            grep -n '^\[features' mcpp.toml | head
+            exit 1; }
           [ "$feats" = "$used" ] || {
             echo "FAIL: the fixture does not name every published feature"
             echo "  package: $(echo $feats)"

@@ -36,8 +36,9 @@ import_std = true
 # whose host-dependent code is compiled on one platform only.
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = [
-  "rules-ascendc", "rules-cuda", "rules-hip", "rules-spirv", "rules-sycl",
-  "tools-embed",
+  "rules-ascendc", "rules-cuda", "rules-hip", "rules-slang", "rules-spirv",
+  "rules-sycl",
+  "tools-embed", "tools-island",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns

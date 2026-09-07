@@ -98,6 +98,17 @@ struct options {
     // Header search paths for the island. Relative entries resolve against the
     // package root; an ABSOLUTE entry is passed through unchanged.
     std::vector<std::string> includes;
+    // FLAGS FOR THE ISLAND'S COMPILER, PASSED THROUGH UNEXAMINED.
+    //
+    // A device compiler is a separate driver with its own command line, and
+    // `mcpp::cflag`/`mcpp::cxxflag` reach mcpp's compiler rather than this one.
+    // The case this exists for is `mcpp.tools.island`, whose
+    // `force_include_flags` makes the island read its generated boundary header
+    // before its first line -- so the island names no generated file and the
+    // project has no header of its own. Project-wide flags cannot do that job:
+    // forcing a header into every C++ translation unit puts declarations ahead
+    // of `export module`, which no module interface unit accepts.
+    std::vector<std::string> flags;
     // An explicit compiler path wins over the payload. Set it when a project
     // pins a DPC++ other than the one the workspace installed.
     std::string compiler;
@@ -483,6 +494,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         for (auto const& inc : opt.includes)
             e.command.push_back("-I" + (std::filesystem::path(inc).is_absolute()
                                         ? inc : root + "/" + inc));
+        for (auto const& f : opt.flags) e.command.push_back(f);
         // `-x c++` is not optional. `.sycl` is this ecosystem's spelling and
         // no compiler knows it; without this the driver classifies the file as
         // a LINKER INPUT, warns `'linker' input unused`, exits 0 and produces

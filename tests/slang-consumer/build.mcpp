@@ -1,0 +1,15 @@
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.rules.slang;
+
+int main() {
+    mcpp::rerun_if_changed_glob("shaders/**/*.slang");
+    mcpp::rules::slang::options opt;
+    // Asked for explicitly rather than left to the default, for the reason the
+    // GLSL module fixture records: the default follows `MCPP_LANGUAGE_MODULES`,
+    // and against an engine that does not report it this fixture would silently
+    // get the header surface, still build, and test nothing it exists for.
+    opt.surface = mcpp::plugins::surface::kind::module_;
+    return mcpp::rules::slang::compile(opt) ? 0 : 1;
+}

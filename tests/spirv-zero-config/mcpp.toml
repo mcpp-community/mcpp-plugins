@@ -1,0 +1,43 @@
+# The consumer that has NO build.mcpp.
+#
+# `spirv-consumer` and `spirv-module-consumer` both write one, so neither can
+# tell whether mcpp would have written it for them. This fixture is the whole
+# path: a dependency edge naming a feature, and nothing else.
+#
+# What it asserts:
+#
+#   - `host-module = true` is not written and is not needed. `rules-spirv`
+#     declares a `rule_module`, which is the statement that the only way to use
+#     the feature is as a host module.
+#   - No `build.mcpp` exists in this directory, and the shaders are still
+#     compiled: mcpp writes the program the feature describes into the build
+#     directory.
+#   - The surface defaults to the module form, because `[language] modules` is
+#     true and mcpp reports that as `MCPP_LANGUAGE_MODULES`. Nothing here asks
+#     for it.
+[package]
+name        = "spirv-zero-config"
+namespace   = "example"
+version     = "0.1.0"
+description = "A GLSL compute shader compiled with no build program of its own"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# The whole declaration. No `features` beyond the one that names the rule, no
+# `host-module`, no build program.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-spirv"] }
+
+[build]
+accel = "vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "shaders/*.comp", accel = "vulkan1.2" },
+]
+
+[targets.spirv-zero-config]
+kind = "bin"
+main = "src/main.cpp"

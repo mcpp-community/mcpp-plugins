@@ -1,0 +1,42 @@
+# The consumer that tests mcpp.rules.spirv.
+#
+# No Vulkan runtime is involved: the rule's output is a header holding the
+# SPIR-V module as a `const uint32_t` array, and the program checks the one
+# property that identifies a SPIR-V module without executing it, the magic
+# number 0x07230203 in its first word. What is tested is therefore the rule
+# and the engine path that feeds it -- the constrained glob, the device
+# source list, the `role = "source"` action ordered before compilation --
+# and not a driver.
+[package]
+name        = "spirv-object-storage"
+namespace   = "example"
+version     = "0.1.0"
+description = "A GLSL compute shader compiled to a SPIR-V header through mcpp.rules.spirv"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# `[build-dependencies]`, not `[dependencies]`: a rule package's library must
+# never reach the target while its rule is still wanted, which is the case
+# docs/05 section 2.6.1 exists for. `host-module = true` says which build-time
+# product is wanted; the section says whether the package reaches the target.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-spirv"], host-module = true }
+
+# NO [xlings.workspace]. The rule declares the payloads it drives, under the
+# feature that selects it and the accelerator it serves, so this project names
+# the rule and nothing else. Needs mcpp 2026.9.6.6; before it, a payload a
+# dependency declared was installed and then answered as absent.
+
+[build]
+accel = "vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "shaders/*.comp", accel = "vulkan1.2" },
+]
+
+[targets.spirv-object-storage]
+kind = "bin"
+main = "src/main.cpp"

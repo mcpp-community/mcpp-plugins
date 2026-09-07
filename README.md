@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.2.3", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.3.0", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -49,9 +49,11 @@ engine's own module family and is not used here.
 | `rules-ascendc` | `mcpp.rules.ascendc` | 2026.9.6.6 | `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. Its own engine needs are `.asc` in the device-source table and `mcpp::link_flag` for the `-rpath-link` the toolkit's shared libraries require, both 2026.9.6.5 |
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.6.6 | `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-hip` | `mcpp.rules.hip` | 2026.9.6.6 | `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
-| `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; emits one header per shader through a `role = "source"` action, and states which of the two compilers produced it |
+| `rules-slang` | `mcpp.rules.slang` | 2026.9.7.1 | `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. `.slang` is **not** in the engine's device-source table: this feature declares `device_extensions = [".slang"]` and `rule_module = "mcpp.rules.slang"`, and the engine routes it from there. That is the criterion for the whole arrangement -- a new device language costs no engine release |
+| `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; compiles each shader through a `role = "source"` action and states which of the two compilers produced it |
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.6 | `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1 |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
+| `tools-island` | `mcpp.tools.island` | 2026.9.7.1 | nothing beyond mcpp: it reads marked entry points out of an island's own source and writes the `extern "C"` boundary header its compiler reads and the module the C++ side imports. Not a device rule -- it claims no extension, and a project calls it from its own `build.mcpp` |
 
 ### Each rule brings its own environment
 
@@ -59,7 +61,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.2.4", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.3.0", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -112,6 +114,7 @@ Each rule therefore selects the extensions it claims and leaves the rest:
 | `rules-ascendc` | `.asc`, `.cce` |
 | `rules-cuda` | `.cu` |
 | `rules-hip` | `.hip` |
+| `rules-slang` | `.slang` |
 | `rules-sycl` | `.sycl` |
 | `rules-spirv` | `.comp .vert .frag .geom .tesc .tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall`, and `.glsl` / `.hlsl` so that a stage-less name is refused by name rather than by absence |
 
@@ -124,8 +127,15 @@ device source that reached no action, naming the file. That is the engine's
 half of this rule and it needs 2026.9.6.5.
 
 The floor is the mcpp release whose engine carries what the member relies on.
-From 0.2.4 every rule shares one: **2026.9.6.6**, the release in which a payload
-a DEPENDENCY declared is both installed and answerable. Before it a rule could
+From 0.3.0 every rule shares one: **2026.9.7.1**, the release that reads
+`device_extensions` and `rule_module`, reports `[language] modules` and the
+package's own name to a build program, and writes the build program a declared
+rule set describes. A client below it does not get a degraded surface; it gets a
+build in which the rules never route -- the file falls through to the ordinary
+source scan and mcpp says it has no role for the extension.
+
+The previous shared floor was 2026.9.6.6, the release in which a payload a
+DEPENDENCY declared is both installed and answerable. Before it a rule could
 declare `>=8.5.0`, have it installed, and still be told by `xpkg_dir` that
 nothing was there -- which is why each rule's list used to be repeated in every
 project that used it. The earlier per-member floors are still the floors of the
@@ -134,9 +144,286 @@ table, 2026.9.5.3; `tools-embed` needs the fast path to compare a declared file
 input, 2026.9.5.4; `rules-sycl` needs `.sycl` in that table, 2026.9.6.1), and
 they are all below the shared one.
 
+`rules-slang` is the member that does NOT appear in that list, and its absence
+is the point: `.slang` is in no engine table at any version. The feature
+declares the extension and the module that compiles it, so the release it needs
+is the one that reads those two keys rather than the one that would have carried
+its extension.
+
 The index descriptor states the highest floor among the members, so it is the
 floor of the collection rather than of any one feature; a project on an older
 mcpp is refused at resolution rather than at the first shader.
+
+## What a consumer names
+
+A member that embeds a payload -- `rules-spirv`, `rules-slang`, `tools-embed` --
+does not leave the consumer to include a generated header. All three hand their
+payloads to one generator, `mcpp::plugins::surface`, so what a consumer writes
+is the same whichever produced them:
+
+```cpp
+import myapp.shaders;
+
+const auto s = myapp::shaders::blur_comp();
+VkShaderModuleCreateInfo ci{ .codeSize = s.size_bytes, .pCode = s.code };
+```
+
+### From a file name to a call
+
+Every name a consumer writes is derived, and derived one way, so nothing has to
+be looked up:
+
+```
+base directory   shaders/                  derived: the shallowest directory
+                                           every payload shares
+file             shaders/post/tone.frag
+                         └── the path below the base
+module           myapp.shaders             package name + group
+namespace        myapp::shaders::post      the module name segment by segment,
+                                           then the directory's segments
+identifier       tone_frag                 stem + stage, non-identifier
+                                           characters replaced by `_`
+call             myapp::shaders::post::tone_frag()
+```
+
+`myapp` comes from the package unless the project sets `options::module_name`;
+the base directory is derived unless it sets `options::base_dir`.
+
+Three invariants, and each exists because its absence was a defect:
+
+- **The module name and the namespace are the same identifier path**, `.` for
+  `::`. A reader never has to learn which namespace a module opens.
+- **The directory reaches the generated file's path and the linker symbol, not
+  only the namespace.** Two shaders sharing a stem in different directories
+  produced byte-identical generated headers, and GCC's `#pragma once` treats two
+  files with the same size and content as the same file -- so the second include
+  did nothing and both accessors returned the first array, while the program
+  printed the right magic number twice.
+- **The stage is always part of the identifier**, so `blur.comp` and `blur.frag`
+  do not collide. Uniformly rather than only when needed: conditional naming is
+  worse than verbose naming.
+
+
+
+**The interface is a function, and it names no standard-library type.** A
+variable cannot keep one shape across the ways bytes can be stored, because
+`constexpr` and `extern` are mutually exclusive. A std type in the interface is
+worse than it looks: measured with GCC 16.1 on a 1 MB payload, an interface
+returning `std::span` produced a 1 313 968-byte BMI against 1 808 bytes for the
+std-free equivalent, and that cost is fixed rather than proportional to the
+payload -- it is `<span>`'s templates, present whether the payload is 16 KB or
+16 MB. A consumer that wants a `std::span` constructs one from the two members.
+
+**Where the bytes live is a second, independent choice.** The surface decides how
+a consumer names a payload; `storage` decides where it sits. The declarations are
+identical under all three, so a project changes this and no consumer changes.
+
+| storage | the payload is | reach for it when |
+|---|---|---|
+| `header` (default) | a C array in generated source, compiled in | almost always |
+| `object` | a section, through `.incbin` in a generated `.S` | total payload is large |
+| `sidecar` | a file beside the artifact, read at run time | hot reload, or a payload too large to link |
+
+**Which one is a measurement, not a preference.** With GCC 16.1 on 100 payloads
+of 16 KB each -- the size of an ordinary compute shader:
+
+```
+header route   compile 0.64s + link 0.44s                = 1.10s
+object route   convert 1.28s + compile 0.44s + link 0.46s = 2.17s
+```
+
+The header route is faster, because at that size neither route has a measurable
+marginal cost and the total is decided by how many processes start; one compiler
+invocation absorbs many headers. The crossover is the TOTAL embedded byte count
+rather than the payload count: below about 1 MB the header route wins, and above
+about 4 MB the compiler's slightly superlinear curve loses by an order of
+magnitude (2.31s against 0.116s). Source expansion is a constant 2.75x.
+
+**`object` needs a GAS assembler.** Every gcc and clang toolchain has one on all
+three platforms; MSVC does not, and mcpp refuses `.S` under it, so the emitter
+falls back to `header` there and says so once. The surface does not change, so a
+consumer compiled either way is the same source.
+
+**`sidecar` states its cost rather than hiding it.** The accessor opens a path
+relative to the working directory, so the program finds its payloads when run
+from the package root and does not when run from elsewhere -- which is why it is
+not the default, and why `mcpp pack` of such a program has something further to
+collect. `tests/spirv-sidecar` asserts both halves: found from the root, and
+reported missing from `/tmp`.
+
+**The default follows the project.** `[language] modules = true` gives the
+module surface, `false` gives a header with the same declarations. mcpp reports
+the setting as `MCPP_LANGUAGE_MODULES`; an engine that does not report it leaves
+the header surface in place, so an older engine keeps the behaviour every
+consumer of this package had before the surface existed.
+
+**The generator is not shader-specific, and three members already share it.**
+`mcpp::plugins::surface` knows about a run of bytes, a name, where it lives and
+how it is reached; it does not know what SPIR-V is. `rules-spirv`, `rules-slang`
+and `tools-embed` all call it, which is what keeps their generated declarations
+from drifting.
+
+It lives in this package's lib root, so a rule package outside this collection
+reaches it by depending on `mcpp:plugins` and activating no feature -- the lib
+root alone, which is one small module. That works and is the intended path;
+whether the generator should become a package of its own is an open question and
+not one this version answers.
+
+
+**One copy of the bytes.** A generated data header declares a `static` array, so
+before this every translation unit that included one carried its own copy.
+Exactly one translation unit -- the generated implementation -- includes them
+now, and every consumer reaches the same array through the accessor.
+
+## `tools-island`: an island's boundary
+
+`mcpp::plugins::surface` generates the whole interface for a **data** payload,
+because an address and a size are all there is to decide.
+`mcpp.tools.island` generates what is mechanical about a **code** island -- and
+only that. It is a member like `tools-embed` rather than part of the lib root:
+nothing in this collection uses it, a project does.
+
+The entry points are marked where they are defined, and the signature exists
+once:
+
+```c
+// src/kernels/saxpy.cu -- no include: the generated header arrives through the
+// compiler's forced-include flag, which is what defines the marker as nothing.
+
+MCPP_EXPORT_C
+int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n) { ... }
+```
+
+```cpp
+// build.mcpp
+mcpp::tools::island::options opt;
+opt.module_name = "myapp.kernels";
+opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
+
+const auto entries = mcpp::tools::island::scan(islands, opt);
+const auto out     = mcpp::tools::island::emit(*entries, opt);
+mcpp::include_dir(out->include_dir.c_str());
+mcpp::generated(out->interface_file.c_str());
+```
+
+Two files come out of that one marked declaration: the `extern "C"` header the
+device translation unit includes, guards and `__cplusplus` dance included, and
+the module the C++ side imports.
+
+The C++ side is usually a **seam module** of the project rather than a consumer
+directly: `app.cppm` imports the generated module and turns pointers and a count
+back into spans, and it is the one place a backend can be exchanged. That means
+one module interface of the project imports a module interface written into the
+build directory during the same build; the ordering comes from the scan seeing
+the import, and nothing has to be declared for it.
+
+**Three layers, and each overrides the one above.** `scan` reads the marked
+declarations out of the island, which puts the signature beside the definition;
+`emit` takes a list directly, for entry points a scan cannot see; and a project
+that wants neither writes its own header and its own module wrapper. The default
+is the one that keeps the signature in one place.
+
+**The marker selects.** An island has internal functions, and a generator that
+exported whatever the file contained would make the boundary an accident of the
+file's contents. `MCPP_EXPORT_C` names the mechanism rather than the domain --
+what is marked is exported across a generated boundary with C linkage -- and
+deliberately does not end in `_API`, a suffix that conventionally expands to a
+visibility attribute where this expands to nothing. It is configurable through
+`options::marker`.
+
+**The scan is not a C parser.** From the marker it copies verbatim to the
+parenthesis closing the parameter list, matching nesting, so a signature that
+wraps across lines or carries a macro travels through unexamined.
+
+**The island writes no `#include` either.** `force_include_flags` returns the
+flags that make the compiler read the generated header before the island's first
+line -- `-include <path>` for gcc and clang, `/FI<path>` for MSVC -- so a project
+using this generator has no header in its source tree and no line naming one.
+
+An `#include` of the generated header would name a file its author never opens,
+and it buys no self-containment: that translation unit could not be compiled
+outside mcpp with or without the line, because the file it names does not exist
+until mcpp writes it.
+
+**The check that include used to do is still there.** The compiler sees the
+declarations, so a definition whose signature drifted from its declaration fails
+where it was written rather than at the link:
+
+```
+src/kernels/saxpy.c:22:5: error: conflicting types for 'scale_device'
+```
+
+**A seam has two halves, and `scan` is where they are compared.** A device
+island and a host fallback implement one `extern "C"` boundary, and exactly one
+of them is in any link. A build program hands `scan` both, unconditionally --
+both files exist on disk in either build, and which one is compiled is the
+manifest's decision rather than a condition the build program repeats:
+
+```cpp
+const std::vector<std::string> islands{
+    std::string(mcpp::manifest_dir()) + "/src/kernels/saxpy.cu",
+    std::string(mcpp::manifest_dir()) + "/src/cpu/saxpy.cpp",
+};
+```
+
+Entries are merged by name, so the two halves produce one set of declarations.
+Two definitions of one name that declare it **differently** are refused, naming
+both files and both signatures:
+
+```
+mcpp.tools.island: two definitions of `scale_device` declare it differently.
+  src/kernels/saxpy.c
+    int scale_device(float a, float* out, unsigned n)
+  src/cpu/saxpy.c
+    int scale_device(float a, float* out, double n)
+  C language linkage does not mangle, so these never meet at the link:
+  whichever one is in the artifact reads its arguments by its own signature.
+```
+
+Nothing else in the toolchain catches that. The two halves are never in one
+translation unit and never in one link, and C linkage does not mangle, so a
+build with disagreeing halves is clean and the artifact reads its arguments by
+whichever signature it was compiled with. `scan` is the only point at which both
+texts exist at once.
+
+**The declaration still exists once.** Without this, a project writes it twice --
+in a header, and again wherever the C++ side reaches it. C language linkage does
+not mangle, so two copies that disagree are one symbol: the link is clean and
+each side reads the arguments by its own ABI, with no compile error and no link
+error. That is the copy this removes.
+
+**The module re-exports names, not signatures.** `export using ::saxpy_device;`
+needs the identifier and nothing else, so the generator has no C parser in it and
+the header stays the only place a signature is written. Measured on both
+implementations this package supports: a consumer that imports the module and
+never includes the header calls the entry point and links against an
+implementation built by a different driver, under GCC 16.1 and clang 22.1.8.
+
+**The C++ interface is still yours.** A seam that turns raw pointers into
+`std::optional<std::vector<float>>` is a design decision, and no generator makes
+it well. This removes the boilerplate around the boundary, not the boundary's
+design. `emit_module = false` emits the header alone for a project that keeps a
+hand-written seam that includes rather than imports.
+
+### Why the generators live here and not in mcpp
+
+The engine's `mcpp` module is compiled into the mcpp binary and carries the
+**protocol** -- what a build program can tell mcpp: `action`, `generated`,
+`include_dir`, `fact`, `floor`. A generator is a **library on top of** that
+protocol: it reads declarations, writes files, and hands them back through
+`mcpp::generated`. It extends nothing.
+
+So the line is: the engine's module carries the protocol, and generators are
+libraries. Both of these are opinionated and will change -- what a `payload`
+looks like, how a namespace is derived, which storages exist -- and code inside
+the engine changes only with an engine release, which is the coupling this
+version's `device_extensions` work exists to remove.
+
+A rule package outside this collection reaches them by depending on
+`mcpp:plugins` and activating no feature: the lib root alone, one small module.
+That is a package dependency it chooses, not a coupling the engine imposes. If
+they stabilise, moving them into the engine later is a low-risk step; the reverse
+is not.
 
 ## How the engine sees this package
 
@@ -151,7 +438,9 @@ in the same command as the consumer's `build.mcpp`, and may import `std`,
 
 ```
 mcpp.toml          the package: one feature per member
-src/plugins.cppm   export module mcpp.plugins;
+src/plugins.cppm   export module mcpp.plugins;  the lib root: the version, and
+                   mcpp::plugins::surface, which every member that embeds a
+                   payload uses to write the declarations a consumer names
 rules/<x>.cppm     export module mcpp.rules.<x>;
 tools/<x>.cppm     export module mcpp.tools.<x>;
 tests/<consumer>/  one project per member, built by CI with the pinned mcpp

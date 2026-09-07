@@ -1,0 +1,1 @@
+mcpp.tools.embed group fixture, first payload

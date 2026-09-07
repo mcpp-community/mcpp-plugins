@@ -59,6 +59,9 @@ export module mcpp.rules.spirv;
 
 import std;
 import mcpp;
+// The lib root, which carries `mcpp::plugins::surface` -- the declarations a
+// consumer names, written once for every member that embeds a payload.
+import mcpp.plugins;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -97,6 +100,42 @@ struct options {
     // pins a glslang other than the one the workspace installed.
     std::string compiler;
     std::string out_dir = std::string(mcpp::out_dir());
+
+    // ── What a consumer names ────────────────────────────────────────────────
+    //
+    // The declarations are written by `mcpp.plugins.surface`, which states why
+    // they take the shape they do. What this rule decides is only which surface
+    // and under which name.
+
+    // `module_` or `c_header`. The default follows `[language] modules`, which
+    // mcpp reports in `MCPP_LANGUAGE_MODULES`; an engine that does not report it
+    // leaves the header surface in place, so an older engine keeps the behaviour
+    // every consumer of this package had before the surface existed.
+    mcpp::plugins::surface::kind surface = mcpp::plugins::surface::default_surface();
+
+    // Where the compiled SPIR-V lives. `header` compiles it in as generated
+    // source, `object` as a section reached through `.incbin`, `sidecar` as a
+    // file beside the artifact. See `mcpp::plugins::surface::storage` for the
+    // measurement that makes `header` the default.
+    //
+    // It changes what this rule asks the compiler for. Under `header` the
+    // compiler is told to emit a C declaration (`-mfmt=c`, `-x --vn`); under
+    // the other two it emits a bare `.spv`, which is both simpler and the one
+    // shape both compilers agree on.
+    mcpp::plugins::surface::storage storage = mcpp::plugins::surface::storage::header;
+
+    // The module a consumer imports, and the namespace the declarations sit in:
+    // `myapp.shaders` gives `myapp::shaders::blur_comp()`. Empty derives it from
+    // the package directory, so a project that states nothing still gets a name
+    // no other package in the build can claim.
+    std::string module_name;
+
+    // The directory shader paths are made relative to when deriving namespaces.
+    // `shaders/post/tonemap.frag` under a base of `shaders` becomes
+    // `myapp::shaders::post::tonemap_frag`. Empty derives the base from the
+    // shallowest directory every shader shares, which is what a project that
+    // globs one tree already means and is why this is rarely written.
+    std::string base_dir;
 };
 
 // Where the generated headers are written, and what the build program passes
@@ -379,14 +418,71 @@ inline std::string_view stage_of(std::string_view ext) {
 // `scale_comp.h`. Derived rather than configurable: a name a project chooses
 // per shader is a name the project has to keep in agreement with its own
 // `#include`, and this rule already decides the file name.
-inline std::string symbol_of(std::string_view stem, std::string_view stage) {
+inline std::string symbol_of(std::span<const std::string> name_space,
+                             std::string_view stem, std::string_view stage) {
     std::string s;
+    for (auto const& seg : name_space) { s += seg; s += '_'; }
     for (char c : stem)
         s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
     s += '_';
     s += stage;
     s += "_spv";
     return s;
+}
+
+// The flat case, which is every shader that sits directly in the globbed tree.
+inline std::string symbol_of(std::string_view stem, std::string_view stage) {
+    return symbol_of(std::span<const std::string>{}, stem, stage);
+}
+
+// THE BASE DIRECTORY IS DERIVED, NOT ASKED FOR.
+//
+// A shader's namespace comes from where it sits relative to the tree the
+// project globbed, so something has to say where that tree starts. Asking the
+// project would put a second spelling of the glob in the manifest, and the two
+// would disagree the first time a glob moved. The shallowest directory every
+// shader shares is the same answer without the second spelling: for
+// `shaders/*.comp` it is `shaders` and every namespace is empty; for
+// `shaders/a/x.comp` and `shaders/b/y.comp` it is still `shaders`, and the two
+// land in `::a` and `::b`.
+//
+// A single shader has no common prefix with anything, so its own directory is
+// the base and its namespace is empty -- which is the same answer the general
+// case gives once a second shader appears beside it.
+inline std::string common_base_dir(std::span<const std::string> shaders) {
+    std::vector<std::string> prefix;
+    bool first = true;
+    for (auto const& src : shaders) {
+        std::vector<std::string> segs;
+        for (auto const& part : std::filesystem::path(src).parent_path())
+            if (auto s = part.string(); !s.empty() && s != ".") segs.push_back(s);
+        if (first) { prefix = std::move(segs); first = false; continue; }
+        std::size_t keep = 0;
+        while (keep < prefix.size() && keep < segs.size() && prefix[keep] == segs[keep]) ++keep;
+        prefix.resize(keep);
+    }
+    std::string out;
+    for (auto const& s : prefix) { if (!out.empty()) out += '/'; out += s; }
+    return out;
+}
+
+// The namespace segments a shader sits in, below the group's own: the path from
+// the base directory to the shader, sanitised one segment at a time. `..` cannot
+// appear, because the base is a prefix of every shader by construction.
+inline std::vector<std::string> namespace_of(std::string_view src, std::string_view base) {
+    std::vector<std::string> out;
+    auto dir = std::filesystem::path(src).parent_path().string();
+    if (!base.empty() && dir.size() >= base.size() && dir.compare(0, base.size(), base) == 0)
+        dir.erase(0, base.size());
+    for (auto const& part : std::filesystem::path(dir)) {
+        auto s = part.string();
+        if (s.empty() || s == "." || s == "/") continue;
+        // Through the lib root, which is the one place that knows a segment
+        // may not be a keyword: `shaders/default/` is an ordinary directory
+        // name and `namespace default {` is not a namespace.
+        out.push_back(mcpp::plugins::surface::identifier(s, "dir"));
+    }
+    return out;
 }
 
 // NEWLINE-SEPARATED, not `;`. A path may contain a semicolon and cannot
@@ -539,6 +635,17 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     std::error_code ec;
     std::filesystem::create_directories(gen, ec);
 
+    // Where namespaces start counting from. Derived unless the project said,
+    // for the reason `common_base_dir` records.
+    const std::string baseDir = opt.base_dir.empty() ? common_base_dir(shaders)
+                                                     : opt.base_dir;
+    // The module a consumer imports. `<package>.shaders` unless the project
+    // named one, so two packages in one build cannot claim the same module.
+    const std::string moduleName =
+        opt.module_name.empty()
+            ? mcpp::plugins::surface::module_root_from_package() + ".shaders"
+            : opt.module_name;
+
     // TWO SHADERS THAT DIFFER ONLY BY DIRECTORY PRODUCE ONE HEADER AND ONE
     // SYMBOL, AND THAT HAS TO BE REFUSED HERE.
     //
@@ -557,29 +664,42 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     // it survived: a graphics project organising shaders by purpose is the
     // first to have two.
     {
-        std::map<std::string, std::string> seen;   // output stem -> first source
+        std::map<std::string, std::string> seen;   // output path -> first source
         for (auto const& src : shaders) {
             const std::filesystem::path p(src);
             const auto stage = stage_of(p.extension().string());
             if (stage.empty()) continue;           // reported below, per source
-            const auto key = p.stem().string() + "_" + std::string(stage);
+            // THE DIRECTORY IS PART OF THE NAME NOW, SO THIS FIRES LESS OFTEN.
+            //
+            // Before the surface existed, every shader's header and symbol came
+            // from its stem alone, so `a/scale.comp` and `b/scale.comp` collided
+            // and had to be refused. Both now land in their own namespace and
+            // their own subdirectory of the generated tree, so the refusal is
+            // for what it was always about: two shaders that are genuinely the
+            // same name in the same place.
+            std::string key;
+            for (auto const& seg : namespace_of(src, baseDir)) key += seg + "/";
+            key += p.stem().string() + "_" + std::string(stage);
             auto [it, fresh] = seen.try_emplace(key, src);
             if (!fresh) {
                 std::cerr << std::format("mcpp.rules.spirv: two shaders map to one output.\n"
                     "    {}\n"
                     "    {}\n"
-                    "  both produce `{}.h` declaring `{}`, because the name is the "
-                    "shader's stem\n"
-                    "  and its stage -- the directory is not part of it, and could not "
-                    "be: two\n"
-                    "  headers reaching one translation unit would still collide on the "
-                    "symbol.\n"
+                    "  both produce `{}.h` declaring `{}`. The shader's directory below\n"
+                    "  `{}` is part of the name, so this is two shaders with one name in\n"
+                    "  one directory rather than two directories sharing a stem.\n"
                     "  fix: rename one of them, or compile only one.",
-                    it->second, src, key, symbol_of(p.stem().string(), stage)) << '\n';
+                    it->second, src, key, symbol_of(p.stem().string(), stage),
+                    baseDir.empty() ? std::string("the package root") : baseDir) << '\n';
                 return false;
             }
         }
     }
+
+    // Collected while the actions are submitted and handed to
+    // `mcpp.plugins.surface` afterwards, so the declarations a consumer reads
+    // are written once for the whole group rather than once per shader.
+    std::vector<mcpp::plugins::surface::item> items;
 
     for (auto const& src : shaders) {
         const std::filesystem::path p(src);
@@ -590,10 +710,57 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
                 ".tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall", src) << '\n';
             return false;
         }
-        const auto sym  = symbol_of(p.stem().string(), stage);
-        const auto base = (std::filesystem::path(gen)
-                           / (p.stem().string() + "_" + std::string(stage))).string();
+        // The generated tree mirrors the shader tree below the base directory,
+        // so two shaders sharing a stem in different directories produce
+        // different files as well as different namespaces.
+        const auto ns   = namespace_of(src, baseDir);
+        // THE ARRAY'S NAME CARRIES THE DIRECTORY, AND IT HAS TO.
+        //
+        // One translation unit includes every generated data header, so two
+        // shaders sharing a stem would declare one name twice. That is not
+        // caught as a redefinition, which is what makes it worth a comment:
+        // GCC's `#pragma once` treats two files with the same size and the same
+        // content as the same file, so two identical headers -- which is exactly
+        // what the same shader in two directories produces -- SILENTLY collapse
+        // to one, and both accessors return the same array. Measured on a
+        // fixture with `shaders/a/scale.comp` and `shaders/b/scale.comp`: the
+        // program printed the right magic number twice and the two pointers
+        // were equal.
+        //
+        // With no subdirectory the namespace is empty and the name is what it
+        // has always been, so nothing an existing project generated changes.
+        const auto sym  = symbol_of(ns, p.stem().string(), stage);
+        auto       dir  = std::filesystem::path(gen);
+        for (auto const& seg : ns) dir /= seg;
+        std::filesystem::create_directories(dir, ec);
+        const auto base = (dir / (p.stem().string() + "_" + std::string(stage))).string();
         const auto header = base + ".h";
+        // Declared here rather than beside the action below, because the item
+        // recorded a few lines down names it: the surface needs the payload's
+        // path to write `.incbin`, and it writes that before any action runs.
+        const std::string spv = base + ".spv";
+        // As an `#include` writes it: relative to `gen`, which is the directory
+        // this rule puts on the include path.
+        std::string headerRel;
+        for (auto const& seg : ns) headerRel += seg + "/";
+        headerRel += p.stem().string() + "_" + std::string(stage) + ".h";
+        // WHERE A SIDECAR IS FOUND AT RUN TIME, AND WHAT THAT COSTS.
+        //
+        // The generated accessor opens this path relative to the WORKING
+        // DIRECTORY, so it is written relative to the package root -- which is
+        // where `mcpp run` starts the program, and where a project doing shader
+        // hot-reload runs it from. A program started from anywhere else finds
+        // nothing, and that is the property that keeps this storage off the
+        // default rather than a defect in it: the payload is not in the
+        // artifact, so something outside the artifact has to be true.
+        const auto sidecarName =
+            std::filesystem::path(spv).lexically_relative(root).generic_string();
+        items.push_back({ .identifier   = p.stem().string() + "_" + std::string(stage),
+                          .name_space   = ns,
+                          .data_header  = headerRel,
+                          .data_symbol  = sym,
+                          .payload_path = spv,
+                          .sidecar_name = sidecarName });
         const auto input  = std::filesystem::path(src).is_absolute()
                           ? src : root + "/" + src;
 
@@ -606,10 +773,15 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // rule writes `<base>.h` around it. glslang used to write the header
         // itself, which made the two routes' headers differ in whether they
         // could be included first -- see `write_header`.
+        const bool embedAsSource =
+            opt.storage == mcpp::plugins::surface::storage::header;
         const std::string inc    = base + ".inc";
-        const std::string output = inc;
+        const std::string output = embedAsSource ? inc : spv;
 
-        if (!write_header(header, inc, sym, cc.kind)) return false;
+        // The wrapper header exists only to make the compiler's C output a
+        // translation unit. The other two storages never read a header, so
+        // writing one would leave a file nothing includes.
+        if (embedAsSource && !write_header(header, inc, sym, cc.kind)) return false;
 
         mcpp::action a;
         a.id          = id.c_str();
@@ -637,16 +809,22 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         for (auto const& d : opt.defines) a.arg(("-D" + d).c_str());
         for (auto const& i : opt.includes)
             a.arg(("-I" + (std::filesystem::path(i).is_absolute() ? i : root + "/" + i)).c_str());
-        if (cc.kind == flavour::glslc) {
-            // `-mfmt=c` is the initialiser list; the declaration around it was
-            // written above.
-            a.arg("-mfmt=c");
-        } else {
-            // `-x --vn` is what makes glslang's output a C declaration rather
-            // than a binary: a `const uint32_t <sym>[]` the program includes.
-            a.arg("-x");
-            a.arg("--vn"); a.arg(sym.c_str());
+        if (embedAsSource) {
+            if (cc.kind == flavour::glslc) {
+                // `-mfmt=c` is the initialiser list; the declaration around it
+                // was written above.
+                a.arg("-mfmt=c");
+            } else {
+                // `-x --vn` is what makes glslang's output a C declaration
+                // rather than a binary: a `const uint32_t <sym>[]` the program
+                // includes.
+                a.arg("-x");
+                a.arg("--vn"); a.arg(sym.c_str());
+            }
         }
+        // Under `object` and `sidecar` neither flag is passed, so both
+        // compilers write the same thing: a bare SPIR-V module. The one place
+        // the two flavours differed disappears with the storage that needed it.
         a.arg("-o"); a.arg(output.c_str());
         a.arg(input.c_str());
         a.input(input.c_str());
@@ -654,7 +832,40 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         a.submit();
     }
 
+    // The include path carries the generated data headers so the generated
+    // implementation can reach them. It is not how a consumer reaches a shader:
+    // that is the surface below, and no consumer writes one of these names.
     mcpp::include_dir(gen.c_str());
+
+    // ── What a consumer names ────────────────────────────────────────────────
+    mcpp::plugins::surface::options so;
+    so.surface     = opt.surface;
+    so.store       = opt.storage;
+    so.elem        = mcpp::plugins::surface::element::word32;
+    so.module_name = moduleName;
+    so.out_dir     = gen;
+    so.produced_by = "mcpp.rules.spirv";
+
+    const auto out = mcpp::plugins::surface::emit(items, so);
+    if (!out) return false;
+
+    // Both generated files are written above, so the ordinary source scan sees
+    // real content rather than a placeholder -- which is what lets a generated
+    // module interface be an ordinary node in the module graph with nothing
+    // declared about it.
+    mcpp::generated(out->interface_file.c_str());
+    mcpp::generated(out->impl_file.c_str());
+    // The `.S` under object storage. It is an ordinary source: mcpp assembles
+    // it, and `.incbin` reads the payload the action above produced, which by
+    // then exists because a `role = "source"` action is ordered before this
+    // package's compiles.
+    if (!out->assembly_file.empty()) mcpp::generated(out->assembly_file.c_str());
+    if (!out->include_dir.empty()) mcpp::include_dir(out->include_dir.c_str());
+
+    // Which collection produced these actions. The version was `0.1.1` while
+    // the package was `0.2.6` for as long as nothing read it; a fact is a
+    // reader, and a stale constant is now visible in every build log.
+    mcpp::fact("mcpp.plugins", std::string(mcpp::plugins::version).c_str());
     return true;
 }
 

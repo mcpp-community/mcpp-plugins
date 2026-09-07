@@ -31,6 +31,11 @@ export module mcpp.tools.embed;
 
 import std;
 import mcpp;
+// The lib root, which carries `mcpp::plugins::surface` -- the declarations a
+// consumer names. `group()` below hands its payloads to it, so a set of files
+// embedded by this tool and a set of shaders compiled by `mcpp.rules.spirv`
+// reach a consumer through the same shape.
+import mcpp.plugins;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -84,13 +89,11 @@ struct options {
 
 // ---- internals -------------------------------------------------------------
 
+// The accessor's own name, so a file called `default.bin` must not produce
+// `default()`. The lib root owns that decision; this is the one caller that
+// needs it here.
 inline std::string sanitise(std::string_view stem) {
-    std::string s;
-    for (char c : stem)
-        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
-    if (s.empty()) s = "data";
-    if (std::isdigit(static_cast<unsigned char>(s.front()))) s.insert(s.begin(), '_');
-    return s;
+    return mcpp::plugins::surface::identifier(stem, "data");
 }
 
 inline std::string default_dir() {
@@ -212,6 +215,85 @@ inline bool files(std::span<const std::string> inputs, options opt = {}) {
     }
     for (auto const& one : inputs)
         if (!file(one, opt)) return false;
+    return true;
+}
+
+// Several files, reached through ONE declaration a consumer imports.
+//
+// `files()` writes a header per input and leaves the consumer to include each
+// by name. `group()` writes those same headers and then hands them to
+// `mcpp::plugins::surface`, so the consumer writes one `import` and names no
+// generated file -- the same surface `mcpp.rules.spirv` produces, from the same
+// generator, because a payload that was already on disk and one a compiler
+// produced are the same thing to whoever consumes it.
+//
+// The group's own name is required rather than derived. A rule knows what its
+// payloads are for and can name the module `<package>.shaders`; a tool called
+// on an arbitrary set of files does not, and a derived name would be a guess
+// that two calls in one build program could collide on.
+inline bool group(std::span<const std::string> inputs,
+                  const std::string& module_name,
+                  mcpp::plugins::surface::kind surface
+                      = mcpp::plugins::surface::default_surface(),
+                  options opt = {}) {
+    if (inputs.empty()) return true;
+    if (module_name.empty()) {
+        std::cerr << "mcpp.tools.embed: group() needs a module name; it is what a "
+                     "consumer imports and the namespace the declarations sit in\n";
+        return false;
+    }
+    if (!files(inputs, opt)) return false;
+
+    const auto dir = opt.out_dir.empty() ? default_dir() : opt.out_dir;
+    std::vector<mcpp::plugins::surface::item> items;
+    for (auto const& one : inputs) {
+        const auto absolute = std::filesystem::path(one).is_absolute()
+                            ? std::filesystem::path(one)
+                            : std::filesystem::path(mcpp::manifest_dir()) / one;
+        const auto id = identifier_for(absolute, opt);
+        // `files()` wrote `<id>.h` beside its siblings, so the include is the
+        // bare name: this tool's generated tree is flat, unlike a rule's, which
+        // mirrors the source tree it globbed.
+        //
+        // The symbol is QUALIFIED by `options::name_space`, because that is
+        // where `file()` put the array. Passing the bare name compiles for a
+        // caller that left the option empty and fails for one that did not,
+        // which is the shape of a defect that only the second test finds.
+        const auto sym = opt.name_space.empty() ? id : opt.name_space + "::" + id;
+        items.push_back({ .identifier  = id,
+                          .name_space  = {},
+                          .data_header = id + ".h",
+                          .data_symbol = sym,
+                          // `<id>_size` IS A COUNT OF ELEMENTS, AND THE SURFACE
+                          // REPORTS BYTES. For `element::byte_` the two are the
+                          // same number and the distinction is invisible; for
+                          // `word32` it is four times out.
+                          //
+                          // `sizeof` is not the answer either: `null_terminate`
+                          // appends a zero byte that `_size` deliberately does
+                          // not count, so `sizeof` is one too many. Measured on
+                          // a group of null-terminated text payloads, which
+                          // reported one extra byte and failed the fixture's
+                          // comparison on a trailing NUL.
+                          .data_size_expr = opt.elem == element::word32
+                                          ? sym + "_size * 4"
+                                          : sym + "_size" });
+    }
+
+    mcpp::plugins::surface::options so;
+    so.surface     = surface;
+    so.elem        = opt.elem == element::word32
+                   ? mcpp::plugins::surface::element::word32
+                   : mcpp::plugins::surface::element::byte_;
+    so.module_name = module_name;
+    so.out_dir     = dir;
+    so.produced_by = "mcpp.tools.embed";
+
+    const auto out = mcpp::plugins::surface::emit(items, so);
+    if (!out) return false;
+    mcpp::generated(out->interface_file.c_str());
+    mcpp::generated(out->impl_file.c_str());
+    if (!out->include_dir.empty()) mcpp::include_dir(out->include_dir.c_str());
     return true;
 }
 

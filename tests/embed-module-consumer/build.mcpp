@@ -1,0 +1,20 @@
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.tools.embed;
+
+int main() {
+    mcpp::rerun_if_changed_glob("data/*.txt");
+
+    mcpp::tools::embed::options opt;
+    // Set on purpose: the group's symbols are qualified by it, and a group()
+    // that passed the bare name would compile for a caller that left this empty
+    // and fail only here.
+    opt.name_space     = "fixture";
+    opt.null_terminate = true;
+
+    const std::vector<std::string> inputs{ "data/alpha.txt", "data/beta.txt" };
+    return mcpp::tools::embed::group(inputs, "embed_module_consumer.assets",
+                                     mcpp::plugins::surface::kind::module_, opt)
+         ? 0 : 1;
+}

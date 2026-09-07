@@ -1,0 +1,26 @@
+# The consumer that tests `mcpp.tools.embed::group()`.
+#
+# `embed-consumer` covers `file()`: one payload, one generated header, included
+# by name. This covers the surface -- several payloads reached through one
+# `import`, with no generated file named anywhere in the consumer's sources.
+#
+# It exists as a separate fixture rather than as more assertions on the first
+# one because the two entry points have different contracts, and a fixture that
+# exercised both would not say which one broke.
+[package]
+name        = "embed-module-consumer"
+namespace   = "example"
+version     = "0.1.0"
+description = "Data files reached through a generated C++ module"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["tools-embed"], host-module = true }
+
+[targets.embed-module-consumer]
+kind = "bin"
+main = "src/main.cpp"
