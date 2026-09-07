@@ -628,11 +628,25 @@ inline kind default_surface() {
 // followed by the group's own segment, so two packages in one build cannot
 // claim the same module.
 inline std::string module_root_from_package() {
+    // THE PACKAGE'S NAME. NOT ITS DIRECTORY'S.
+    //
+    // These are different questions and they give different answers whenever a
+    // project lays a package out under a generic directory. The first version
+    // of this function asked the only question mcpp could answer -- the leaf of
+    // MCPP_MANIFEST_DIR -- so a package named `vulkan-saxpy` laid out as
+    // `vulkan/app/` generated `app.shaders`, and every `<something>/app/` in a
+    // workspace claimed that same module. `mcpp::package_name()` was added to
+    // the build-program contract in mcpp 2026.9.7.1, which this package
+    // requires, so the right question is now askable.
+    //
+    // The directory leaf remains only as a value for the impossible case: a
+    // manifest without a `[package] name` does not load, so an empty answer
+    // here would mean the contract changed underneath. A rule that wants
+    // neither passes `options::module_name`, and this is not consulted.
+    std::string leaf{mcpp::package_name()};
+    if (leaf.empty())
+        leaf = std::filesystem::path(mcpp::manifest_dir()).filename().string();
     std::string s;
-    // MCPP_MANIFEST_DIR's leaf is the package directory, which is the closest
-    // thing a build program is told about its own name. A rule that knows
-    // better passes `options::module_name` and this is not consulted.
-    const auto leaf = std::filesystem::path(mcpp::manifest_dir()).filename().string();
     for (char c : leaf)
         s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
     if (s.empty()) s = "app";

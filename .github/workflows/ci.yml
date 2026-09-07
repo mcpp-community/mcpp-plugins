@@ -123,14 +123,23 @@ jobs:
           fi
           echo "ok: the consumer names only the module"
           # And what it imports really is a generated module interface.
-          test -f target/.build-mcpp/out/spirv/spirv_module_consumer.shaders.cppm
-          grep -q '^export module spirv_module_consumer.shaders;' \
-            target/.build-mcpp/out/spirv/spirv_module_consumer.shaders.cppm
+          #
+          # `shader_app`, while this directory is `spirv-module-consumer`. The
+          # module root is derived from `[package] name`, and the two are
+          # deliberately different here: a derivation that fell back to the
+          # manifest directory's leaf -- which is what this rule did before mcpp
+          # 2026.9.7.1 gave build programs `mcpp::package_name()` -- would write
+          # `spirv_module_consumer.shaders.cppm` and this test would find no file.
+          iface=target/.build-mcpp/out/spirv/shader_app.shaders.cppm
+          test -f "$iface" || {
+            echo "FAIL: no module interface at $iface"
+            find target/.build-mcpp/out/spirv -name '*.cppm' -print
+            exit 1; }
+          grep -q '^export module shader_app.shaders;' "$iface"
           # The interface must name no standard-library type: one that does
           # carries that header's templates in every consumer's BMI, measured at
           # 727 times the size of the std-free form.
-          if grep -n 'std::\|#include <' \
-               target/.build-mcpp/out/spirv/spirv_module_consumer.shaders.cppm; then
+          if grep -n 'std::\|#include <' "$iface"; then
             echo "FAIL: the generated module interface names a standard-library type"
             exit 1
           fi

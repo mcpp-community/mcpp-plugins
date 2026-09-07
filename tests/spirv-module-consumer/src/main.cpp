@@ -1,9 +1,13 @@
 // Nothing here names a generated file. The shaders arrive through one import,
 // and the two that share a stem are told apart by the directory they came from.
+//
+// `shader_app`, not `spirv_module_consumer`: the module root comes from
+// `[package] name`, and this project's directory is named differently on
+// purpose so that the two derivations are distinguishable here.
 import std;
-import spirv_module_consumer.shaders;
+import shader_app.shaders;
 
-namespace shaders = spirv_module_consumer::shaders;
+namespace shaders = shader_app::shaders;
 
 namespace {
 
