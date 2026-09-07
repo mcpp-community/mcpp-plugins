@@ -173,17 +173,43 @@ inline flavour classify(const std::string& path) {
     return flavour::none;
 }
 
+// HOW THIS HOST SPELLS A PROGRAM, decided where the build program is compiled.
+//
+// The build program runs on the machine doing the building, so these are
+// properties of the HOST and not of the target being compiled for -- a cross
+// build from Linux to Windows still looks for `glslc`, because that is the
+// binary about to be executed.
+#if defined(_WIN32)
+inline constexpr std::string_view kExeSuffix = ".exe";
+inline constexpr char             kPathSep   = ';';
+#else
+inline constexpr std::string_view kExeSuffix = "";
+inline constexpr char             kPathSep   = ':';
+#endif
+
+// The first of `<dir>/<name>` and `<dir>/<name>.exe` that exists. Both are
+// tried on every host rather than only the one whose suffix matches: a payload
+// repacked with the other convention is then found instead of silently missed,
+// and the cost is one `stat`.
+inline std::string program_in(const std::filesystem::path& dir, std::string_view name) {
+    std::string bare(name);
+    for (auto const& n : { bare, bare + std::string(kExeSuffix) }) {
+        auto p = (dir / n).string();
+        if (is_file(p)) return p;
+    }
+    return {};
+}
+
 inline std::string first_on_path(const char* exe) {
     const char* path = std::getenv("PATH");
     if (!path || !*path) return {};
     std::string_view sv(path);
     for (std::size_t i = 0; i <= sv.size();) {
-        auto sep = sv.find(':', i);
+        auto sep = sv.find(kPathSep, i);
         auto dir = sv.substr(i, sep == std::string_view::npos ? sv.size() - i : sep - i);
         i = sep == std::string_view::npos ? sv.size() + 1 : sep + 1;
         if (dir.empty()) continue;
-        auto p = (std::filesystem::path(dir) / exe).string();
-        if (is_file(p)) return p;
+        if (auto p = program_in(std::filesystem::path(dir), exe); !p.empty()) return p;
     }
     return {};
 }
@@ -213,10 +239,10 @@ inline compiler find_compiler(const options& opt) {
 
     if (const char* dir = mcpp::xpkg_dir("glslang"); dir && *dir)
         for (const char* exe : {"glslangValidator", "glslang"})
-            if (auto p = (std::filesystem::path(dir) / "bin" / exe).string(); is_file(p))
+            if (auto p = program_in(std::filesystem::path(dir) / "bin", exe); !p.empty())
                 return { p, flavour::glslang };
     if (const char* dir = mcpp::xpkg_dir("shaderc"); dir && *dir)
-        if (auto p = (std::filesystem::path(dir) / "bin" / "glslc").string(); is_file(p))
+        if (auto p = program_in(std::filesystem::path(dir) / "bin", "glslc"); !p.empty())
             return { p, flavour::glslc };
 
     for (const char* exe : {"glslangValidator", "glslang"})
