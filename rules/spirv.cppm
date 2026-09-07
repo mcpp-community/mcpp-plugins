@@ -113,6 +113,17 @@ struct options {
     // every consumer of this package had before the surface existed.
     mcpp::plugins::surface::kind surface = mcpp::plugins::surface::default_surface();
 
+    // Where the compiled SPIR-V lives. `header` compiles it in as generated
+    // source, `object` as a section reached through `.incbin`, `sidecar` as a
+    // file beside the artifact. See `mcpp::plugins::surface::storage` for the
+    // measurement that makes `header` the default.
+    //
+    // It changes what this rule asks the compiler for. Under `header` the
+    // compiler is told to emit a C declaration (`-mfmt=c`, `-x --vn`); under
+    // the other two it emits a bare `.spv`, which is both simpler and the one
+    // shape both compilers agree on.
+    mcpp::plugins::surface::storage storage = mcpp::plugins::surface::storage::header;
+
     // The module a consumer imports, and the namespace the declarations sit in:
     // `myapp.shaders` gives `myapp::shaders::blur_comp()`. Empty derives it from
     // the package directory, so a project that states nothing still gets a name
@@ -725,15 +736,32 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         std::filesystem::create_directories(dir, ec);
         const auto base = (dir / (p.stem().string() + "_" + std::string(stage))).string();
         const auto header = base + ".h";
+        // Declared here rather than beside the action below, because the item
+        // recorded a few lines down names it: the surface needs the payload's
+        // path to write `.incbin`, and it writes that before any action runs.
+        const std::string spv = base + ".spv";
         // As an `#include` writes it: relative to `gen`, which is the directory
         // this rule puts on the include path.
         std::string headerRel;
         for (auto const& seg : ns) headerRel += seg + "/";
         headerRel += p.stem().string() + "_" + std::string(stage) + ".h";
-        items.push_back({ .identifier  = p.stem().string() + "_" + std::string(stage),
-                          .name_space  = ns,
-                          .data_header = headerRel,
-                          .data_symbol = sym });
+        // WHERE A SIDECAR IS FOUND AT RUN TIME, AND WHAT THAT COSTS.
+        //
+        // The generated accessor opens this path relative to the WORKING
+        // DIRECTORY, so it is written relative to the package root -- which is
+        // where `mcpp run` starts the program, and where a project doing shader
+        // hot-reload runs it from. A program started from anywhere else finds
+        // nothing, and that is the property that keeps this storage off the
+        // default rather than a defect in it: the payload is not in the
+        // artifact, so something outside the artifact has to be true.
+        const auto sidecarName =
+            std::filesystem::path(spv).lexically_relative(root).generic_string();
+        items.push_back({ .identifier   = p.stem().string() + "_" + std::string(stage),
+                          .name_space   = ns,
+                          .data_header  = headerRel,
+                          .data_symbol  = sym,
+                          .payload_path = spv,
+                          .sidecar_name = sidecarName });
         const auto input  = std::filesystem::path(src).is_absolute()
                           ? src : root + "/" + src;
 
@@ -746,10 +774,15 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // rule writes `<base>.h` around it. glslang used to write the header
         // itself, which made the two routes' headers differ in whether they
         // could be included first -- see `write_header`.
+        const bool embedAsSource =
+            opt.storage == mcpp::plugins::surface::storage::header;
         const std::string inc    = base + ".inc";
-        const std::string output = inc;
+        const std::string output = embedAsSource ? inc : spv;
 
-        if (!write_header(header, inc, sym, cc.kind)) return false;
+        // The wrapper header exists only to make the compiler's C output a
+        // translation unit. The other two storages never read a header, so
+        // writing one would leave a file nothing includes.
+        if (embedAsSource && !write_header(header, inc, sym, cc.kind)) return false;
 
         mcpp::action a;
         a.id          = id.c_str();
@@ -777,16 +810,22 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         for (auto const& d : opt.defines) a.arg(("-D" + d).c_str());
         for (auto const& i : opt.includes)
             a.arg(("-I" + (std::filesystem::path(i).is_absolute() ? i : root + "/" + i)).c_str());
-        if (cc.kind == flavour::glslc) {
-            // `-mfmt=c` is the initialiser list; the declaration around it was
-            // written above.
-            a.arg("-mfmt=c");
-        } else {
-            // `-x --vn` is what makes glslang's output a C declaration rather
-            // than a binary: a `const uint32_t <sym>[]` the program includes.
-            a.arg("-x");
-            a.arg("--vn"); a.arg(sym.c_str());
+        if (embedAsSource) {
+            if (cc.kind == flavour::glslc) {
+                // `-mfmt=c` is the initialiser list; the declaration around it
+                // was written above.
+                a.arg("-mfmt=c");
+            } else {
+                // `-x --vn` is what makes glslang's output a C declaration
+                // rather than a binary: a `const uint32_t <sym>[]` the program
+                // includes.
+                a.arg("-x");
+                a.arg("--vn"); a.arg(sym.c_str());
+            }
         }
+        // Under `object` and `sidecar` neither flag is passed, so both
+        // compilers write the same thing: a bare SPIR-V module. The one place
+        // the two flavours differed disappears with the storage that needed it.
         a.arg("-o"); a.arg(output.c_str());
         a.arg(input.c_str());
         a.input(input.c_str());
@@ -802,6 +841,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     // ── What a consumer names ────────────────────────────────────────────────
     mcpp::plugins::surface::options so;
     so.surface     = opt.surface;
+    so.store       = opt.storage;
     so.elem        = mcpp::plugins::surface::element::word32;
     so.module_name = moduleName;
     so.out_dir     = gen;
@@ -816,6 +856,11 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     // declared about it.
     mcpp::generated(out->interface_file.c_str());
     mcpp::generated(out->impl_file.c_str());
+    // The `.S` under object storage. It is an ordinary source: mcpp assembles
+    // it, and `.incbin` reads the payload the action above produced, which by
+    // then exists because a `role = "source"` action is ordered before this
+    // package's compiles.
+    if (!out->assembly_file.empty()) mcpp::generated(out->assembly_file.c_str());
     if (!out->include_dir.empty()) mcpp::include_dir(out->include_dir.c_str());
 
     // Which collection produced these actions. The version was `0.1.1` while

@@ -119,6 +119,45 @@ enum class kind { module_, c_header };
 // call site, which is undefined behaviour on an under-aligned byte array.
 enum class element { byte_, word32 };
 
+// WHERE THE BYTES LIVE. Orthogonal to `kind`, which decides how a consumer
+// NAMES them: the declarations are identical under all three, so a project
+// changes this and no consumer changes.
+//
+// WHICH ONE TO USE IS A MEASUREMENT, NOT A PREFERENCE. With GCC 16.1 on this
+// project's own fixtures, 100 payloads of 16 KB each:
+//
+//   header route   compile 0.64s + link 0.44s                = 1.10s
+//   object route   convert 1.28s + compile 0.44s + link 0.46s = 2.17s
+//
+// The header route is faster, because at a real shader's size neither route has
+// a measurable marginal cost and the total is decided by how many processes
+// start -- and one compiler invocation absorbs many headers. The crossover is
+// the TOTAL embedded byte count, not the payload count: below about 1 MB the
+// header route wins, and above about 4 MB the compiler's slightly superlinear
+// curve loses by an order of magnitude (2.31s against 0.116s at 4 MB). Source
+// expansion is a constant 2.75x, which is the second half of the same reason.
+//
+// So `header` is the default and `object` is what a project reaches for when it
+// has more payload than that, not what it reaches for because objects sound
+// tidier.
+enum class storage {
+    // The payload is a C array in generated source, compiled into the program.
+    // No assembler involved, so it works on every toolchain including MSVC.
+    header,
+    // The payload is a section in an object, reached through `.incbin` in a
+    // generated `.S`. The bytes never pass through the C++ compiler.
+    //
+    // Requires a GAS-capable assembler. Every gcc and clang toolchain has one
+    // on all three platforms; MSVC does not, and mcpp refuses `.S` under it, so
+    // the emitter falls back to `header` there and says so once.
+    object,
+    // The payload is written beside the artifact and read at run time. The
+    // program's correctness then depends on its working directory, which is the
+    // reason this is not the default -- but it is what shader hot-reload needs,
+    // and what a payload too large to link needs.
+    sidecar,
+};
+
 // One payload in a group.
 struct item {
     // The C++ identifier, already sanitised by the caller: `blur_comp`.
@@ -136,7 +175,17 @@ struct item {
     // could not tell them apart.
     std::string data_header;
     // The array that header declares, qualified if it sits in a namespace.
+    // Unused under `storage::object`, where the linker symbol is derived from
+    // the accessor name instead, and under `storage::sidecar`.
     std::string data_symbol;
+    // The payload file itself, as an absolute path. Required by `object`, whose
+    // generated `.S` names it in `.incbin`, and by `sidecar`, which copies it.
+    // The file need not exist yet: `.incbin` resolves its argument at assembly
+    // time, which is after the action that writes it has run, and that is what
+    // lets the whole surface be written at plan time.
+    std::string payload_path;
+    // Where a sidecar payload is found at run time, relative to the artifact.
+    std::string sidecar_name;
     // The payload's size IN BYTES, as an expression valid where the generated
     // implementation writes it. Empty means `sizeof <data_symbol>`.
     //
@@ -152,6 +201,7 @@ struct item {
 
 struct options {
     kind        surface = kind::module_;
+    storage     store   = storage::header;
     element     elem    = element::word32;
     // The module a consumer imports, e.g. `myapp.shaders`. The namespace is
     // this name with `.` replaced by `::`, which is why there is no second
@@ -169,6 +219,13 @@ struct options {
 struct emitted {
     // The interface unit: a `.cppm` under `module_`, a `.h` under `c_header`.
     std::string interface_file;
+    // The generated `.S` under `storage::object`, empty otherwise. The caller
+    // adds it to the build the same way it adds the implementation.
+    std::string assembly_file;
+    // The storage actually used. Differs from what was asked for when the
+    // toolchain cannot assemble: MSVC has no GAS, so `object` degrades to
+    // `header` and this says so rather than leaving the caller to assume.
+    storage store = storage::header;
     // The translation unit defining the accessors. Always a plain `.cpp`.
     std::string impl_file;
     // Non-empty under `module_`: what the interface unit provides, which the
@@ -304,6 +361,64 @@ inline std::string declarations(std::span<const item> items, const options& opt)
     return s;
 }
 
+// ONE OBJECT FORMAT PER PLATFORM, AND THE DIFFERENCES ARE NOT COSMETIC.
+//
+// `.incbin` is the portable part: gas and clang's integrated assembler both
+// accept it everywhere, and it resolves its argument at ASSEMBLY time, which is
+// why this file can be written before the payload exists. What is not portable
+// is the section directive and whether a C symbol carries a leading underscore.
+//
+//   ELF     `.section .rodata`,       symbol as written
+//   Mach-O  `.section __TEXT,__const`, symbol PREFIXED with `_`
+//   COFF    `.section .rdata,"dr"`,   symbol as written on x86_64
+//
+// Mach-O's underscore is the one that fails quietly in the other direction: an
+// assembly label without it defines a symbol the C++ side never resolves, and
+// the link error names the accessor rather than the missing prefix.
+struct asm_dialect {
+    std::string_view section;
+    std::string_view symbol_prefix;
+};
+
+inline asm_dialect dialect_for(std::string_view targetOs) {
+    if (targetOs == "macos" || targetOs == "macosx" || targetOs == "darwin")
+        return { ".section __TEXT,__const", "_" };
+    if (targetOs == "windows") return { ".section .rdata,\"dr\"", "" };
+    return { ".section .rodata", "" };
+}
+
+// `.balign 4` rather than nothing: `VkShaderModuleCreateInfo::pCode` requires
+// four-byte alignment, and a section directive alone does not promise it. The
+// header route gets alignment from the array's element type; this route has to
+// ask for it.
+inline std::string assembly_for(std::span<const item> items, const options& opt,
+                                std::string_view targetOs) {
+    const auto d = dialect_for(targetOs);
+    std::string s =
+        "// Generated by mcpp.plugins.surface. Do not edit.\n"
+        "//\n"
+        "// The payloads, as sections rather than as C arrays. `.incbin` resolves\n"
+        "// its argument when this file is assembled, which is after the actions\n"
+        "// that write those files have run.\n";
+    for (auto const& it : items) {
+        const auto base = accessor_base(opt, it);
+        s += std::format("\n    {}\n"
+                         "    .globl {}{}_begin\n"
+                         "    .balign 4\n"
+                         "{}{}_begin:\n"
+                         "    .incbin \"{}\"\n"
+                         "    .globl {}{}_end\n"
+                         "{}{}_end:\n",
+                         d.section,
+                         d.symbol_prefix, base,
+                         d.symbol_prefix, base,
+                         it.payload_path,
+                         d.symbol_prefix, base,
+                         d.symbol_prefix, base);
+    }
+    return s;
+}
+
 // ---- the tool ---------------------------------------------------------------
 
 // Writes the interface and the implementation, and returns what the caller has
@@ -324,10 +439,25 @@ inline std::optional<emitted> emit(std::span<const item> items, const options& o
     const auto segs = split_module_name(opt.module_name);
     const auto by   = opt.produced_by.empty() ? std::string("mcpp.plugins.surface")
                                               : opt.produced_by;
+
+    // MSVC HAS NO GAS, AND mcpp REFUSES `.S` UNDER IT.
+    //
+    // `src/build/prepare.cppm` states that outright: "GAS assembly sources
+    // (.S/.s) are not supported by the MSVC toolchain". So object storage
+    // degrades to header storage there rather than producing a file the build
+    // will refuse. The SURFACE does not change -- the declarations are the same
+    // under both -- so a consumer compiled either way is the same source.
+    emitted out;
+    out.store = opt.store;
+    if (out.store == storage::object
+        && std::string_view(mcpp::compiler()) == "msvc") {
+        out.store = storage::header;
+        mcpp::warning("mcpp.plugins.surface: object storage needs a GAS assembler and the "
+                      "MSVC toolchain has none; the payload is compiled in as generated "
+                      "source instead. The declarations a consumer sees are unchanged.");
+    }
     const auto dir  = std::filesystem::path(opt.out_dir);
     const auto body = declarations(items, opt);
-
-    emitted out;
 
     // ---- interface ----
     std::string iface;
@@ -354,35 +484,129 @@ inline std::optional<emitted> emit(std::span<const item> items, const options& o
 
     // ---- implementation ----
     //
-    // The one translation unit that includes the data headers. It is a plain
-    // `.cpp` under both surfaces, because the accessors have C language linkage
-    // and so need no attachment to the module.
-    std::string impl;
-    impl += std::format("// Generated by mcpp.plugins.surface for {}. Do not edit.\n"
-                        "//\n"
-                        "// The only translation unit that includes the generated data headers.\n"
-                        "// Each declares a `static` array, so this is also the only copy of the\n"
-                        "// bytes in the program.\n", by);
-    for (auto const& it : items) impl += std::format("#include \"{}\"\n", it.data_header);
-    impl += "\n";
-    impl += element_width_assertion(opt.elem);
-    impl += "\n";
+    // The one translation unit that defines the accessors. A plain `.cpp` under
+    // every surface and every storage, because the accessors have C language
+    // linkage and so need no attachment to the module. What differs between the
+    // three storages is only where it reads the bytes from.
     const char* elem = element_type(opt.elem);
-    for (auto const& it : items) {
-        const auto base = accessor_base(opt, it);
-        const auto size = it.data_size_expr.empty()
-                        ? std::format("sizeof {}", it.data_symbol)
-                        : it.data_size_expr;
-        impl += std::format(
-            "extern \"C\" const {0}* {1}_data() {{ return {2}; }}\n"
-            "extern \"C\" unsigned long {1}_size() {{ return {3}; }}\n",
-            elem, base, it.data_symbol, size);
+    std::string impl;
+    impl += std::format("// Generated by mcpp.plugins.surface for {}. Do not edit.\n", by);
+
+    if (out.store == storage::header) {
+        impl += "//\n"
+                "// The only translation unit that includes the generated data headers.\n"
+                "// Each declares a `static` array, so this is also the only copy of the\n"
+                "// bytes in the program.\n";
+        for (auto const& it : items) impl += std::format("#include \"{}\"\n", it.data_header);
+        impl += "\n";
+        impl += element_width_assertion(opt.elem);
+        impl += "\n";
+        for (auto const& it : items) {
+            const auto base = accessor_base(opt, it);
+            const auto size = it.data_size_expr.empty()
+                            ? std::format("sizeof {}", it.data_symbol)
+                            : it.data_size_expr;
+            impl += std::format(
+                "extern \"C\" const {0}* {1}_data() {{ return {2}; }}\n"
+                "extern \"C\" unsigned long {1}_size() {{ return {3}; }}\n",
+                elem, base, it.data_symbol, size);
+        }
+    } else if (out.store == storage::object) {
+        impl += "//\n"
+                "// The bytes are in a section written by the generated `.S`. This file\n"
+                "// only names its two boundary symbols, so nothing here parses a payload\n"
+                "// and the C++ compiler never sees one.\n"
+                "//\n"
+                "// The symbols are declared as arrays of the element type rather than as\n"
+                "// `char`: the assembly aligned the section to four bytes, and a\n"
+                "// declaration that said `char` would let a consumer reach it through an\n"
+                "// under-aligned pointer with nothing to notice.\n";
+        impl += "\n";
+        impl += element_width_assertion(opt.elem);
+        impl += "\nextern \"C\" {\n";
+        for (auto const& it : items) {
+            const auto base = accessor_base(opt, it);
+            impl += std::format("extern const {0} {1}_begin[];\n"
+                                "extern const {0} {1}_end[];\n", elem, base);
+        }
+        impl += "}\n\n";
+        for (auto const& it : items) {
+            const auto base = accessor_base(opt, it);
+            impl += std::format(
+                "extern \"C\" const {0}* {1}_data() {{ return {1}_begin; }}\n"
+                "extern \"C\" unsigned long {1}_size() {{\n"
+                "    return static_cast<unsigned long>(({1}_end - {1}_begin) * sizeof({0}));\n"
+                "}}\n", elem, base);
+        }
+    } else {
+        impl += "//\n"
+                "// The payloads are files beside the artifact, read on first use. The\n"
+                "// path is resolved against the WORKING DIRECTORY, which is the property\n"
+                "// that makes this storage the one a project opts into rather than the\n"
+                "// default: a program started from elsewhere finds nothing.\n"
+                "//\n"
+                "// Read once and kept: an accessor that reloaded would hand two callers\n"
+                "// two different pointers to the same payload, and a device API given\n"
+                "// the second after the first was freed is a defect with no message.\n";
+        impl += "#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n\n";
+        impl += element_width_assertion(opt.elem);
+        impl += std::format(R"IMPL(
+namespace {{
+
+struct blob {{ {0}* data = nullptr; unsigned long size = 0; bool tried = false; }};
+
+blob& load(const char* path, blob& b) {{
+    if (b.tried) return b;
+    b.tried = true;
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) {{
+        std::fprintf(stderr, "mcpp.plugins.surface: cannot open %s\n", path);
+        return b;
+    }}
+    std::fseek(f, 0, SEEK_END);
+    const long n = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (n > 0) {{
+        b.data = static_cast<{0}*>(std::malloc(static_cast<unsigned long>(n)));
+        if (b.data && std::fread(b.data, 1, static_cast<unsigned long>(n), f)
+                      == static_cast<unsigned long>(n))
+            b.size = static_cast<unsigned long>(n);
+        else {{ std::free(b.data); b.data = nullptr; }}
+    }}
+    std::fclose(f);
+    return b;
+}}
+
+}} // namespace
+)IMPL", elem);
+        impl += "\n";
+        for (auto const& it : items) {
+            const auto base = accessor_base(opt, it);
+            impl += std::format(
+                "static blob {0}_blob;\n"
+                "extern \"C\" const {1}* {0}_data() {{\n"
+                "    return load(\"{2}\", {0}_blob).data;\n"
+                "}}\n"
+                "extern \"C\" unsigned long {0}_size() {{\n"
+                "    return load(\"{2}\", {0}_blob).size;\n"
+                "}}\n", base, elem, it.sidecar_name);
+        }
     }
 
     out.impl_file = (dir / (opt.module_name + ".impl.cpp")).string();
     if (!write_if_different(out.impl_file, impl)) {
         std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n", out.impl_file);
         return std::nullopt;
+    }
+
+    if (out.store == storage::object) {
+        out.assembly_file = (dir / (opt.module_name + ".payload.S")).string();
+        if (!write_if_different(out.assembly_file,
+                                assembly_for(items, opt, mcpp::target_os()))) {
+            std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n",
+                                     out.assembly_file);
+            return std::nullopt;
+        }
     }
     return out;
 }

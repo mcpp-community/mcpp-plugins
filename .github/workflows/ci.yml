@@ -198,6 +198,85 @@ jobs:
           rm -f dup.log restored.log
           echo "ok: and it builds again with one shader per stem"
 
+      # NO BUILD PROGRAM AT ALL, WHICH IS WHAT THE TWO KEYS BUY.
+      #
+      # `spirv-consumer` and `spirv-module-consumer` both write a `build.mcpp`,
+      # so neither can tell whether mcpp would have written it. This fixture has
+      # a dependency edge naming a feature and nothing else: no `host-module`,
+      # no build program. The step asserts both absences, because a fixture that
+      # gained one by accident would still pass every other check here.
+      - name: rules-spirv with no build program
+        working-directory: tests/spirv-zero-config
+        run: |
+          test ! -f build.mcpp || { echo "FAIL: the fixture has its own build program"; exit 1; }
+          grep -q 'host-module' mcpp.toml && { echo "FAIL: the fixture declares host-module"; exit 1; }
+          "$MCPP" build | tee build.log
+          grep -q 'Rules mcpp.rules.spirv' build.log \
+            || { echo "FAIL: the build did not report which rule it ran"; exit 1; }
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          # And the program mcpp wrote is where it says it is, and is the one a
+          # project would take over.
+          test -f target/.build-mcpp/build.mcpp
+          grep -q '^import mcpp.rules.spirv;' target/.build-mcpp/build.mcpp
+          echo "ok: one edge, no program, shaders compiled"
+
+      # WHERE THE BYTES LIVE, TWICE, AGAINST ONE UNCHANGED CONSUMER.
+      #
+      # Both fixtures' `src/main.cpp` has the same shape as the header-stored
+      # one: one import, one call, a `payload` struct. That is the claim -- the
+      # storage is not something a consumer can see -- and it is why these are
+      # separate fixtures rather than options on an existing one.
+      #
+      # `object` is what a project reaches for above roughly 1 MB of total
+      # payload; below that the header route is faster, measured at 1.10s
+      # against 2.17s for 100 shaders of 16 KB.
+      - name: rules-spirv with object storage
+        working-directory: tests/spirv-object-storage
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          # The bytes are a section, so the compiler never saw a C array: the
+          # payload is a bare `.spv` and an `.S` names it with `.incbin`.
+          test -f target/.build-mcpp/out/spirv/scale_comp.spv
+          test -f target/.build-mcpp/out/spirv/spirv_object_storage.shaders.payload.S
+          grep -q '\.incbin' target/.build-mcpp/out/spirv/spirv_object_storage.shaders.payload.S
+          if ls target/.build-mcpp/out/spirv/*.inc >/dev/null 2>&1; then
+            echo "FAIL: object storage still produced a C initialiser list"
+            exit 1
+          fi
+          # `pCode` wants four-byte alignment and a section directive alone does
+          # not promise it.
+          grep -q '\.balign 4' target/.build-mcpp/out/spirv/spirv_object_storage.shaders.payload.S
+          echo "ok: the payload is a section, not generated source"
+
+      - name: rules-spirv with sidecar storage
+        working-directory: tests/spirv-sidecar
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          test -f target/.build-mcpp/out/spirv/scale_comp.spv
+          # THE REVERSE LEG, AND IT IS THE POINT OF THIS STORAGE. The accessor
+          # opens a path relative to the working directory, so the program finds
+          # its shaders from the package root and must not from anywhere else.
+          # Without this half the fixture would pass against an implementation
+          # that had quietly embedded the payload after all.
+          bin=$(ls target/*/*/bin/spirv-sidecar)
+          bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
+          if (cd /tmp && "$bin" > away.log 2>&1); then
+            echo "FAIL: the sidecar program succeeded from the wrong directory"
+            cat /tmp/away.log
+            exit 1
+          fi
+          grep -q 'sidecar payload was not found' /tmp/away.log \
+            || { echo "FAIL: it failed for some other reason"; cat /tmp/away.log; exit 1; }
+          echo "ok: found from the package root, reported missing from elsewhere"
+
       # SLANG: A DIFFERENT LANGUAGE, THE SAME SURFACE.
       #
       # The point of this step is not that Slang compiles -- it is that a

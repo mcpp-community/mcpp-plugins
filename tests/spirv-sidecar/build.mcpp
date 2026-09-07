@@ -1,0 +1,24 @@
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.rules.spirv;
+
+// THE THIRD STORAGE: the payload stays a file and the program reads it.
+//
+// The consumer's source is again unchanged -- one import, one call, a `payload`
+// struct -- which is the whole claim the surface makes. What changes is that the
+// bytes are not in the artifact at all.
+//
+// This is what shader hot reload needs, and what a payload too large to link
+// needs. Its cost is stated rather than hidden: the accessor opens a path
+// relative to the WORKING DIRECTORY, so the program finds its shaders when run
+// from the package root and does not when run from elsewhere. That is why it is
+// not the default, and it is also why `mcpp pack` of such a program has
+// something further to collect where a header- or object-stored one has nothing.
+int main() {
+    mcpp::rerun_if_changed_glob("shaders/**/*.comp");
+    mcpp::rules::spirv::options opt;
+    opt.surface = mcpp::plugins::surface::kind::module_;
+    opt.storage = mcpp::plugins::surface::storage::sidecar;
+    return mcpp::rules::spirv::compile(opt) ? 0 : 1;
+}

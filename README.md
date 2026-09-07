@@ -168,6 +168,43 @@ std-free equivalent, and that cost is fixed rather than proportional to the
 payload -- it is `<span>`'s templates, present whether the payload is 16 KB or
 16 MB. A consumer that wants a `std::span` constructs one from the two members.
 
+**Where the bytes live is a second, independent choice.** The surface decides how
+a consumer names a payload; `storage` decides where it sits. The declarations are
+identical under all three, so a project changes this and no consumer changes.
+
+| storage | the payload is | reach for it when |
+|---|---|---|
+| `header` (default) | a C array in generated source, compiled in | almost always |
+| `object` | a section, through `.incbin` in a generated `.S` | total payload is large |
+| `sidecar` | a file beside the artifact, read at run time | hot reload, or a payload too large to link |
+
+**Which one is a measurement, not a preference.** With GCC 16.1 on 100 payloads
+of 16 KB each -- the size of an ordinary compute shader:
+
+```
+header route   compile 0.64s + link 0.44s                = 1.10s
+object route   convert 1.28s + compile 0.44s + link 0.46s = 2.17s
+```
+
+The header route is faster, because at that size neither route has a measurable
+marginal cost and the total is decided by how many processes start; one compiler
+invocation absorbs many headers. The crossover is the TOTAL embedded byte count
+rather than the payload count: below about 1 MB the header route wins, and above
+about 4 MB the compiler's slightly superlinear curve loses by an order of
+magnitude (2.31s against 0.116s). Source expansion is a constant 2.75x.
+
+**`object` needs a GAS assembler.** Every gcc and clang toolchain has one on all
+three platforms; MSVC does not, and mcpp refuses `.S` under it, so the emitter
+falls back to `header` there and says so once. The surface does not change, so a
+consumer compiled either way is the same source.
+
+**`sidecar` states its cost rather than hiding it.** The accessor opens a path
+relative to the working directory, so the program finds its payloads when run
+from the package root and does not when run from elsewhere -- which is why it is
+not the default, and why `mcpp pack` of such a program has something further to
+collect. `tests/spirv-sidecar` asserts both halves: found from the root, and
+reported missing from `/tmp`.
+
 **The default follows the project.** `[language] modules = true` gives the
 module surface, `false` gives a header with the same declarations. mcpp reports
 the setting as `MCPP_LANGUAGE_MODULES`; an engine that does not report it leaves

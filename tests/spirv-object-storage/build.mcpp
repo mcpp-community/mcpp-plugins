@@ -1,0 +1,23 @@
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.rules.spirv;
+
+// STORAGE IS THE ONE THING THIS FIXTURE CHANGES.
+//
+// The consumer's source is byte-identical to `spirv-module-consumer`'s idea of
+// how a shader is reached: one import, one call, a `payload` struct. What moves
+// is where the bytes live -- a section written by a generated `.S` rather than a
+// C array in generated source -- and the point of the fixture is that moving it
+// changes nothing a consumer can see.
+//
+// A project reaches for this above roughly 1 MB of total payload; below that the
+// header storage is faster, for the reason `mcpp::plugins::surface::storage`
+// records with the numbers.
+int main() {
+    mcpp::rerun_if_changed_glob("shaders/**/*.comp");
+    mcpp::rules::spirv::options opt;
+    opt.surface = mcpp::plugins::surface::kind::module_;
+    opt.storage = mcpp::plugins::surface::storage::object;
+    return mcpp::rules::spirv::compile(opt) ? 0 : 1;
+}
