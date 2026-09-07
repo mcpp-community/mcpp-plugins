@@ -1,0 +1,31 @@
+// Imports every rule and calls it. The call matters as much as the import: a
+// module can be well-formed and still hold a template or an `if constexpr`
+// branch that is only instantiated at a call site, and a rule that refuses to
+// build the host it is being compiled for should say so here rather than in
+// someone's project.
+import std;
+import mcpp;
+import mcpp.rules.ascendc;
+import mcpp.rules.cuda;
+import mcpp.rules.hip;
+import mcpp.rules.spirv;
+import mcpp.rules.sycl;
+import mcpp.tools.embed;
+
+int main() {
+    // No accelerator is named, so each of these returns true without looking
+    // for a payload. What is asserted is that the module compiled and the
+    // entry point resolved on this host.
+    bool ok = mcpp::rules::ascendc::compile()
+           && mcpp::rules::cuda::compile()
+           && mcpp::rules::hip::compile()
+           && mcpp::rules::spirv::compile()
+           && mcpp::rules::sycl::compile();
+    // `tools::embed` has no accelerator gate, so it is asked the one question
+    // that writes nothing: where it WOULD put a header. `embed::file` is not
+    // called, because a fixture whose point is a compilation should not also
+    // produce output.
+    ok = ok && !mcpp::tools::embed::header_path("probe.bin").empty();
+    std::println("all-rules-compile: every rule module compiled for this host");
+    return ok ? 0 : 1;
+}

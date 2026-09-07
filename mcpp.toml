@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.2.4"
+version     = "0.2.5"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -112,14 +112,61 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 # SET, so this is a conjunction of two membership tests rather than a
 # contradiction -- and without it every SYCL build would download a CUDA
 # toolkit it may have no target for.
-[target.'cfg(all(accelerator = "sycl", accelerator = "cuda"))'.feature-xlings.rules-sycl]
+#
+# `linux` is part of the predicate for a reason that is measured rather than
+# stylistic: upstream does not build the CUDA plugin for Windows, and the
+# published Windows asset carries Level Zero and OpenCL adapters only. The rule
+# refuses that combination on that host, and a refusal that arrives after a
+# multi-gigabyte download is a worse refusal -- provisioning runs before the
+# rule does.
+[target.'cfg(all(accelerator = "sycl", accelerator = "cuda", linux))'.feature-xlings.rules-sycl]
 "xim:cuda-nvcc" = "12.9.86"
 
-# glslang alone: it is the rule's first choice, and `xim:shaderc` is the
-# fallback a project names when it wants glslc instead. Declaring both would
-# install both and use one.
-[target.'cfg(accelerator = "vulkan")'.feature-xlings.rules-spirv]
+# ONE COMPILER PER PLATFORM, AND NOT THE SAME ONE EVERYWHERE.
+#
+# This rule drives both reference compilers and writes the C declaration itself
+# on the glslc route, so which one is present is not a difference a consumer
+# sees. That is what makes cross-platform parity affordable: it is provided by
+# the rule's ability to CHOOSE, not by publishing one compiler three times.
+#
+# Linux keeps `xim:glslang`, so nothing about an existing Linux build changes.
+# macOS and Windows take `xim:shaderc`, which is the compiler this ecosystem
+# publishes for them -- glslang has no upstream binary for either, and building
+# it three times buys nothing glslc does not already give.
+#
+# Declaring both on one platform would install both and use one, so each block
+# names exactly the compiler that platform will run.
+[target.'cfg(all(accelerator = "vulkan", linux))'.feature-xlings.rules-spirv]
 "xim:glslang" = ">=15.1.0"
+
+# AN EXACT VERSION HERE, WHERE LINUX HAS A FLOOR, AND THE REASON IS THE
+# ENGINE'S COMMAND LINE RATHER THAN THE PACKAGE.
+#
+# mcpp hands its provisioning request to xlings as a JSON argument on a shell
+# command line. On Windows that line is parsed by cmd.exe, whose quoting rules
+# are not the ones the JSON is escaped for: the `\"` sequences leave cmd's
+# quote state OFF by the time it reaches a `>` in a version constraint, so the
+# `>` is read as a REDIRECTION. Measured on windows-2022 with mcpp 2026.9.6.6:
+#
+#   Provisioning [xlings.workspace] entries declared by dependencies
+#       (xim:shaderc@>=2026.3)
+#   The filename, directory name, or volume label syntax is incorrect.
+#   error: ... xlings exited 1
+#
+# -- cmd's own message about an unusable redirection target, arriving as a
+# packaging failure. No declaration reachable on Windows had carried a `>`
+# before, which is why the whole `>=` shape had never been exercised there.
+#
+# An exact version is a legitimate declaration and not a workaround in
+# disguise: mcpp reads it as a CHOICE, so a project that wants a different one
+# still wins and the override is reported. macOS takes the same value so the
+# two platforms that use this compiler agree. Both revert to `>=2026.3` once a
+# released engine escapes the argument for cmd.
+[target.'cfg(all(accelerator = "vulkan", macos))'.feature-xlings.rules-spirv]
+"xim:shaderc" = "2026.3"
+
+[target.'cfg(all(accelerator = "vulkan", windows))'.feature-xlings.rules-spirv]
+"xim:shaderc" = "2026.3"
 
 # 8.5.0 is a real floor rather than a preference: the mixed-mode object -- the
 # one carrying both the device binary and a host-callable launcher, which is

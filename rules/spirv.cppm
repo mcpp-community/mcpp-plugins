@@ -58,6 +58,25 @@ export module mcpp.rules.spirv;
 import std;
 import mcpp;
 
+
+// WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
+//
+// `std::print` and `std::println` are not header-only. Both of their overloads
+// reach into the libc++ DYLIB -- `__is_posix_terminal(FILE*)` for the stdout
+// form and `__get_ostream_file(ostream&)` for the stream form -- and those
+// symbols were added to that library in a version macOS 14 does not ship. A
+// build program's link resolves `-lc++` to the system copy there, so a rule
+// that printed with `std::println` compiled and then failed to link:
+//
+//   ld64.lld: error: undefined symbol: std::__1::__is_posix_terminal(__sFILE*)
+//
+// naming neither the call that needed it nor the reason. Measured on
+// macos-14; macos-15 has the symbol, which is why nothing saw this until a
+// rule was first compiled on the older of the two supported releases.
+//
+// `std::format` is header-only and has no such dependency, so every message in
+// this file is formatted and then streamed.
+
 export namespace mcpp::rules::spirv {
 
 struct options {
@@ -173,17 +192,43 @@ inline flavour classify(const std::string& path) {
     return flavour::none;
 }
 
+// HOW THIS HOST SPELLS A PROGRAM, decided where the build program is compiled.
+//
+// The build program runs on the machine doing the building, so these are
+// properties of the HOST and not of the target being compiled for -- a cross
+// build from Linux to Windows still looks for `glslc`, because that is the
+// binary about to be executed.
+#if defined(_WIN32)
+inline constexpr std::string_view kExeSuffix = ".exe";
+inline constexpr char             kPathSep   = ';';
+#else
+inline constexpr std::string_view kExeSuffix = "";
+inline constexpr char             kPathSep   = ':';
+#endif
+
+// The first of `<dir>/<name>` and `<dir>/<name>.exe` that exists. Both are
+// tried on every host rather than only the one whose suffix matches: a payload
+// repacked with the other convention is then found instead of silently missed,
+// and the cost is one `stat`.
+inline std::string program_in(const std::filesystem::path& dir, std::string_view name) {
+    std::string bare(name);
+    for (auto const& n : { bare, bare + std::string(kExeSuffix) }) {
+        auto p = (dir / n).string();
+        if (is_file(p)) return p;
+    }
+    return {};
+}
+
 inline std::string first_on_path(const char* exe) {
     const char* path = std::getenv("PATH");
     if (!path || !*path) return {};
     std::string_view sv(path);
     for (std::size_t i = 0; i <= sv.size();) {
-        auto sep = sv.find(':', i);
+        auto sep = sv.find(kPathSep, i);
         auto dir = sv.substr(i, sep == std::string_view::npos ? sv.size() - i : sep - i);
         i = sep == std::string_view::npos ? sv.size() + 1 : sep + 1;
         if (dir.empty()) continue;
-        auto p = (std::filesystem::path(dir) / exe).string();
-        if (is_file(p)) return p;
+        if (auto p = program_in(std::filesystem::path(dir), exe); !p.empty()) return p;
     }
     return {};
 }
@@ -200,10 +245,9 @@ inline compiler find_compiler(const options& opt) {
             // Named but unrecognised: taking it as glslang would pass glslang's
             // flags to something that is not glslang, and the error would name
             // a flag rather than this decision.
-            std::println(stderr,
-                "mcpp.rules.spirv: options::compiler names '{}', which is neither glslang\n"
+            std::cerr << std::format("mcpp.rules.spirv: options::compiler names '{}', which is neither glslang\n"
                 "  nor glslc by program name, and the two share almost no flags. Rename the\n"
-                "  program or point at the real one.", opt.compiler);
+                "  program or point at the real one.", opt.compiler) << '\n';
             return { .reported = true };
         }
         return { opt.compiler, k };
@@ -213,10 +257,10 @@ inline compiler find_compiler(const options& opt) {
 
     if (const char* dir = mcpp::xpkg_dir("glslang"); dir && *dir)
         for (const char* exe : {"glslangValidator", "glslang"})
-            if (auto p = (std::filesystem::path(dir) / "bin" / exe).string(); is_file(p))
+            if (auto p = program_in(std::filesystem::path(dir) / "bin", exe); !p.empty())
                 return { p, flavour::glslang };
     if (const char* dir = mcpp::xpkg_dir("shaderc"); dir && *dir)
-        if (auto p = (std::filesystem::path(dir) / "bin" / "glslc").string(); is_file(p))
+        if (auto p = program_in(std::filesystem::path(dir) / "bin", "glslc"); !p.empty())
             return { p, flavour::glslc };
 
     for (const char* exe : {"glslangValidator", "glslang"})
@@ -229,13 +273,38 @@ inline compiler find_compiler(const options& opt) {
 // magic, the second is the release. The release is what a floor compares, and
 // stating it as a fact is what makes a build log answer "which compiler
 // produced this SPIR-V" without anyone having to reproduce the build.
+// `popen` is POSIX and Windows spells it `_popen`; the null device differs
+// too. Both are named here so the call sites below read the same on every
+// host -- the alternative is a `#if` around each one, and the one that gets
+// forgotten is the one nobody compiles.
+inline FILE* open_pipe(const std::string& cmd) {
+#if defined(_WIN32)
+    return ::_popen(cmd.c_str(), "r");
+#else
+    return ::popen(cmd.c_str(), "r");
+#endif
+}
+inline void close_pipe(FILE* p) {
+#if defined(_WIN32)
+    ::_pclose(p);
+#else
+    ::pclose(p);
+#endif
+}
+inline constexpr const char* kNullDevice =
+#if defined(_WIN32)
+    "NUL";
+#else
+    "/dev/null";
+#endif
+
 inline std::string run_and_capture(const std::string& cmd) {
-    FILE* p = ::popen(cmd.c_str(), "r");
+    FILE* p = open_pipe(cmd);
     if (!p) return {};
     std::string text;
     char buf[512];
     while (std::fgets(buf, sizeof buf, p)) text += buf;
-    ::pclose(p);
+    close_pipe(p);
     return text;
 }
 
@@ -257,7 +326,8 @@ inline bool has_optimizer(const std::string& exe) {
 }
 
 inline std::string compiler_version(const compiler& cc) {
-    const std::string text = run_and_capture("\"" + cc.path + "\" --version 2>/dev/null");
+    const std::string text = run_and_capture("\"" + cc.path + "\" --version 2>"
+                                             + std::string(kNullDevice));
     // glslc: `shaderc v2026.3 2fbab05...` on the first line. glslang:
     // `Glslang Version: 11:15.1.0`, whose first field is the SPIR-V generator
     // magic and whose second is the release.
@@ -381,7 +451,7 @@ inline bool wrap_glslc_output(const std::string& header, const std::string& inc,
                               const std::string& sym) {
     std::ofstream out{header, std::ios::trunc};
     if (!out) {
-        std::println(stderr, "mcpp.rules.spirv: cannot write {}", header);
+        std::cerr << std::format("mcpp.rules.spirv: cannot write {}", header) << '\n';
         return false;
     }
     out << "// Generated by mcpp.rules.spirv. glslc emits an initialiser list;\n"
@@ -400,8 +470,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     const auto cc = find_compiler(opt);
     if (!cc) {
         if (cc.reported) return false;
-        std::println(stderr,
-            "mcpp.rules.spirv: no shader compiler found.\n"
+        std::cerr << std::format("mcpp.rules.spirv: no shader compiler found.\n"
             "  This rule DECLARES glslang, so a project normally writes nothing. Check, in "
             "order:\n"
             "  mcpp older than 2026.9.6.6; `features = [\"rules-spirv\"]` missing from the\n"
@@ -412,7 +481,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
             "  \"xim:glslang\" = \"15.1.0\"     # glslangValidator\n"
             "  \"xim:shaderc\" = \"2026.3\"     # glslc\n"
             "or name it: MCPP_GLSLANG=/path/to/glslangValidator, MCPP_GLSLC=/path/to/glslc,\n"
-            "or set options::compiler.");
+            "or set options::compiler.") << '\n';
         return false;
     }
     // The fact is keyed on the flavour, not on a shared name: which of the two
@@ -441,14 +510,55 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     std::error_code ec;
     std::filesystem::create_directories(gen, ec);
 
+    // TWO SHADERS THAT DIFFER ONLY BY DIRECTORY PRODUCE ONE HEADER AND ONE
+    // SYMBOL, AND THAT HAS TO BE REFUSED HERE.
+    //
+    // The output name is the stem and the stage, as this rule documents, so
+    // `shaders/ui/text.vert` and `shaders/world/text.vert` both resolve to
+    // `text_vert.h` declaring `text_vert_spv`. Disambiguating by directory is
+    // not the fix: the SYMBOL would still collide the moment both headers
+    // reached one translation unit, and the naming rule is what consumers write
+    // `#include` lines against.
+    //
+    // Measured before this check existed: ninja caught it -- `multiple rules
+    // generate .../text_vert.h` -- so it was never silent. What it did not do
+    // is name the two SHADERS, say which rule produced them, or state the way
+    // out; and it arrives as a graph-loading failure rather than as this rule's
+    // refusal. A project with one shader per stage never meets it, which is why
+    // it survived: a graphics project organising shaders by purpose is the
+    // first to have two.
+    {
+        std::map<std::string, std::string> seen;   // output stem -> first source
+        for (auto const& src : shaders) {
+            const std::filesystem::path p(src);
+            const auto stage = stage_of(p.extension().string());
+            if (stage.empty()) continue;           // reported below, per source
+            const auto key = p.stem().string() + "_" + std::string(stage);
+            auto [it, fresh] = seen.try_emplace(key, src);
+            if (!fresh) {
+                std::cerr << std::format("mcpp.rules.spirv: two shaders map to one output.\n"
+                    "    {}\n"
+                    "    {}\n"
+                    "  both produce `{}.h` declaring `{}`, because the name is the "
+                    "shader's stem\n"
+                    "  and its stage -- the directory is not part of it, and could not "
+                    "be: two\n"
+                    "  headers reaching one translation unit would still collide on the "
+                    "symbol.\n"
+                    "  fix: rename one of them, or compile only one.",
+                    it->second, src, key, symbol_of(p.stem().string(), stage)) << '\n';
+                return false;
+            }
+        }
+    }
+
     for (auto const& src : shaders) {
         const std::filesystem::path p(src);
         const auto stage = stage_of(p.extension().string());
         if (stage.empty()) {
-            std::println(stderr,
-                "mcpp.rules.spirv: {} has no shader stage. Both compilers derive the stage "
+            std::cerr << std::format("mcpp.rules.spirv: {} has no shader stage. Both compilers derive the stage "
                 "from the extension; rename it to one of .comp .vert .frag .geom .tesc "
-                ".tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall", src);
+                ".tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall", src) << '\n';
             return false;
         }
         const auto sym  = symbol_of(p.stem().string(), stage);

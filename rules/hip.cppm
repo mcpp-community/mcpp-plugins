@@ -38,6 +38,25 @@ export module mcpp.rules.hip;
 import std;
 import mcpp;
 
+
+// WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
+//
+// `std::print` and `std::println` are not header-only. Both of their overloads
+// reach into the libc++ DYLIB -- `__is_posix_terminal(FILE*)` for the stdout
+// form and `__get_ostream_file(ostream&)` for the stream form -- and those
+// symbols were added to that library in a version macOS 14 does not ship. A
+// build program's link resolves `-lc++` to the system copy there, so a rule
+// that printed with `std::println` compiled and then failed to link:
+//
+//   ld64.lld: error: undefined symbol: std::__1::__is_posix_terminal(__sFILE*)
+//
+// naming neither the call that needed it nor the reason. Measured on
+// macos-14; macos-15 has the symbol, which is why nothing saw this until a
+// rule was first compiled on the older of the two supported releases.
+//
+// `std::format` is header-only and has no such dependency, so every message in
+// this file is formatted and then streamed.
+
 export namespace mcpp::rules::hip {
 
 // The two implementations, named. `automatic` reads the accelerator axis.
@@ -222,8 +241,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     std::vector<edge> out;
     const std::string root = mcpp::manifest_dir();
     if (root.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.hip: no mcpp build context -- this runs from build.mcpp");
+        std::cerr << std::format("mcpp.rules.hip: no mcpp build context -- this runs from build.mcpp") << '\n';
         return out;
     }
 
@@ -238,27 +256,25 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         // runtime and device library, and this ecosystem publishes neither
         // yet; compiling for it would produce an object nothing on this
         // machine can link or run.
-        std::println(std::cerr,
-            "mcpp.rules.hip: [build] accel names AMD architectures ({}) and no ROCm\n"
+        std::cerr << std::format("mcpp.rules.hip: [build] accel names AMD architectures ({}) and no ROCm\n"
             "  payload is published in this ecosystem yet, so nothing could link or run\n"
             "  the result. The NVIDIA platform is available today:\n"
             "    accel = \"hip, cuda12.9+{{sm_89}}\"\n"
             "  which reaches the device through the CUDA runtime, with HIP as the API.",
-            tg.amd_archs.empty() ? std::string("none") : tg.amd_archs.front());
+            tg.amd_archs.empty() ? std::string("none") : tg.amd_archs.front()) << '\n';
         return out;
     }
 
     if (tg.cuda_archs.empty()) {
         // A device build that names no device is refused here, not at run time
         // as `no kernel image is available for execution`.
-        std::println(std::cerr,
-            "mcpp.rules.hip: [build] accel names no device architecture (accel = \"{}\").\n"
+        std::cerr << std::format("mcpp.rules.hip: [build] accel names no device architecture (accel = \"{}\").\n"
             "  On the NVIDIA platform HIP compiles through the CUDA back end, and the\n"
             "  device is spelled the way every other rule in this ecosystem spells it:\n"
             "    accel = \"hip, cuda12.9+{{sm_89}}\"\n"
             "  The set a build compiles for is a decision; the machine's own hardware is\n"
             "  a poor default for it.",
-            mcpp::accel());
+            mcpp::accel()) << '\n';
         return out;
     }
 
@@ -289,8 +305,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         if (n.root->empty())
             missing += std::format("    \"xim:{}\" = \"{}\"\n", n.pkg, n.version);
     if (!missing.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.hip: the HIP island needs payloads that are not installed.\n"
+        std::cerr << std::format("mcpp.rules.hip: the HIP island needs payloads that are not installed.\n"
             "  This rule DECLARES them, so a project normally writes nothing. Check, in "
             "order:\n"
             "  mcpp older than 2026.9.6.6; `features = [\"rules-hip\"]` missing from the\n"
@@ -298,7 +313,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             "  To pin different versions, name them in your own project and they win:\n\n"
             "  [target.'cfg(accelerator = \"hip\")'.xlings.workspace]\n{}\n"
             "  They are PAYLOADS: the version is the project's choice, not the machine's.",
-            missing);
+            missing) << '\n';
         return out;
     }
 
@@ -313,12 +328,21 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // everywhere else. `mcpp.rules.cuda` takes the same path for the same
     // reason.
     const std::string tcdir = mcpp::toolchain_dir();
+    // The suffix is the host's. This lane reaches only Linux today -- the
+    // NVIDIA-platform header package is published for it alone -- so the
+    // Windows spelling is not exercised by anything. It is written anyway,
+    // because the alternative is a path that is wrong on a host this rule
+    // will one day be asked about, and a wrong path reports itself as a
+    // missing toolchain.
+#if defined(_WIN32)
+    const std::string cc = tcdir + "/bin/clang++.exe";
+#else
     const std::string cc = tcdir + "/bin/clang++";
+#endif
     if (tcdir.empty() || !std::filesystem::exists(cc)) {
-        std::println(std::cerr,
-            "mcpp.rules.hip: the NVIDIA platform compiles through clang, and this "
+        std::cerr << std::format("mcpp.rules.hip: the NVIDIA platform compiles through clang, and this "
             "project's\n  toolchain has no clang++ at {}.\n"
-            "  Select an LLVM toolchain:  [toolchain] default = \"llvm@22.1.8\"", cc);
+            "  Select an LLVM toolchain:  [toolchain] default = \"llvm@22.1.8\"", cc) << '\n';
         return out;
     }
 
@@ -382,9 +406,9 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // rule resolved the payload, so the rule names where its libraries are.
     for (auto const& d : tk.lib_dirs()) mcpp::link_search(d.c_str());
 
-    std::println("mcpp.rules.hip: NVIDIA platform -- HIP {} over CUDA {}, {} for {}",
+    std::cout << std::format("mcpp.rules.hip: NVIDIA platform -- HIP {} over CUDA {}, {} for {}",
                  hip_version(tk.hip_root), tg.cuda_version.empty() ? "?" : tg.cuda_version,
-                 std::filesystem::path(cc).filename().string(), tg.cuda_archs.front());
+                 std::filesystem::path(cc).filename().string(), tg.cuda_archs.front()) << '\n';
 
     for (auto const& src : sources) {
         const auto stem = std::filesystem::path(src).stem().string();

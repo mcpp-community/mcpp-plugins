@@ -18,12 +18,18 @@ env:
   # saved and restored `~/.mcpp` -- a directory mcpp never touched. Every run
   # was therefore the cold case, which is what the 90-minute budget below was
   # sized for. mcpp's own ci-linux.yml pins it for this reason and says so.
-  MCPP_HOME: /home/runner/.mcpp
+  #
+  # Set per JOB rather than here: the path differs by platform, and a
+  # workflow-level `/home/runner/.mcpp` would silently be wrong on the other
+  # two runners -- wrong in the direction that still appears to work, which is
+  # the kind this repository has already paid for once.
 
 jobs:
   consumers:
     name: consumers (linux x86_64)
     runs-on: ubuntu-24.04
+    env:
+      MCPP_HOME: /home/runner/.mcpp
     # 90 rather than 60: the SYCL fixture pulls three payloads this job did not
     # need before -- dpcpp (578 MB installed), gcc (265 MB) and cuda-nvcc
     # (319 MB) -- and a cold cache downloads all of them before the first
@@ -90,6 +96,49 @@ jobs:
           grep -q '^magic=07230203' run-glslc.log
           rm -rf shaderc.tar.gz shaderc-2026.3
 
+      # TWO SHADERS THAT DIFFER ONLY BY DIRECTORY.
+      #
+      # The output name is the stem and the stage, so `a/x.vert` and `b/x.vert`
+      # both produce `x_vert.h` declaring `x_vert_spv`. Before this rule checked
+      # for it, ninja caught the duplicate output -- so it was never silent, but
+      # the message named the generated file and neither shader, arrived as a
+      # graph-loading failure rather than as this rule's refusal, and stated no
+      # way out. A project with one shader per stage never meets it, which is
+      # how it survived; a graphics project organising shaders by purpose is the
+      # first to have two.
+      - name: two shaders with one stem are refused, naming both
+        working-directory: tests/spirv-consumer
+        run: |
+          set -e
+          mkdir -p shaders/dup
+          cp shaders/scale.comp shaders/dup/scale.comp
+          # The fixture globs `shaders/*.comp`; widen it for this step only.
+          cp mcpp.toml mcpp.toml.bak
+          sed -i 's#shaders/\*.comp#shaders/**/*.comp#' mcpp.toml
+          rm -rf target
+          if "$MCPP" build > dup.log 2>&1; then
+            echo "FAIL: two shaders mapping to one output were accepted"
+            exit 1
+          fi
+          for needle in 'two shaders map to one output' 'shaders/scale.comp' \
+                        'shaders/dup/scale.comp' 'scale_comp_spv' 'rename one of them'; do
+            grep -q -- "$needle" dup.log || {
+              echo "FAIL: the refusal does not mention '$needle'"
+              tail -20 dup.log
+              exit 1
+            }
+          done
+          echo "ok: refused, naming both shaders, the symbol and the way out"
+          # …and the fixture still builds once the duplicate is gone, so this
+          # step cannot leave a project that refuses everything.
+          mv mcpp.toml.bak mcpp.toml
+          rm -rf shaders/dup target
+          "$MCPP" build > restored.log 2>&1 || {
+            echo "FAIL: the fixture no longer builds after the duplicate was removed"
+            tail -20 restored.log; exit 1; }
+          rm -f dup.log restored.log
+          echo "ok: and it builds again with one shader per stem"
+
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
       # that matters -- editing the data file must reach the binary, which is
@@ -144,6 +193,21 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
+      # EVERY RULE COMPILED FOR THIS HOST, which is a different claim from any
+      # step above. Each of those exercises one rule and needs that rule's
+      # payload, so a rule is only ever compiled on the platforms its payload
+      # exists for -- and a rule's host-dependent halves are exactly the code
+      # those platforms do not compile. This fixture names no accelerator, so
+      # every rule returns before looking for a payload and nothing is
+      # downloaded; what it asserts is that all six modules compile here.
+      - name: every rule module compiles for this host
+        working-directory: tests/all-rules-compile
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^all-rules-compile ok' run.log
+
       # TWO RULES IN ONE BUILD PROGRAM, which every step above has exactly
       # one of. With one, a rule can take the whole of `device_sources()` and
       # be right by accident; with two, that list holds a `.cu` AND a `.comp`,
@@ -193,8 +257,14 @@ jobs:
           # rehearsal passed because a DEV build is disqualified from
           # self-contained mode and does use ~/.mcpp, so the rehearsal and CI
           # were clearing different directories.
-          HOME_DIR=$("$MCPP" self env | awk -F'= *' '/^MCPP_HOME/{print $2; exit}')
-          [ -n "$HOME_DIR" ] || { echo "FAIL: could not read MCPP_HOME"; exit 1; }
+          # Through a FILE rather than a pipe: on macOS this same expression
+          # killed mcpp with `internal: unhandled exception: failed to write
+          # formatted output`, because `awk ... exit` closes the read end at
+          # the first match. Written the same way on every platform so the two
+          # jobs cannot drift.
+          "$MCPP" self env > mcpp-env.txt
+          HOME_DIR=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' mcpp-env.txt)
+          [ -n "$HOME_DIR" ] || { echo "FAIL: could not read MCPP_HOME"; cat mcpp-env.txt; exit 1; }
           echo "clearing provisioning stamps under $HOME_DIR"
           rm -rf "$HOME_DIR/provisioned"
           for d in tests/cuda-consumer tests/hip-consumer \
@@ -281,3 +351,162 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ]
+
+  # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
+  #
+  # `rules-spirv` is the only member whose payload this ecosystem publishes for
+  # all three, so it is the only one that can be checked on all three. What this
+  # job proves is the claim the per-platform declaration makes: a project writes
+  # the rule edge and nothing else, and the compiler that arrives is whichever
+  # one that platform has -- glslang on Linux, glslc here.
+  #
+  # ONLY THE SPIR-V FIXTURE. The CUDA, HIP and SYCL payloads are Linux-only
+  # upstream, so a matrix that ran every fixture everywhere would be red for a
+  # reason that is not a defect.
+  rules-cross-platform:
+    name: rules (${{ matrix.name }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-15, matching mcpp's own macOS CI, and the reason is a
+          # measured limitation of the older release rather than a preference.
+          #
+          # On macos-14 a build program fails to LINK, with
+          #
+          #   ld64.lld: error: undefined symbol:
+          #       std::__1::__is_posix_terminal(__sFILE*)
+          #
+          # referenced from `std::__1::__print::__is_terminal`. That symbol
+          # lives in the libc++ DYLIB and was added in a version macOS 14 does
+          # not ship, and the build program's link resolves `-lc++` to the
+          # system copy rather than to the LLVM payload's. It is reached
+          # through `import std` itself, so no rule package can avoid it -- the
+          # rules stopped using `std::println` for the same reason and it was
+          # not enough.
+          #
+          # Recorded rather than worked around here: the engine-side half is
+          # `host_link_tokens` returning before it adds the payload's runtime
+          # directories on macOS. Once a release carries that, this moves back
+          # to macos-14, which is the floor mcpp's README states.
+          - name: macos arm64
+            runs-on: macos-15
+            asset: macosx-arm64.tar.gz
+            dir-suffix: macosx-arm64
+          - name: windows x86_64
+            runs-on: windows-2022
+            asset: windows-x86_64.zip
+            dir-suffix: windows-x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin MCPP_HOME under this runner's home
+        run: |
+          set -e
+          # The value has to be in the HOST's path syntax, not Git Bash's.
+          # `$HOME` there is `/c/Users/runneradmin`, and mcpp hands this
+          # variable to xlings, which is a native Windows program: it answered
+          # `The filename, directory name, or volume label syntax is
+          # incorrect.` and exited 1, from inside a provisioning step whose own
+          # message named a package rather than a path.
+          H="$HOME/.mcpp"
+          command -v cygpath >/dev/null && H=$(cygpath -m "$H")
+          echo "MCPP_HOME=$H" >> "$GITHUB_ENV"
+
+      - name: Cache the mcpp sandbox
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp
+          key: mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/spirv-consumer/mcpp.toml') }}
+          restore-keys: |
+            mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+
+      - name: Fetch the released mcpp
+        run: |
+          set -e
+          curl -L -fsS --retry 3 --retry-all-errors -o mcpp.pkg \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-${{ matrix.asset }}"
+          case "${{ matrix.asset }}" in
+            *.zip) unzip -q mcpp.pkg ;;
+            *)     tar -xzf mcpp.pkg ;;
+          esac
+          dir="mcpp-${MCPP_VERSION}-${{ matrix.dir-suffix }}"
+          MCPP="$PWD/$dir/bin/mcpp"
+          "$MCPP" --version
+          # The bundled xlings, named explicitly because MCPP_HOME is pinned
+          # away from the tarball. See the Linux job for the measurement.
+          #
+          # The suffix is the host's: the Windows distribution ships
+          # `registry/bin/xlings.exe`, and a variable pointing at a file that
+          # does not exist produces `error: xlings binary not found` naming
+          # three remedies, none of which is the one that applies.
+          # Two host differences, and the second one is the interesting one.
+          # The suffix: the Windows distribution ships `xlings.exe`. The PATH
+          # SHAPE: this job runs under Git Bash, whose `$PWD` is a POSIX path
+          # (`/d/a/...`), while `mcpp` is a native Windows program and reads
+          # this variable as a Windows path. Both failures report the same
+          # `error: xlings binary not found` and offer the same three remedies,
+          # none of which is "the path you gave is in the other syntax".
+          XL="$PWD/$dir/registry/bin/xlings"
+          [ -f "$XL" ] || XL="$XL.exe"
+          test -f "$XL" || { echo "no vendored xlings at $XL"; exit 1; }
+          command -v cygpath >/dev/null && XL=$(cygpath -m "$XL")
+          export MCPP_VENDORED_XLINGS="$XL"
+          "$MCPP" self config --mirror GLOBAL
+          echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      # FIRST, BECAUSE IT IS THE CHEAPER QUESTION AND THE MORE INFORMATIVE
+      # ANSWER. Every other step here drives one rule end to end and needs
+      # that rule's payload; this one names no accelerator, downloads nothing,
+      # and asks only whether all six modules COMPILE for this host -- which
+      # is the half of a rule that a Linux-only CI never sees. Run after the
+      # end-to-end step, its failure arrived as somebody else's build error:
+      # `no member named 'popen' in the global namespace`, reported against a
+      # consumer that had nothing to do with it.
+      - name: every rule module compiles for this host
+        working-directory: tests/all-rules-compile
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^all-rules-compile ok' run.log
+
+      - name: rules-spirv through a consumer
+        working-directory: tests/spirv-consumer
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+
+      # The same provenance criterion the Linux job applies: the payload has to
+      # come from the GRAPH, not from the fixture. Without it, a fixture that
+      # quietly regained an `[xlings.workspace]` would keep this green while the
+      # claim stopped being true.
+      - name: the rule declared its own compiler
+        working-directory: tests/spirv-consumer
+        run: |
+          set -e
+          if grep -qE '^\[(target\..*\.)?xlings\.workspace\]' mcpp.toml; then
+            echo "FAIL: the fixture declares payloads itself"; exit 1
+          fi
+          # `mcpp self env > file`, not `mcpp self env | awk`. Measured on
+          # macos-15: through a pipe whose reader exits at the first match,
+          # mcpp died with `internal: unhandled exception: failed to write
+          # formatted output` and exit 70. A file has no reader to disappear.
+          "$MCPP" self env > env.txt
+          HOME_DIR=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' env.txt)
+          test -n "$HOME_DIR" || { echo "FAIL: mcpp self env named no MCPP_HOME"; cat env.txt; exit 1; }
+          rm -rf "$HOME_DIR/provisioned" target
+          "$MCPP" build > prov.log 2>&1
+          grep -q 'entries declared by dependencies' prov.log || {
+            echo "FAIL: no payload came from the graph"
+            grep -i provisioning prov.log || echo "(no provisioning line at all)"
+            exit 1; }
+          echo "ok: $(grep -m1 'entries declared by dependencies' prov.log)"

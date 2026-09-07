@@ -32,6 +32,25 @@ export module mcpp.tools.embed;
 import std;
 import mcpp;
 
+
+// WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
+//
+// `std::print` and `std::println` are not header-only. Both of their overloads
+// reach into the libc++ DYLIB -- `__is_posix_terminal(FILE*)` for the stdout
+// form and `__get_ostream_file(ostream&)` for the stream form -- and those
+// symbols were added to that library in a version macOS 14 does not ship. A
+// build program's link resolves `-lc++` to the system copy there, so a rule
+// that printed with `std::println` compiled and then failed to link:
+//
+//   ld64.lld: error: undefined symbol: std::__1::__is_posix_terminal(__sFILE*)
+//
+// naming neither the call that needed it nor the reason. Measured on
+// macos-14; macos-15 has the symbol, which is why nothing saw this until a
+// rule was first compiled on the older of the two supported releases.
+//
+// `std::format` is header-only and has no such dependency, so every message in
+// this file is formatted and then streamed.
+
 export namespace mcpp::tools::embed {
 
 // The element the array is made of. A byte array is the general answer; a
@@ -116,15 +135,14 @@ inline bool file(const std::filesystem::path& input, options opt = {}) {
 
     std::ifstream in(absolute, std::ios::binary);
     if (!in) {
-        std::println(stderr, "mcpp.tools.embed: cannot read {}", absolute.string());
+        std::cerr << std::format("mcpp.tools.embed: cannot read {}", absolute.string()) << '\n';
         return false;
     }
     std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
     if (opt.elem == element::word32 && bytes.size() % 4 != 0) {
-        std::println(stderr,
-            "mcpp.tools.embed: {} is {} bytes, which is not a multiple of 4, and "
-            "element::word32 was asked for", absolute.string(), bytes.size());
+        std::cerr << std::format("mcpp.tools.embed: {} is {} bytes, which is not a multiple of 4, and "
+            "element::word32 was asked for", absolute.string(), bytes.size()) << '\n';
         return false;
     }
 
@@ -171,7 +189,7 @@ inline bool file(const std::filesystem::path& input, options opt = {}) {
     if (!opt.name_space.empty()) text += "\n} // namespace " + opt.name_space + "\n";
 
     if (!write_if_different(out, text)) {
-        std::println(stderr, "mcpp.tools.embed: cannot write {}", out.string());
+        std::cerr << std::format("mcpp.tools.embed: cannot write {}", out.string()) << '\n';
         return false;
     }
 
@@ -188,8 +206,8 @@ inline bool file(const std::filesystem::path& input, options opt = {}) {
 // to the first input only.
 inline bool files(std::span<const std::string> inputs, options opt = {}) {
     if (!opt.identifier.empty()) {
-        std::println(stderr, "mcpp.tools.embed: options::identifier names one "
-                             "symbol and files() writes several; call file() per input");
+        std::cerr << std::format("mcpp.tools.embed: options::identifier names one "
+                             "symbol and files() writes several; call file() per input") << '\n';
         return false;
     }
     for (auto const& one : inputs)
