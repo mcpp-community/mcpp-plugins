@@ -97,6 +97,30 @@ struct options {
 // The device is spelled the way every other rule in this ecosystem spells it,
 // so `sm_89` does not acquire a second spelling because the source file says
 // `.sycl` instead of `.cu`.
+// THE TWO PUBLISHED SYCL TOOLCHAINS DIFFER IN MORE THAN A FILE SUFFIX.
+//
+// Upstream publishes `sycl_linux.tar.gz` and `sycl_windows.tar.gz` from one
+// tag, and the compiler is the same compiler. What differs is everything
+// around it: the host half of a SYCL unit compiles against libstdc++ and glibc
+// on Linux and against MSVC's standard library on Windows, so the three
+// payloads that exist to keep the host's copies out of the search list
+// (`xim:gcc`, `xim:glibc`, `xim:linux-headers`) have no counterpart there --
+// clang finds the MSVC installation itself, the same way it does for every
+// ordinary translation unit on that host. `-fPIC` likewise names a property
+// that is unconditional on Windows.
+//
+// And the device coverage differs: upstream states that the HIP and CUDA
+// plugins are not built for Windows, and the asset agrees -- it carries
+// Level Zero and OpenCL adapters and no others. An ahead-of-time NVIDIA
+// build is therefore refused there rather than attempted.
+#if defined(_WIN32)
+inline constexpr bool kWindows = true;
+inline constexpr const char* kExe = ".exe";
+#else
+inline constexpr bool kWindows = false;
+inline constexpr const char* kExe = "";
+#endif
+
 struct target {
     bool sycl = false;
     std::vector<std::string> cuda_archs;   // {"sm_89"}
@@ -174,13 +198,29 @@ inline std::string gcc_install_dir(const std::string& gcc_root) {
 // `dpcpp --version` states the release and the intel/llvm revision it was
 // built from. Stated as a fact so a build log answers "which SYCL compiler"
 // without anyone reproducing the build.
+inline FILE* open_pipe(const std::string& cmd) {
+#if defined(_WIN32)
+    return ::_popen(cmd.c_str(), "r");
+#else
+    return ::popen(cmd.c_str(), "r");
+#endif
+}
+inline void close_pipe(FILE* p) {
+#if defined(_WIN32)
+    ::_pclose(p);
+#else
+    ::pclose(p);
+#endif
+}
+
 inline std::string compiler_version(const std::string& exe) {
-    FILE* p = ::popen(("\"" + exe + "\" --version 2>/dev/null").c_str(), "r");
+    FILE* p = open_pipe("\"" + exe + "\" --version 2>"
+                        + (kWindows ? std::string("NUL") : std::string("/dev/null")));
     if (!p) return {};
     std::string text;
     char buf[512];
     while (std::fgets(buf, sizeof buf, p)) text += buf;
-    ::pclose(p);
+    close_pipe(p);
     for (auto line : split(text, '\n')) {
         auto at = line.find("DPC++ compiler ");
         if (at == std::string_view::npos) continue;
@@ -241,6 +281,18 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     }
 
     const auto tg = parse_target(mcpp::accel());
+    if constexpr (kWindows) {
+        if (!tg.cuda_archs.empty()) {
+            std::println(std::cerr,
+                "mcpp.rules.sycl: [build] accel names an NVIDIA target and this host's SYCL\n"
+                "  compiler cannot reach it. Upstream states that the CUDA and HIP plugins are\n"
+                "  not built for Windows, and the published asset agrees: its Unified Runtime\n"
+                "  adapters are Level Zero and OpenCL, and no others.\n"
+                "  Available on this host: accel = \"sycl\" -- SPIR-V, consumed by whichever\n"
+                "  Level Zero or OpenCL device the runtime finds.");
+            return out;
+        }
+    }
     if (!tg.amd_archs.empty() && tg.cuda_archs.empty()) {
         std::println(std::cerr,
             "mcpp.rules.sycl: [build] accel names AMD architectures and this ecosystem\n"
@@ -282,6 +334,11 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // does not need it. Asking for both would tell someone who has already
     // solved this to solve it again.
     if (dpcpp.empty() && opt.compiler.empty()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
+    // THE THREE BELOW ARE THE HOST C AND C++ LIBRARIES, AND ONLY LINUX HAS
+    // THIS PROBLEM. Requiring them on Windows would refuse a build over three
+    // packages that this ecosystem does not publish for it and that the
+    // compiler there does not need -- an error whose remedy does not exist.
+    if constexpr (!kWindows) {
     if (gcc.empty())   missing += "    \"xim:gcc\"   = \"15.1.0\"\n";
     // UNPINNED ON PURPOSE, and this is the one detail that makes the
     // declaration portable. The C library version is the RUNTIME BINDING's
@@ -294,6 +351,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // truthfully say about a library it does not select.
     if (glibc.empty()) missing += "    \"xim:glibc\" = \"\"\n";
     if (uapi.empty())  missing += "    \"xim:linux-headers\" = \"\"\n";
+    }
     if (!tg.cuda_archs.empty() && cuda.empty())
         missing += "    \"xim:cuda-nvcc\" = \"12.9.86\"\n";
     if (!missing.empty()) {
@@ -315,7 +373,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     }
 
     auto exe = opt.compiler;
-    if (exe.empty()) exe = dpcpp + "/bin/clang++";
+    if (exe.empty()) exe = dpcpp + "/bin/clang++" + kExe;
     if (!is_file(exe)) {
         std::println(std::cerr,
             "mcpp.rules.sycl: {} is not a file. The dpcpp payload publishes its SYCL\n"
@@ -324,12 +382,15 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     }
     if (auto v = compiler_version(exe); !v.empty()) mcpp::fact("dpcpp", v.c_str());
 
-    const auto gid = gcc_install_dir(gcc);
-    if (gid.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.sycl: the xim:gcc payload at {} has no lib/gcc/<triple>/<version>\n"
-            "  directory, which is what --gcc-install-dir names.", gcc);
-        return out;
+    // Empty on Windows, where the flag it feeds is not passed at all.
+    const auto gid = kWindows ? std::string{} : gcc_install_dir(gcc);
+    if constexpr (!kWindows) {
+        if (gid.empty()) {
+            std::println(std::cerr,
+                "mcpp.rules.sycl: the xim:gcc payload at {} has no lib/gcc/<triple>/<version>\n"
+                "  directory, which is what --gcc-install-dir names.", gcc);
+            return out;
+        }
     }
 
     // The target selection, once, shared by the compile and the device link:
@@ -344,23 +405,28 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         }
     }
 
-    std::vector<std::string> front{ exe, "-fsycl", "-std=c++17", "-O2", "-fPIC",
-                                    "--gcc-install-dir=" + gid };
-    // The C library, ahead of whatever the compiler would have found. This is
-    // the shape mcpp uses for its own translation units, and it puts the
-    // ecosystem's glibc at the front of the search list; `/usr/include` stays
-    // last, as a fallback for C headers no payload provides, which is what the
-    // engine does too.
-    front.push_back("-isystem" + glibc + "/include");
-    front.push_back("-isystem" + uapi + "/include");
+    std::vector<std::string> front{ exe, "-fsycl", "-std=c++17", "-O2" };
+    if constexpr (!kWindows) {
+        front.push_back("-fPIC");
+        front.push_back("--gcc-install-dir=" + gid);
+        // The C library, ahead of whatever the compiler would have found. This
+        // is the shape mcpp uses for its own translation units, and it puts
+        // the ecosystem's glibc at the front of the search list;
+        // `/usr/include` stays last, as a fallback for C headers no payload
+        // provides, which is what the engine does too.
+        front.push_back("-isystem" + glibc + "/include");
+        front.push_back("-isystem" + uapi + "/include");
+    }
     front.insert(front.end(), targeting.begin(), targeting.end());
 
     // The link line gets its directories from here, not from the manifest: the
     // rule resolved the payload, so the rule names where its libraries are.
     mcpp::link_search((dpcpp + "/lib").c_str());
     mcpp::link_lib("sycl");
-    // See the file header for why this is not `-lstdc++`.
-    mcpp::link_lib(":libstdc++.so.6");
+    // See the file header for why this is not `-lstdc++`. The reason is a
+    // Linux one: two C++ runtimes cannot share a process, and on Windows there
+    // is one -- MSVC's, which both this payload and mcpp's own compiler use.
+    if constexpr (!kWindows) mcpp::link_lib(":libstdc++.so.6");
 
     // SPIR-V IS NOT A DEVICE, AND A BUILD THAT NAMES NO DEVICE SHOULD BE TOLD.
     //
@@ -423,7 +489,11 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     d.id          = "sycl:device-link";
     d.role        = "object";
     d.description = "dpcpp -fsycl-link (device images -> registration)";
-    d.command     = { exe, "-fsycl", "-fPIC", "--gcc-install-dir=" + gid };
+    d.command     = { exe, "-fsycl" };
+    if constexpr (!kWindows) {
+        d.command.push_back("-fPIC");
+        d.command.push_back("--gcc-install-dir=" + gid);
+    }
     d.command.insert(d.command.end(), targeting.begin(), targeting.end());
     d.command.push_back("-fsycl-link");
     for (auto const& o : objects) d.command.push_back(o);

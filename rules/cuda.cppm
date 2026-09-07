@@ -47,6 +47,23 @@ import mcpp;
 
 export namespace mcpp::rules::cuda {
 
+// A PROGRAM'S NAME CARRIES ITS HOST'S SUFFIX, AND THE PAYLOAD LAYOUT DOES TOO.
+//
+// The NVIDIA redistributables are published for Windows as well as Linux and
+// carry the same tree under different names: `bin/nvcc.exe` rather than
+// `bin/nvcc`, and import libraries under `lib/x64` rather than shared objects
+// under `lib` or `lib64`. Every one of the paths this rule builds is derived
+// from those two facts, so both are stated once here rather than at each site
+// -- a `std::filesystem::exists` against the wrong spelling does not fail, it
+// answers false, and this rule reads several such answers as decisions.
+#if defined(_WIN32)
+inline constexpr bool kWindows = true;
+inline constexpr const char* kExe = ".exe";
+#else
+inline constexpr bool kWindows = false;
+inline constexpr const char* kExe = "";
+#endif
+
 enum class route { automatic, clang, nvcc };
 
 struct options {
@@ -177,7 +194,7 @@ struct toolkit {
     // 12.x toolkits ship as the separate `cuda-cccl` package, and which the
     // host's /usr/include had supplied in the same way.
     std::string curand_root, cccl_root;
-    std::string nvcc() const { return nvcc_root + "/bin/nvcc"; }
+    std::string nvcc() const { return nvcc_root + "/bin/nvcc" + kExe; }
     std::string host_config() const {
         for (auto const* r : { &crt_root, &nvcc_root, &cudart_root }) {
             if (r->empty()) continue;
@@ -203,8 +220,11 @@ struct toolkit {
     }
     std::vector<std::string> lib_dirs() const {
         std::vector<std::string> out;
+        // `/lib/x64` is the Windows layout; it is searched on every host
+        // because a directory that does not exist contributes nothing, and a
+        // list keyed on the host would be a second place to keep in step.
         for (auto const* r : { &cudart_root, &nvcc_root })
-            for (auto const* sub : { "/lib", "/lib64" })
+            for (auto const* sub : { "/lib", "/lib64", "/lib/x64" })
                 if (!r->empty() && std::filesystem::is_directory(*r + sub))
                     out.push_back(*r + sub);
         return out;
@@ -451,9 +471,25 @@ struct edge {
     std::vector<std::string> command, inputs, outputs;
 };
 
+// ON WINDOWS THE DEFAULT IS THE CLANG ROUTE WHATEVER THE PROJECT'S COMPILER IS.
+//
+// The two routes differ in who compiles the host half of a device unit. On the
+// nvcc route that is a compiler nvcc drives through `-ccbin`, and on Windows
+// the only one it accepts is MSVC's `cl.exe` -- whose directory is found
+// through `vswhere` and the installed Visual Studio instance, neither of which
+// mcpp resolves or states to a build program. The rule would have to search
+// the host for it, which is the one thing a rule of this ecosystem does not do.
+//
+// The clang route has no such gap: it drives no second compiler, and clang
+// locates the MSVC headers and libraries it needs for the host half itself,
+// the same way it does for every ordinary C++ translation unit on this host.
 inline route decide(route asked) {
     if (asked != route::automatic) return asked;
+#if defined(_WIN32)
+    return route::clang;
+#else
     return std::string_view(mcpp::compiler()) == "clang" ? route::clang : route::nvcc;
+#endif
 }
 
 inline std::vector<edge> plan(std::span<const std::string> sources, options opt = {}) {
@@ -483,9 +519,18 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     std::string driver_cc;          // the compiler that runs the device unit
     std::vector<std::string> front; // the command up to the input file
     if (r == route::clang) {
-        driver_cc = tcdir + "/bin/clang++";
+        driver_cc = tcdir + "/bin/clang++" + kExe;
         if (!std::filesystem::exists(driver_cc)) {
-            std::println(std::cerr, "mcpp.rules.cuda: the clang route needs the toolchain's clang++ at {}", driver_cc);
+            std::println(std::cerr,
+                "mcpp.rules.cuda: the clang route needs the toolchain's clang++ at {}.\n"
+                "  Name an LLVM toolchain for this project:\n"
+                "    [toolchain]\n"
+                "    default = \"llvm@22.1.8\"{}",
+                driver_cc,
+                kWindows ? "\n  On Windows this route is the only one the rule takes: nvcc "
+                           "drives a host\n  compiler named by -ccbin, and locating MSVC's "
+                           "cl.exe is not something\n  this rule does."
+                         : "");
             return out;
         }
         // Refused here rather than at clang's include error: the header it
@@ -506,7 +551,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
                 "  (found cccl: '{}', curand: '{}')", tk->cccl_root, tk->curand_root);
             return out;
         }
-        front = { driver_cc, "-x", "cuda", "-std=c++17", "-O2", "-fPIC",
+        front = { driver_cc, "-x", "cuda", "-std=c++17", "-O2",
                   "--cuda-path=" + tk->nvcc_root, "-Wno-unknown-cuda-version",
                   // NVIDIA'S HEADER REFUSES libc++, AND THE REFUSAL IS
                   // ABOUT nvcc RATHER THAN ABOUT THIS COMPILER.
@@ -527,15 +572,36 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
                   // on this route: nvcc's host pass really does break against
                   // libc++, and nothing here weakens that.
                   "-D_ALLOW_UNSUPPORTED_LIBCPP" };
+        // Position-independent code is the default on Windows and naming it
+        // is an unused-argument warning on every device unit.
+        if constexpr (!kWindows) front.insert(front.begin() + 5, "-fPIC");
         for (auto const& inc : tk->include_dirs()) front.push_back("-I" + inc);
         for (auto const& a : tg.archs) front.push_back("--cuda-gpu-arch=" + a);
         // clang checks ptxas and fatbinary itself; say so before it does.
         for (auto const* tool : { "ptxas", "fatbinary" })
-            if (!std::filesystem::exists(tk->nvcc_root + "/bin/" + tool))
+            if (!std::filesystem::exists(tk->nvcc_root + "/bin/" + tool + kExe))
                 mcpp::warning(std::format("the toolkit payload has no {}; clang invokes it "
                                           "after generating PTX", tool).c_str());
         std::println("mcpp.rules.cuda: clang route -- {} (toolkit {})", driver_cc, tk->nvcc_root);
     } else {
+        // ASKED FOR EXPLICITLY, BECAUSE `decide` NEVER CHOOSES IT HERE.
+        // Everything below reads a GCC bound out of the toolkit's header and
+        // hands nvcc a `g++` to drive. On Windows there is no such compiler in
+        // the toolchain and the bound in `host_config.h` is stated in
+        // `_MSC_VER`, so the branch would build a command line out of two
+        // answers that mean nothing and nvcc would report the third.
+        if constexpr (kWindows) {
+            std::println(std::cerr,
+                "mcpp.rules.cuda: the nvcc route was asked for, and on Windows this rule does "
+                "not take it.\n"
+                "  nvcc compiles the host half through a compiler named by -ccbin, which on "
+                "this host\n  is MSVC's cl.exe; finding it means asking the machine about its "
+                "Visual Studio\n  installation, which is the kind of host dependence this "
+                "ecosystem removes.\n"
+                "  Leave the route unset: the clang route is the default here and needs no "
+                "second compiler.");
+            return out;
+        }
         // nvcc drives the toolchain's own compiler, and refuses one newer than
         // the bound its header states. Read the bound; if exceeded, pass the
         // escape hatch and say so -- an unexplained flag is worse than a note.
@@ -580,13 +646,13 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         // otherwise a gcc payload the project declared for this purpose, and
         // otherwise a refusal that says which declaration to add.
         const auto b = read_bounds(tk->host_config());
-        const std::string tcGcc = tcdir + "/bin/g++";
+        const std::string tcGcc = tcdir + "/bin/g++" + kExe;
         const int tcMajor = compiler_major(tcGcc);
         if (b.gcc == 0 || tcMajor <= b.gcc) {
             driver_cc = tcGcc;
         } else if (auto payload = xpkg("gcc"); !payload.empty()
-                   && compiler_major(payload + "/bin/g++") <= b.gcc) {
-            driver_cc = payload + "/bin/g++";
+                   && compiler_major(payload + "/bin/g++" + kExe) <= b.gcc) {
+            driver_cc = payload + "/bin/g++" + kExe;
             mcpp::warning(std::format(
                 "nvcc {} states gcc <= {} in {}; the toolchain's gcc {} exceeds it, so the "
                 "device unit is compiled with the declared xim:gcc payload ({}). The clang "

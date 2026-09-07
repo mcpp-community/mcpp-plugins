@@ -112,7 +112,14 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 # SET, so this is a conjunction of two membership tests rather than a
 # contradiction -- and without it every SYCL build would download a CUDA
 # toolkit it may have no target for.
-[target.'cfg(all(accelerator = "sycl", accelerator = "cuda"))'.feature-xlings.rules-sycl]
+#
+# `linux` is part of the predicate for a reason that is measured rather than
+# stylistic: upstream does not build the CUDA plugin for Windows, and the
+# published Windows asset carries Level Zero and OpenCL adapters only. The rule
+# refuses that combination on that host, and a refusal that arrives after a
+# multi-gigabyte download is a worse refusal -- provisioning runs before the
+# rule does.
+[target.'cfg(all(accelerator = "sycl", accelerator = "cuda", linux))'.feature-xlings.rules-sycl]
 "xim:cuda-nvcc" = "12.9.86"
 
 # ONE COMPILER PER PLATFORM, AND NOT THE SAME ONE EVERYWHERE.

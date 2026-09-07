@@ -193,6 +193,21 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
+      # EVERY RULE COMPILED FOR THIS HOST, which is a different claim from any
+      # step above. Each of those exercises one rule and needs that rule's
+      # payload, so a rule is only ever compiled on the platforms its payload
+      # exists for -- and a rule's host-dependent halves are exactly the code
+      # those platforms do not compile. This fixture names no accelerator, so
+      # every rule returns before looking for a payload and nothing is
+      # downloaded; what it asserts is that all six modules compile here.
+      - name: every rule module compiles for this host
+        working-directory: tests/all-rules-compile
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^all-rules-compile ok' run.log
+
       # TWO RULES IN ONE BUILD PROGRAM, which every step above has exactly
       # one of. With one, a rule can take the whole of `device_sources()` and
       # be right by accident; with two, that list holds a `.cu` AND a `.comp`,
@@ -342,8 +357,8 @@ jobs:
   # ONLY THE SPIR-V FIXTURE. The CUDA, HIP and SYCL payloads are Linux-only
   # upstream, so a matrix that ran every fixture everywhere would be red for a
   # reason that is not a defect.
-  spirv-cross-platform:
-    name: rules-spirv (${{ matrix.name }})
+  rules-cross-platform:
+    name: rules (${{ matrix.name }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 60
     strategy:
@@ -406,6 +421,20 @@ jobs:
       # come from the GRAPH, not from the fixture. Without it, a fixture that
       # quietly regained an `[xlings.workspace]` would keep this green while the
       # claim stopped being true.
+      # THE STEP THAT MAKES THIS JOB WORTH ITS NAME. Above it, one rule is
+      # exercised because one rule's compiler is published for these hosts.
+      # Below it, EVERY rule is compiled for them -- including the ones whose
+      # payload reaches a device that macOS and Windows do not both have, and
+      # whose host-dependent code was therefore written without ever being
+      # compiled on the host it was written for.
+      - name: every rule module compiles for this host
+        working-directory: tests/all-rules-compile
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^all-rules-compile ok' run.log
+
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
         run: |

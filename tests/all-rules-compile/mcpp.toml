@@ -1,0 +1,51 @@
+# The fixture that compiles every rule in this collection, on whatever host is
+# running the build.
+#
+# WHY A FIXTURE WHOSE ONLY PRODUCT IS A COMPILATION.
+#
+# Each of the other consumers exercises one rule end to end, and each of them
+# needs that rule's payload: a shader compiler, a CUDA toolkit, a SYCL
+# compiler. Those payloads are published for one, two or three platforms, so
+# the consumers that need them can only run where they exist -- and the halves
+# of a rule that are written for a host are exactly the halves that host never
+# compiles.
+#
+# A rule's host-dependent code is `#if defined(_WIN32)`, a `.exe` suffix, a
+# directory named `lib/x64`, a listing command. None of it is compiled by a
+# Linux build, so a Windows branch can be syntactically wrong for as long as
+# nobody builds on Windows -- and the first person to do so gets a compile
+# error out of a package they only wanted to use.
+#
+# This fixture names no accelerator. Every rule's `compile()` returns
+# immediately in that state, so no payload is installed and no second compiler
+# is needed; what happens is that all six modules are compiled as host modules
+# for this host, which is the assertion. It is cheap enough to run on every
+# platform in the matrix.
+[package]
+name        = "all-rules-compile"
+namespace   = "example"
+version     = "0.1.0"
+description = "Compiles every rule module in this collection for the host running the build"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# Every feature this package publishes. A rule left out of this list is a rule
+# whose host-dependent code is compiled on one platform only.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = [
+  "rules-ascendc", "rules-cuda", "rules-hip", "rules-spirv", "rules-sycl",
+  "tools-embed",
+], host-module = true }
+
+# NO `accel`, and that is the whole design: with none, every rule returns
+# before it looks for a payload, so this fixture downloads nothing on any host.
+
+[build]
+sources = ["src/*.cpp"]
+
+[targets.all-rules-compile]
+kind = "bin"
+main = "src/main.cpp"
