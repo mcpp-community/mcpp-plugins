@@ -154,10 +154,42 @@ const auto s = myapp::shaders::blur_comp();
 VkShaderModuleCreateInfo ci{ .codeSize = s.size_bytes, .pCode = s.code };
 ```
 
-**The module name and the namespace are one identifier path.** `myapp.shaders`
-gives `myapp::shaders`, and a payload's directory below the globbed tree adds a
-segment: `shaders/post/tone.comp` is `myapp::shaders::post::tone_comp()`. The
-name is derived from the package unless the project sets `options::module_name`.
+### From a file name to a call
+
+Every name a consumer writes is derived, and derived one way, so nothing has to
+be looked up:
+
+```
+base directory   shaders/                  derived: the shallowest directory
+                                           every payload shares
+file             shaders/post/tone.frag
+                         └── the path below the base
+module           myapp.shaders             package name + group
+namespace        myapp::shaders::post      the module name segment by segment,
+                                           then the directory's segments
+identifier       tone_frag                 stem + stage, non-identifier
+                                           characters replaced by `_`
+call             myapp::shaders::post::tone_frag()
+```
+
+`myapp` comes from the package unless the project sets `options::module_name`;
+the base directory is derived unless it sets `options::base_dir`.
+
+Three invariants, and each exists because its absence was a defect:
+
+- **The module name and the namespace are the same identifier path**, `.` for
+  `::`. A reader never has to learn which namespace a module opens.
+- **The directory reaches the generated file's path and the linker symbol, not
+  only the namespace.** Two shaders sharing a stem in different directories
+  produced byte-identical generated headers, and GCC's `#pragma once` treats two
+  files with the same size and content as the same file -- so the second include
+  did nothing and both accessors returned the first array, while the program
+  printed the right magic number twice.
+- **The stage is always part of the identifier**, so `blur.comp` and `blur.frag`
+  do not collide. Uniformly rather than only when needed: conditional naming is
+  worse than verbose naming.
+
+
 
 **The interface is a function, and it names no standard-library type.** A
 variable cannot keep one shape across the ways bytes can be stored, because
@@ -210,6 +242,19 @@ module surface, `false` gives a header with the same declarations. mcpp reports
 the setting as `MCPP_LANGUAGE_MODULES`; an engine that does not report it leaves
 the header surface in place, so an older engine keeps the behaviour every
 consumer of this package had before the surface existed.
+
+**The generator is not shader-specific, and three members already share it.**
+`mcpp::plugins::surface` knows about a run of bytes, a name, where it lives and
+how it is reached; it does not know what SPIR-V is. `rules-spirv`, `rules-slang`
+and `tools-embed` all call it, which is what keeps their generated declarations
+from drifting.
+
+It lives in this package's lib root, so a rule package outside this collection
+reaches it by depending on `mcpp:plugins` and activating no feature -- the lib
+root alone, which is one small module. That works and is the intended path;
+whether the generator should become a package of its own is an open question and
+not one this version answers.
+
 
 **One copy of the bytes.** A generated data header declares a `static` array, so
 before this every translation unit that included one carried its own copy.
