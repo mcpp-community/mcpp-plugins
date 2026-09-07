@@ -73,6 +73,25 @@ export module mcpp.rules.sycl;
 import std;
 import mcpp;
 
+
+// WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
+//
+// `std::print` and `std::println` are not header-only. Both of their overloads
+// reach into the libc++ DYLIB -- `__is_posix_terminal(FILE*)` for the stdout
+// form and `__get_ostream_file(ostream&)` for the stream form -- and those
+// symbols were added to that library in a version macOS 14 does not ship. A
+// build program's link resolves `-lc++` to the system copy there, so a rule
+// that printed with `std::println` compiled and then failed to link:
+//
+//   ld64.lld: error: undefined symbol: std::__1::__is_posix_terminal(__sFILE*)
+//
+// naming neither the call that needed it nor the reason. Measured on
+// macos-14; macos-15 has the symbol, which is why nothing saw this until a
+// rule was first compiled on the older of the two supported releases.
+//
+// `std::format` is header-only and has no such dependency, so every message in
+// this file is formatted and then streamed.
+
 export namespace mcpp::rules::sycl {
 
 struct options {
@@ -275,30 +294,27 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     std::vector<edge> out;
     const std::string root = mcpp::manifest_dir();
     if (root.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.sycl: no mcpp build context -- this runs from build.mcpp");
+        std::cerr << std::format("mcpp.rules.sycl: no mcpp build context -- this runs from build.mcpp") << '\n';
         return out;
     }
 
     const auto tg = parse_target(mcpp::accel());
     if constexpr (kWindows) {
         if (!tg.cuda_archs.empty()) {
-            std::println(std::cerr,
-                "mcpp.rules.sycl: [build] accel names an NVIDIA target and this host's SYCL\n"
+            std::cerr << std::format("mcpp.rules.sycl: [build] accel names an NVIDIA target and this host's SYCL\n"
                 "  compiler cannot reach it. Upstream states that the CUDA and HIP plugins are\n"
                 "  not built for Windows, and the published asset agrees: its Unified Runtime\n"
                 "  adapters are Level Zero and OpenCL, and no others.\n"
                 "  Available on this host: accel = \"sycl\" -- SPIR-V, consumed by whichever\n"
-                "  Level Zero or OpenCL device the runtime finds.");
+                "  Level Zero or OpenCL device the runtime finds.") << '\n';
             return out;
         }
     }
     if (!tg.amd_archs.empty() && tg.cuda_archs.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.sycl: [build] accel names AMD architectures and this ecosystem\n"
+        std::cerr << std::format("mcpp.rules.sycl: [build] accel names AMD architectures and this ecosystem\n"
             "  publishes no ROCm payload yet, so nothing could link or run the result.\n"
             "  Available today: accel = \"sycl\" (SPIR-V, any device the runtime finds)\n"
-            "  or accel = \"sycl, cuda12.9+{{sm_89}}\" (ahead of time for NVIDIA).");
+            "  or accel = \"sycl, cuda12.9+{{sm_89}}\" (ahead of time for NVIDIA).") << '\n';
         return out;
     }
 
@@ -355,8 +371,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     if (!tg.cuda_archs.empty() && cuda.empty())
         missing += "    \"xim:cuda-nvcc\" = \"12.9.86\"\n";
     if (!missing.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.sycl: the SYCL island needs payloads that are not installed.\n"
+        std::cerr << std::format("mcpp.rules.sycl: the SYCL island needs payloads that are not installed.\n"
             "  This rule DECLARES them, so a project normally writes nothing. Check, in "
             "order:\n"
             "  mcpp older than 2026.9.6.6; `features = [\"rules-sycl\"]` missing from the\n"
@@ -368,16 +383,15 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             "  library underneath it. Without them dpcpp's clang reads the HOST's headers,\n"
             "  which is measurable in its include search list and invisible on its command\n"
             "  line.",
-            missing);
+            missing) << '\n';
         return out;
     }
 
     auto exe = opt.compiler;
     if (exe.empty()) exe = dpcpp + "/bin/clang++" + kExe;
     if (!is_file(exe)) {
-        std::println(std::cerr,
-            "mcpp.rules.sycl: {} is not a file. The dpcpp payload publishes its SYCL\n"
-            "  compiler under clang's own name; set options::compiler to name another.", exe);
+        std::cerr << std::format("mcpp.rules.sycl: {} is not a file. The dpcpp payload publishes its SYCL\n"
+            "  compiler under clang's own name; set options::compiler to name another.", exe) << '\n';
         return out;
     }
     if (auto v = compiler_version(exe); !v.empty()) mcpp::fact("dpcpp", v.c_str());
@@ -386,9 +400,8 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     const auto gid = kWindows ? std::string{} : gcc_install_dir(gcc);
     if constexpr (!kWindows) {
         if (gid.empty()) {
-            std::println(std::cerr,
-                "mcpp.rules.sycl: the xim:gcc payload at {} has no lib/gcc/<triple>/<version>\n"
-                "  directory, which is what --gcc-install-dir names.", gcc);
+            std::cerr << std::format("mcpp.rules.sycl: the xim:gcc payload at {} has no lib/gcc/<triple>/<version>\n"
+                "  directory, which is what --gcc-install-dir names.", gcc) << '\n';
             return out;
         }
     }
@@ -452,11 +465,11 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
                       "scheduler, where the program cannot catch it. Name the device to "
                       "compile ahead of time: accel = \"sycl, cuda12.9+{sm_89}\".");
 
-    std::println("mcpp.rules.sycl: {} -- {} for {}",
+    std::cout << std::format("mcpp.rules.sycl: {} -- {} for {}",
                  tg.cuda_archs.empty() ? "SPIR-V, compiled by the runtime"
                                        : "ahead of time, NVIDIA back end",
                  std::filesystem::path(exe).filename().string(),
-                 tg.cuda_archs.empty() ? std::string("any device") : tg.cuda_archs.front());
+                 tg.cuda_archs.empty() ? std::string("any device") : tg.cuda_archs.front()) << '\n';
 
     std::vector<std::string> objects;
     for (auto const& src : sources) {

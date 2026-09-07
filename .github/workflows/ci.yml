@@ -404,7 +404,15 @@ jobs:
           "$MCPP" --version
           # The bundled xlings, named explicitly because MCPP_HOME is pinned
           # away from the tarball. See the Linux job for the measurement.
-          export MCPP_VENDORED_XLINGS="$PWD/$dir/registry/bin/xlings"
+          #
+          # The suffix is the host's: the Windows distribution ships
+          # `registry/bin/xlings.exe`, and a variable pointing at a file that
+          # does not exist produces `error: xlings binary not found` naming
+          # three remedies, none of which is the one that applies.
+          XL="$PWD/$dir/registry/bin/xlings"
+          [ -f "$XL" ] || XL="$XL.exe"
+          test -f "$XL" || { echo "no vendored xlings at $XL"; exit 1; }
+          export MCPP_VENDORED_XLINGS="$XL"
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"

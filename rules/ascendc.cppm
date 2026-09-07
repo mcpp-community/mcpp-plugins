@@ -59,6 +59,25 @@ export module mcpp.rules.ascendc;
 import std;
 import mcpp;
 
+
+// WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
+//
+// `std::print` and `std::println` are not header-only. Both of their overloads
+// reach into the libc++ DYLIB -- `__is_posix_terminal(FILE*)` for the stdout
+// form and `__get_ostream_file(ostream&)` for the stream form -- and those
+// symbols were added to that library in a version macOS 14 does not ship. A
+// build program's link resolves `-lc++` to the system copy there, so a rule
+// that printed with `std::println` compiled and then failed to link:
+//
+//   ld64.lld: error: undefined symbol: std::__1::__is_posix_terminal(__sFILE*)
+//
+// naming neither the call that needed it nor the reason. Measured on
+// macos-14; macos-15 has the symbol, which is why nothing saw this until a
+// rule was first compiled on the older of the two supported releases.
+//
+// `std::format` is header-only and has no such dependency, so every message in
+// this file is formatted and then streamed.
+
 export namespace mcpp::rules::ascendc {
 
 // ─── What the engine said ──────────────────────────────────────────────────
@@ -209,8 +228,7 @@ inline std::optional<toolkit> find_toolkit() {
     toolkit t;
     const auto pkg = xpkg("cann-toolkit");
     if (pkg.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.ascendc: the CANN toolkit is not installed.\n"
+        std::cerr << std::format("mcpp.rules.ascendc: the CANN toolkit is not installed.\n"
             "  This rule DECLARES it, so a project normally writes nothing. Check, in "
             "order:\n"
             "  mcpp older than 2026.9.6.6; `features = [\"rules-ascendc\"]` missing from "
@@ -220,7 +238,7 @@ inline std::optional<toolkit> find_toolkit() {
             "    [target.'cfg(accelerator = \"ascend\")'.xlings.workspace]\n"
             "    \"xim:cann-toolkit\" = \"8.5.0\"\n"
             "  It carries both halves this rule needs: the device compiler and,\n"
-            "  for a machine with no NPU, the per-SoC simulators.");
+            "  for a machine with no NPU, the per-SoC simulators.") << '\n';
         return std::nullopt;
     }
     t.root = pkg + "/cann";
@@ -229,10 +247,9 @@ inline std::optional<toolkit> find_toolkit() {
         if (std::filesystem::is_directory(candidate)) { t.arch_root = candidate; break; }
     }
     if (t.arch_root.empty() || !std::filesystem::exists(t.bisheng())) {
-        std::println(std::cerr,
-            "mcpp.rules.ascendc: `xim:cann-toolkit` is installed at '{}' but has no\n"
+        std::cerr << std::format("mcpp.rules.ascendc: `xim:cann-toolkit` is installed at '{}' but has no\n"
             "  device compiler under <arch>-linux/ccec_compiler/bin/bisheng.\n"
-            "  The install is incomplete; reinstall the package.", pkg);
+            "  The install is incomplete; reinstall the package.", pkg) << '\n';
         return std::nullopt;
     }
     return t;
@@ -258,8 +275,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     std::vector<edge> out;
     const std::string root = mcpp::manifest_dir();
     if (root.empty()) {
-        std::println(std::cerr,
-            "mcpp.rules.ascendc: no mcpp build context -- this runs from build.mcpp");
+        std::cerr << std::format("mcpp.rules.ascendc: no mcpp build context -- this runs from build.mcpp") << '\n';
         return out;
     }
     const auto tg = parse_target(mcpp::accel());
@@ -267,12 +283,11 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         // The same refusal `mcpp.rules.cuda` makes, for the same reason: a
         // device build that names no device is refused HERE rather than at run
         // time, where it is a kernel that does not exist for the part present.
-        std::println(std::cerr,
-            "mcpp.rules.ascendc: [build] accel names no Da Vinci architecture "
+        std::cerr << std::format("mcpp.rules.ascendc: [build] accel names no Da Vinci architecture "
             "(accel = \"{}\").\n"
             "  Write e.g.  accel = \"ascend8.5+{{dav-c220}}\"  -- the set a build\n"
             "  compiles for is a decision, and the machine's own hardware is a poor\n"
-            "  default for it.", mcpp::accel());
+            "  default for it.", mcpp::accel()) << '\n';
         return out;
     }
     auto tk = find_toolkit();
