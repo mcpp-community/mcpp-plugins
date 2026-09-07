@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.2.6"
+version     = "0.3.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -24,6 +24,7 @@ default     = []
 rules-ascendc = { sources = ["rules/ascendc.cppm"] }
 rules-cuda  = { sources = ["rules/cuda.cppm"] }
 rules-hip   = { sources = ["rules/hip.cppm"] }
+rules-slang = { sources = ["rules/slang.cppm"] }
 rules-spirv = { sources = ["rules/spirv.cppm"] }
 rules-sycl  = { sources = ["rules/sycl.cppm"] }
 tools-embed = { sources = ["tools/embed.cppm"] }
@@ -167,6 +168,26 @@ tools-embed = { sources = ["tools/embed.cppm"] }
 
 [target.'cfg(all(accelerator = "vulkan", windows))'.feature-xlings.rules-spirv]
 "xim:shaderc" = "2026.3"
+
+# ONE TABLE FOR ALL THREE PLATFORMS, WHICH `rules-spirv` COULD NOT HAVE.
+#
+# `xim:slang` ships slangc for linux, macosx and windows and for both x86_64 and
+# aarch64, so this rule does not change compilers by platform the way the GLSL
+# rule does, and one table says everything.
+#
+# AN EXACT VERSION RATHER THAN A FLOOR, AND NOT FOR THE USUAL REASON. Slang's
+# version is coupled to no driver, so the rule this package follows would make
+# it a `>=`. It cannot be one on Windows: mcpp hands the provisioning request to
+# xlings as JSON on a cmd.exe command line, where the `>` is read as a
+# redirection (see the note above `rules-spirv`'s Windows entry).
+#
+# Writing `>=` on the two platforms that tolerate it and an exact version on the
+# third would resolve DIFFERENT payloads for one project depending on which
+# machine built it, which is how a defect comes to exist on one operating system
+# only. A uniform exact version is the weaker constraint honestly applied
+# everywhere; a project that wants a newer Slang names it and wins.
+[target.'cfg(accelerator = "vulkan")'.feature-xlings.rules-slang]
+"xim:slang" = "2026.14.1"
 
 # 8.5.0 is a real floor rather than a preference: the mixed-mode object -- the
 # one carrying both the device binary and a host-callable launcher, which is

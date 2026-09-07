@@ -36,7 +36,8 @@ import_std = true
 # whose host-dependent code is compiled on one platform only.
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = [
-  "rules-ascendc", "rules-cuda", "rules-hip", "rules-spirv", "rules-sycl",
+  "rules-ascendc", "rules-cuda", "rules-hip", "rules-slang", "rules-spirv",
+  "rules-sycl",
   "tools-embed",
 ], host-module = true }
 

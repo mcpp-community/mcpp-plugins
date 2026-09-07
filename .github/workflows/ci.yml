@@ -70,12 +70,71 @@ jobs:
       # The rule's output is a header holding the SPIR-V module; the program
       # checks the magic number in its first word, so no Vulkan runtime is
       # needed and what is tested is the rule and the engine path feeding it.
+      # ONE PACKAGE, ONE VERSION. `mcpp::plugins::version` was `0.1.1` while the
+      # package was `0.2.6`, and nothing noticed because nothing read it. Every
+      # rule now states it with `mcpp::fact`, and this compares the two
+      # spellings so a stale constant is a red build rather than a wrong entry
+      # in every consumer's log.
+      - name: the collection states its own version
+        run: |
+          declared=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' mcpp.toml | head -1)
+          insource=$(sed -n 's/.*version *= *"\(.*\)";.*/\1/p' src/plugins.cppm | head -1)
+          echo "mcpp.toml=$declared  src/plugins.cppm=$insource"
+          if [ "$declared" != "$insource" ]; then
+            echo "FAIL: mcpp.toml says '$declared' and src/plugins.cppm says '$insource'"
+            exit 1
+          fi
+          echo "ok: one version, two files agreeing"
+
       - name: rules-spirv through a consumer
         working-directory: tests/spirv-consumer
         run: |
           "$MCPP" build
           "$MCPP" run | tee run.log
           grep -q '^magic=07230203' run.log
+
+      # THE MODULE SURFACE, AND THE COLLISION IT DISSOLVES.
+      #
+      # This fixture has `shaders/a/scale.comp` and `shaders/b/scale.comp` --
+      # one stem, two directories -- which the step below this one asserts is
+      # REFUSED when the two would produce one output. They no longer do: the
+      # directory is part of the namespace, the generated file's path and the
+      # array's name, so both are built and reached as `shaders::a::scale_comp`
+      # and `shaders::b::scale_comp`.
+      #
+      # The program asserts the two arrays are DISTINCT OBJECTS, not only that
+      # both carry the SPIR-V magic number. Without that assertion this fixture
+      # passed while both accessors returned one array: the two generated data
+      # headers were byte-identical, and GCC's `#pragma once` treats two files
+      # with the same size and content as the same file, so the second include
+      # silently did nothing.
+      - name: rules-spirv through the module surface
+        working-directory: tests/spirv-module-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^a/scale.comp: magic=07230203' run.log
+          grep -q '^b/scale.comp: magic=07230203' run.log
+          grep -q '^all ok' run.log
+          # The point of the surface: a consumer names no generated file.
+          if grep -rn 'scale_comp\.h\|\.inc"' src/; then
+            echo "FAIL: a consumer source names a generated file"
+            exit 1
+          fi
+          echo "ok: the consumer names only the module"
+          # And what it imports really is a generated module interface.
+          test -f target/.build-mcpp/out/spirv/spirv_module_consumer.shaders.cppm
+          grep -q '^export module spirv_module_consumer.shaders;' \
+            target/.build-mcpp/out/spirv/spirv_module_consumer.shaders.cppm
+          # The interface must name no standard-library type: one that does
+          # carries that header's templates in every consumer's BMI, measured at
+          # 727 times the size of the std-free form.
+          if grep -n 'std::\|#include <' \
+               target/.build-mcpp/out/spirv/spirv_module_consumer.shaders.cppm; then
+            echo "FAIL: the generated module interface names a standard-library type"
+            exit 1
+          fi
+          echo "ok: the generated interface is std-free"
 
       # THE SECOND COMPILER, THROUGH THE SAME FIXTURE. glslang and glslc share
       # almost no flags -- glslc's `-mfmt=c` is a bare initialiser list where
@@ -139,6 +198,33 @@ jobs:
           rm -f dup.log restored.log
           echo "ok: and it builds again with one shader per stem"
 
+      # SLANG: A DIFFERENT LANGUAGE, THE SAME SURFACE.
+      #
+      # The point of this step is not that Slang compiles -- it is that a
+      # consumer cannot tell which rule produced its shaders. The fixture's
+      # `main.cpp` contains nothing Slang-specific and would compile unchanged
+      # against `mcpp.rules.spirv` if the shader were GLSL.
+      #
+      # It needs an engine that knows the `.slang` extension: a constrained
+      # glob's `accel` key does not make a file a device source, the engine's
+      # own `kDeviceExtensions` table does, and before that table listed
+      # `.slang` the file fell through to the ordinary source scan and was
+      # refused with "mcpp has no role for the extension".
+      - name: rules-slang through a consumer
+        working-directory: tests/slang-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^scale.slang: magic=07230203' run.log
+          grep -q '^all ok' run.log
+          if grep -rn 'scale\.h\|\.inc"' src/; then
+            echo "FAIL: a consumer source names a generated file"
+            exit 1
+          fi
+          grep -q '^export module slang_consumer.shaders;' \
+            target/.build-mcpp/out/slang/slang_consumer.shaders.cppm
+          echo "ok: a Slang shader reached through the same surface as a GLSL one"
+
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
       # that matters -- editing the data file must reach the binary, which is
@@ -153,6 +239,32 @@ jobs:
           "$MCPP" run | tee run2.log
           grep -q '^size=8 ' run2.log
           git checkout -- data/message.txt
+
+      # THE SAME SURFACE FROM A TOOL RATHER THAN A RULE.
+      #
+      # `file()` writes a header per input and the consumer includes each by
+      # name; `group()` hands the same headers to the same generator the shader
+      # rules use, so a set of data files and a set of shaders reach a consumer
+      # through one shape.
+      #
+      # The size assertion is the one that matters. `<id>_size` counts ELEMENTS
+      # and the surface reports BYTES, and `null_terminate` appends a byte that
+      # `_size` does not count -- so neither `_size` nor `sizeof` is the answer
+      # on its own. The fixture compares the payload against its exact text, and
+      # a trailing NUL fails it.
+      - name: tools-embed through the module surface
+        working-directory: tests/embed-module-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^alpha.txt: bytes=46 ok' run.log
+          grep -q '^beta.txt: bytes=15 ok' run.log
+          grep -q '^all ok' run.log
+          if grep -rn 'alpha_txt\.h\|beta_txt\.h' src/; then
+            echo "FAIL: a consumer source names a generated file"
+            exit 1
+          fi
+          echo "ok: two payloads, one import, sizes exact"
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a

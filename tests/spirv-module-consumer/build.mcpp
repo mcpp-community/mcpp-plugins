@@ -1,0 +1,15 @@
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.rules.spirv;
+
+int main() {
+    mcpp::rerun_if_changed_glob("shaders/**/*.comp");
+    mcpp::rules::spirv::options opt;
+    // Asked for explicitly rather than left to the default, because the default
+    // follows `MCPP_LANGUAGE_MODULES` and an engine older than the one that
+    // reports it would silently give this fixture the header surface -- which
+    // would still build, and would test nothing this fixture exists for.
+    opt.surface = mcpp::plugins::surface::kind::module_;
+    return mcpp::rules::spirv::compile(opt) ? 0 : 1;
+}

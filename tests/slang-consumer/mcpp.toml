@@ -1,0 +1,39 @@
+# The consumer that tests mcpp.rules.slang.
+#
+# Slang is a different language from GLSL, not a second driver for it, which is
+# why it is a rule of its own. What this fixture asserts is that the two rules
+# are nevertheless indistinguishable from a consumer's side: the same generated
+# module shape, the same namespace derivation, the same `payload` struct. A
+# project that moved a shader from GLSL to Slang would change the file and
+# nothing else.
+#
+# No Vulkan runtime is involved, for the reason the GLSL fixtures record: the
+# property that identifies a SPIR-V module without executing it is the magic
+# number in its first word.
+[package]
+name        = "slang-consumer"
+namespace   = "example"
+version     = "0.1.0"
+description = "A Slang compute shader compiled to SPIR-V through mcpp.rules.slang"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-slang"], host-module = true }
+
+# NO [xlings.workspace]. `xim:slang` is declared by the rule, under the feature
+# that selects it and the accelerator it serves.
+
+[build]
+accel = "vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "shaders/*.slang", accel = "vulkan1.2" },
+]
+
+[targets.slang-consumer]
+kind = "bin"
+main = "src/main.cpp"

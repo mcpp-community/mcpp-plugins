@@ -8,6 +8,7 @@ import mcpp;
 import mcpp.rules.ascendc;
 import mcpp.rules.cuda;
 import mcpp.rules.hip;
+import mcpp.rules.slang;
 import mcpp.rules.spirv;
 import mcpp.rules.sycl;
 import mcpp.tools.embed;
@@ -19,6 +20,7 @@ int main() {
     bool ok = mcpp::rules::ascendc::compile()
            && mcpp::rules::cuda::compile()
            && mcpp::rules::hip::compile()
+           && mcpp::rules::slang::compile()
            && mcpp::rules::spirv::compile()
            && mcpp::rules::sycl::compile();
     // `tools::embed` has no accelerator gate, so it is asked the one question

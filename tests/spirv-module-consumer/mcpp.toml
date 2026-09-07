@@ -1,0 +1,39 @@
+# The consumer that tests the MODULE surface of mcpp.rules.spirv.
+#
+# What it asserts that `spirv-consumer` cannot:
+#
+#   - a consumer reaches its shaders with `import`, and names no generated
+#     header anywhere in its own sources;
+#   - two shaders with one stem in two directories are no longer a collision:
+#     `shaders/a/scale.comp` and `shaders/b/scale.comp` land in
+#     `spirv_module_consumer::shaders::a` and `::b`;
+#   - the module name and the namespace are the same identifier path, derived
+#     from the package with nothing declared for it.
+#
+# No Vulkan runtime is involved, for the reason `spirv-consumer` records: the
+# property that identifies a SPIR-V module without executing it is the magic
+# number in its first word.
+[package]
+name        = "spirv-module-consumer"
+namespace   = "example"
+version     = "0.1.0"
+description = "GLSL compute shaders reached through a generated C++ module"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-spirv"], host-module = true }
+
+[build]
+accel = "vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "shaders/**/*.comp", accel = "vulkan1.2" },
+]
+
+[targets.spirv-module-consumer]
+kind = "bin"
+main = "src/main.cpp"
