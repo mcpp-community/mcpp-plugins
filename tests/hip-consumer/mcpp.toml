@@ -3,7 +3,12 @@ name         = "hip-consumer"
 namespace    = "example"
 version      = "0.1.0"
 description  = "A HIP kernel behind a seam module, reaching an NVIDIA device, with a CPU fallback"
-accelerators = ["hip"]
+# BOTH, because the constrained glob below names both. On the NVIDIA platform
+# HIP compiles THROUGH the CUDA back end, so `cuda` is a backend this package's
+# sources are written for even though nothing here says the word. mcpp refuses a
+# glob naming a backend its package does not declare (2026.9.6.5+), which is
+# what caught this list being short by one.
+accelerators = ["hip", "cuda"]
 
 [language]
 standard   = "c++23"
@@ -31,20 +36,16 @@ plugins = { path = "../..", features = ["rules-hip"], host-module = true }
 [dependencies.compat]
 cuda-runtime = "2026.09.05"
 
-# The payloads. `hip-nvidia` is headers only -- on this platform that is all
-# HIP is -- and the four CUDA entries are the back end it compiles through.
-# cuRAND and CCCL are on the list for the reason the CUDA consumer records:
-# clang's CUDA wrapper includes curand_mtgp32_kernel.h for every device unit
-# and that header includes <nv/target>, so a unit that calls neither still
-# needs both.
-[xlings.workspace]
-"xim:hip-nvidia"        = "7.2.4"
-"xim:cuda-nvcc"         = "12.9.86"
-"xim:cuda-cudart"       = "12.9.79"
-"xim:libcurand"         = "10.3.10.19"
-"xim:cuda-cccl"         = "12.9.27"
-"xim:cuda-profiler-api" = "12.9.79"
-"xim:libcuda-host-link" = { linux = "0.0.1" }
+# NO [xlings.workspace]. The rule declares the payloads it drives, under the
+# feature that selects it and the accelerator it serves, so this project names
+# the rule and nothing else. Needs mcpp 2026.9.6.6; before it, a payload a
+# dependency declared was installed and then answered as absent.
+#
+# The list `mcpp.rules.hip` carries is the CUDA one plus `cuda-profiler-api`:
+# `nvidia_hip_runtime_api.h` includes <cuda_profiler_api.h> at its second line,
+# and a machine with a host CUDA installation finds that header in /usr/include
+# without saying so -- which is how the entry came to be missing from a build
+# that worked.
 
 [build]
 # Two chunks: the programming model, and the device. A device is spelled once

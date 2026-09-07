@@ -210,8 +210,14 @@ inline std::optional<toolkit> find_toolkit() {
     const auto pkg = xpkg("cann-toolkit");
     if (pkg.empty()) {
         std::println(std::cerr,
-            "mcpp.rules.ascendc: the CANN toolkit is not declared.\n"
-            "  Name it under [xlings.workspace] and mcpp provisions it on first use:\n"
+            "mcpp.rules.ascendc: the CANN toolkit is not installed.\n"
+            "  This rule DECLARES it, so a project normally writes nothing. Check, in "
+            "order:\n"
+            "  mcpp older than 2026.9.6.6; `features = [\"rules-ascendc\"]` missing from "
+            "the\n"
+            "  [build-dependencies] edge; or a build that names no Ascend accelerator.\n"
+            "  To pin a different version, name it in your own project and it wins:\n"
+            "    [target.'cfg(accelerator = \"ascend\")'.xlings.workspace]\n"
             "    \"xim:cann-toolkit\" = \"8.5.0\"\n"
             "  It carries both halves this rule needs: the device compiler and,\n"
             "  for a machine with no NPU, the per-SoC simulators.");

@@ -401,8 +401,14 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     if (!cc) {
         if (cc.reported) return false;
         std::println(stderr,
-            "mcpp.rules.spirv: no shader compiler found. Install one into the workspace\n"
-            "  [xlings.workspace]\n"
+            "mcpp.rules.spirv: no shader compiler found.\n"
+            "  This rule DECLARES glslang, so a project normally writes nothing. Check, in "
+            "order:\n"
+            "  mcpp older than 2026.9.6.6; `features = [\"rules-spirv\"]` missing from the\n"
+            "  [build-dependencies] edge; or a build that names no Vulkan accelerator.\n"
+            "  To use glslc instead, or to pin a different version, name it in your own\n"
+            "  project and it wins:\n"
+            "  [target.'cfg(accelerator = \"vulkan\")'.xlings.workspace]\n"
             "  \"xim:glslang\" = \"15.1.0\"     # glslangValidator\n"
             "  \"xim:shaderc\" = \"2026.3\"     # glslc\n"
             "or name it: MCPP_GLSLANG=/path/to/glslangValidator, MCPP_GLSLC=/path/to/glslc,\n"
