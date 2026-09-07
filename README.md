@@ -340,6 +340,27 @@ flags that make the compiler read the generated header before the island's first
 line -- `-include <path>` for gcc and clang, `/FI<path>` for MSVC -- so a project
 using this generator has no header in its source tree and no line naming one.
 
+**Those flags go to the RULE, not to the project.** The island is compiled by a
+driver mcpp did not invoke, which inherits nothing from `mcpp::cflag` or
+`mcpp::cxxflag`, so each device rule takes them on its own command line:
+
+```cpp
+mcpp::rules::cuda::options opt;
+opt.flags = mcpp::tools::island::force_include_flags(out->header_file,
+                                                     mcpp::compiler());
+```
+
+`cuda`, `hip`, `sycl` and `ascendc` all carry `options::flags`, appended last and
+passed through unexamined. The project-wide channels are not merely too wide for
+this, they are wrong for it: `cxxflag` forces the header into every C++
+translation unit, including the seam `.cppm`, and a module interface unit must
+begin with `export module` -- declarations ahead of that line are ill-formed.
+
+A HOST fallback compiled by mcpp itself has no such command line, so it writes
+one ordinary `#include` of the generated header. The asymmetry is between "a
+compiler this project can flag on its own" and "every C++ translation unit",
+not between the two halves' importance.
+
 An `#include` of the generated header would name a file its author never opens,
 and it buys no self-containment: that translation unit could not be compiled
 outside mcpp with or without the line, because the file it names does not exist
