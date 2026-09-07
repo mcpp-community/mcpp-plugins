@@ -48,8 +48,18 @@ jobs:
           tar -xzf mcpp.tar.gz
           MCPP="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/bin/mcpp"
           "$MCPP" --version
+          # THE BUNDLED xlings, NAMED EXPLICITLY BECAUSE `MCPP_HOME` IS PINNED.
+          #
+          # A released tarball carries its own xlings at `registry/bin/xlings`
+          # and finds it there when its home IS that tarball. Pinning the home
+          # elsewhere moves the place mcpp looks, so the first command fails
+          # with `xlings binary not found` -- measured. The override is needed
+          # only for that first call: mcpp copies the binary into the pinned
+          # home and answers from there afterwards.
+          export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/registry/bin/xlings"
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
 
       # The rule's output is a header holding the SPIR-V module; the program
       # checks the magic number in its first word, so no Vulkan runtime is
