@@ -39,7 +39,7 @@ plugins = { path = "../..", features = ["tools-island"], host-module = true }
 # disk in either build, and the manifest decides which one is compiled.
 [build]
 accel   = "vulkan1.2"
-sources = ["src/*.cpp"]
+sources = ["src/*.cppm", "src/*.cpp"]
 
 [target.'cfg(accelerator = "vulkan")'.build]
 sources = ["src/kernels/*.c"]

@@ -297,6 +297,13 @@ Two files come out of that one marked declaration: the `extern "C"` header the
 device translation unit includes, guards and `__cplusplus` dance included, and
 the module the C++ side imports.
 
+The C++ side is usually a **seam module** of the project rather than a consumer
+directly: `app.cppm` imports the generated module and turns pointers and a count
+back into spans, and it is the one place a backend can be exchanged. That means
+one module interface of the project imports a module interface written into the
+build directory during the same build; the ordering comes from the scan seeing
+the import, and nothing has to be declared for it.
+
 **Three layers, and each overrides the one above.** `scan` reads the marked
 declarations out of the island, which puts the signature beside the definition;
 `emit` takes a list directly, for entry points a scan cannot see; and a project

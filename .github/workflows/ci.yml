@@ -243,8 +243,19 @@ jobs:
           # island reads the generated header through the compiler's
           # forced-include flag -- so a project using this generator has no
           # header in its source tree and no line naming one.
-          if grep -rn '#include' src/main.cpp src/kernels/saxpy.c src/cpu/saxpy.c; then
+          if grep -rn '#include' src/main.cpp src/app.cppm src/kernels/saxpy.c src/cpu/saxpy.c; then
             echo "FAIL: a source names an include; the generator exists to remove it"
+            exit 1
+          fi
+          # THE SEAM IS A MODULE OF THIS PROJECT IMPORTING THE GENERATED ONE.
+          # `main.cpp` is not a module unit, so its import said nothing about
+          # ordering two module interfaces where one is written during the
+          # build. `src/app.cppm` is, and it is the shape every example under
+          # examples/09-heterogeneous has.
+          grep -q '^import island_interface.kernels;' src/app.cppm \
+            || { echo "FAIL: the seam no longer imports the generated module"; exit 1; }
+          if grep -q 'saxpy_device\|scale_device' src/main.cpp; then
+            echo "FAIL: the consumer names a boundary symbol; the seam exists to hide it"
             exit 1
           fi
           # AND THE CHECK THAT INCLUDE USED TO DO IS STILL THERE. The compiler
