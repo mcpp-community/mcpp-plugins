@@ -6,7 +6,11 @@
 #     header anywhere in its own sources;
 #   - two shaders with one stem in two directories are no longer a collision:
 #     `shaders/a/scale.comp` and `shaders/b/scale.comp` land in
-#     `spirv_module_consumer::shaders::a` and `::b`;
+#     `shader_app::shaders::a` and `::b`;
+#   - a directory whose name is a C++ KEYWORD is reached as `default_`. `a` and
+#     `b` are ordinary identifiers and cannot tell a name filter that knows the
+#     keywords from one that does not; `shaders/default/` can, and without the
+#     guard the generator writes `namespace default {`;
 #   - the module name and the namespace are the same identifier path, derived
 #     from the package with nothing declared for it.
 #

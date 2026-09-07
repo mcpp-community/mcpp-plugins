@@ -115,7 +115,17 @@ jobs:
           "$MCPP" run | tee run.log
           grep -q '^a/scale.comp: magic=07230203' run.log
           grep -q '^b/scale.comp: magic=07230203' run.log
+          grep -q '^default/scale.comp: magic=07230203' run.log
           grep -q '^all ok' run.log
+          # A DIRECTORY NAMED AFTER A C++ KEYWORD. `a` and `b` are ordinary
+          # identifiers and cannot tell a name filter that knows the keywords
+          # from one that does not; without the guard this is
+          # `namespace default {` and the generated file does not parse.
+          grep -q '^namespace default_ {' \
+            target/.build-mcpp/out/spirv/shader_app.shaders.cppm \
+            || { echo "FAIL: the keyword directory did not get its trailing underscore"
+                 grep -n namespace target/.build-mcpp/out/spirv/shader_app.shaders.cppm
+                 exit 1; }
           # The point of the surface: a consumer names no generated file.
           if grep -rn 'scale_comp\.h\|\.inc"' src/; then
             echo "FAIL: a consumer source names a generated file"

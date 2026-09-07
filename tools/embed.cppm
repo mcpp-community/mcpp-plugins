@@ -89,13 +89,11 @@ struct options {
 
 // ---- internals -------------------------------------------------------------
 
+// The accessor's own name, so a file called `default.bin` must not produce
+// `default()`. The lib root owns that decision; this is the one caller that
+// needs it here.
 inline std::string sanitise(std::string_view stem) {
-    std::string s;
-    for (char c : stem)
-        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
-    if (s.empty()) s = "data";
-    if (std::isdigit(static_cast<unsigned char>(s.front()))) s.insert(s.begin(), '_');
-    return s;
+    return mcpp::plugins::surface::identifier(stem, "data");
 }
 
 inline std::string default_dir() {

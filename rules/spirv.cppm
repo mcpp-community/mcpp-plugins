@@ -477,11 +477,10 @@ inline std::vector<std::string> namespace_of(std::string_view src, std::string_v
     for (auto const& part : std::filesystem::path(dir)) {
         auto s = part.string();
         if (s.empty() || s == "." || s == "/") continue;
-        std::string seg;
-        for (char c : s)
-            seg += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
-        if (std::isdigit(static_cast<unsigned char>(seg.front()))) seg.insert(seg.begin(), '_');
-        out.push_back(std::move(seg));
+        // Through the lib root, which is the one place that knows a segment
+        // may not be a keyword: `shaders/default/` is an ordinary directory
+        // name and `namespace default {` is not a namespace.
+        out.push_back(mcpp::plugins::surface::identifier(s, "dir"));
     }
     return out;
 }

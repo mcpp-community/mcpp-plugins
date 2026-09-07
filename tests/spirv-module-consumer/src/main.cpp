@@ -28,6 +28,14 @@ int main() {
     bool ok = true;
     ok &= check("a/scale.comp", shaders::a::scale_comp());
     ok &= check("b/scale.comp", shaders::b::scale_comp());
+    // A DIRECTORY NAMED AFTER A C++ KEYWORD, reached as `default_`.
+    //
+    // `a` and `b` are ordinary identifiers, so neither could tell a name filter
+    // that knows the keywords from one that does not. `shaders/default/` is an
+    // ordinary name for a shader directory and `namespace default {` is not a
+    // namespace: without the trailing underscore the generator writes a file
+    // that does not parse, and the error names a line nobody wrote.
+    ok &= check("default/scale.comp", shaders::default_::scale_comp());
 
     // The two shaders are the same source in two directories, so they must
     // produce identical modules -- and they must be two distinct objects, not

@@ -267,6 +267,68 @@ inline std::string accessor_base(const options& opt, const item& it) {
     return s;
 }
 
+// A GENERATED NAME THE C++ COMPILER WILL ACCEPT.
+//
+// Three transformations, and the third is the one every hand-rolled copy of
+// this function was missing. Non-identifier characters become `_`; a leading
+// digit gets a `_` in front; and a result that is a KEYWORD gets a trailing `_`.
+//
+// The keyword case is not hypothetical. The first two rules accept `default`,
+// `template`, `operator`, `private` and `union` unchanged -- they are valid
+// identifiers to a character filter and reserved to the compiler -- and
+// `shaders/default/` is an ordinary name for a shader directory. What it
+// produced was `namespace default {` in a generated file, and an error naming a
+// line its author never wrote.
+//
+// TRAILING `_`, not a prefix: `_default` is reserved at namespace scope
+// (a leading underscore in the global namespace), and prefixing would trade one
+// reserved name for another.
+//
+// The list is the keywords of the standard this collection targets. A word that
+// is contextual rather than reserved (`final`, `override`, `import`, `module`)
+// is a legal identifier and is left alone.
+inline bool is_cxx_keyword(std::string_view w) {
+    static constexpr std::string_view kWords[] = {
+        "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor",
+        "bool", "break", "case", "catch", "char", "char8_t", "char16_t",
+        "char32_t", "class", "compl", "concept", "const", "consteval",
+        "constexpr", "constinit", "const_cast", "continue", "co_await",
+        "co_return", "co_yield", "decltype", "default", "delete", "do", "double",
+        "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false",
+        "float", "for", "friend", "goto", "if", "inline", "int", "long",
+        "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
+        "operator", "or", "or_eq", "private", "protected", "public", "register",
+        "reinterpret_cast", "requires", "return", "short", "signed", "sizeof",
+        "static", "static_assert", "static_cast", "struct", "switch",
+        "template", "this", "thread_local", "throw", "true", "try", "typedef",
+        "typeid", "typename", "union", "unsigned", "using", "virtual", "void",
+        "volatile", "wchar_t", "while", "xor", "xor_eq",
+    };
+    for (auto k : kWords) if (k == w) return true;
+    return false;
+}
+
+// `fallback` is used when the input sanitises to nothing, which a file named
+// only in punctuation does.
+//
+// INDEXED RATHER THAN A RANGE-FOR over the string, for the reason recorded in
+// `mcpp.tools.island`: iterating a `std::string` inside an exported inline
+// function makes GCC 16 instantiate its iterator in this BMI, and a consumer's
+// build program then fails to compile on `always_inline` in a header naming
+// neither this file nor this loop.
+inline std::string identifier(std::string_view raw, std::string_view fallback) {
+    std::string s;
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const char c = raw[i];
+        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
+    }
+    if (s.empty()) s = std::string(fallback);
+    if (!s.empty() && std::isdigit(static_cast<unsigned char>(s.front())))
+        s.insert(s.begin(), '_');
+    if (is_cxx_keyword(s)) s += '_';
+    return s;
+}
+
 inline const char* element_type(element e) {
     return e == element::word32 ? "unsigned int" : "unsigned char";
 }
@@ -354,8 +416,12 @@ inline std::string declarations(std::span<const item> items, const options& opt)
     for (auto const& it : items) {
         reopen(it.name_space);
         const auto base = accessor_base(opt, it);
+        // THROUGH `identifier`, HERE RATHER THAN IN EACH PRODUCER. This is the
+        // one line that turns `item::identifier` into something a compiler
+        // parses, and a rule that builds the field from a file stem cannot know
+        // it has produced `my-shader_comp` or `default` until it gets here.
         s += std::format("inline payload {}() {{ return {{ {}_data(), {}_size() }}; }}\n",
-                         it.identifier, base, base);
+                         identifier(it.identifier, "payload"), base, base);
     }
     reopen({});
     return s;
@@ -646,12 +712,7 @@ inline std::string module_root_from_package() {
     std::string leaf{mcpp::package_name()};
     if (leaf.empty())
         leaf = std::filesystem::path(mcpp::manifest_dir()).filename().string();
-    std::string s;
-    for (char c : leaf)
-        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
-    if (s.empty()) s = "app";
-    if (std::isdigit(static_cast<unsigned char>(s.front()))) s.insert(s.begin(), '_');
-    return s;
+    return identifier(leaf, "app");
 }
 
 } // namespace mcpp::plugins::surface
