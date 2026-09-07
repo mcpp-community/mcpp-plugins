@@ -566,11 +566,24 @@ jobs:
           # added to this package would be covered by a step whose name says it
           # already is. The list is therefore compared against the package's
           # own `[features]` before the build, and the two must be equal.
-          feats=$(sed -n '/^\[features\]/,/^# /p' mcpp.toml \
-                  | grep -oE '^[a-z-]+ +=' | sed 's/ *=//' | grep -v '^default$' | sort)
+          # OFF THE SECTION HEADERS, which is where a feature's name is
+          # since 0.3.0: a feature carries `device_extensions` and
+          # `rule_module` as well as `sources`, and TOML 1.0 forbids a
+          # multi-line inline table, so `[features.<name>]` replaced
+          # `<name> = { ... }`. Reading keys out of the table BODY matched
+          # `sources` once per feature and reported the fixture as
+          # incomplete while the extractor was what broke.
+          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+                  | sed 's/^\[features\.//; s/\]$//' | sort)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
-          [ -n "$feats" ] || { echo "FAIL: read no features out of mcpp.toml"; exit 1; }
+          [ -n "$feats" ] || {
+            echo "FAIL: read no features out of mcpp.toml. The extractor above"
+            echo "      expects [features.<name>] sections and found none, so the"
+            echo "      manifest spelling changed -- the package has not stopped"
+            echo "      having features."
+            grep -n '^\[features' mcpp.toml | head
+            exit 1; }
           [ "$feats" = "$used" ] || {
             echo "FAIL: the fixture does not name every published feature"
             echo "  package: $(echo $feats)"
@@ -850,11 +863,24 @@ jobs:
           # added to this package would be covered by a step whose name says it
           # already is. The list is therefore compared against the package's
           # own `[features]` before the build, and the two must be equal.
-          feats=$(sed -n '/^\[features\]/,/^# /p' mcpp.toml \
-                  | grep -oE '^[a-z-]+ +=' | sed 's/ *=//' | grep -v '^default$' | sort)
+          # OFF THE SECTION HEADERS, which is where a feature's name is
+          # since 0.3.0: a feature carries `device_extensions` and
+          # `rule_module` as well as `sources`, and TOML 1.0 forbids a
+          # multi-line inline table, so `[features.<name>]` replaced
+          # `<name> = { ... }`. Reading keys out of the table BODY matched
+          # `sources` once per feature and reported the fixture as
+          # incomplete while the extractor was what broke.
+          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+                  | sed 's/^\[features\.//; s/\]$//' | sort)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
-          [ -n "$feats" ] || { echo "FAIL: read no features out of mcpp.toml"; exit 1; }
+          [ -n "$feats" ] || {
+            echo "FAIL: read no features out of mcpp.toml. The extractor above"
+            echo "      expects [features.<name>] sections and found none, so the"
+            echo "      manifest spelling changed -- the package has not stopped"
+            echo "      having features."
+            grep -n '^\[features' mcpp.toml | head
+            exit 1; }
           [ "$feats" = "$used" ] || {
             echo "FAIL: the fixture does not name every published feature"
             echo "  package: $(echo $feats)"
