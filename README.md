@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.2.3", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.3.0", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -49,7 +49,7 @@ engine's own module family and is not used here.
 | `rules-ascendc` | `mcpp.rules.ascendc` | 2026.9.6.6 | `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. Its own engine needs are `.asc` in the device-source table and `mcpp::link_flag` for the `-rpath-link` the toolkit's shared libraries require, both 2026.9.6.5 |
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.6.6 | `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-hip` | `mcpp.rules.hip` | 2026.9.6.6 | `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
-| `rules-slang` | `mcpp.rules.slang` | see below | `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. Its engine need is `.slang` in the device-source table |
+| `rules-slang` | `mcpp.rules.slang` | 2026.9.7.1 | `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. `.slang` is **not** in the engine's device-source table: this feature declares `device_extensions = [".slang"]` and `rule_module = "mcpp.rules.slang"`, and the engine routes it from there. That is the criterion for the whole arrangement -- a new device language costs no engine release |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; compiles each shader through a `role = "source"` action and states which of the two compilers produced it |
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.6 | `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1 |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
@@ -61,7 +61,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.2.4", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.3.0", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -127,8 +127,15 @@ device source that reached no action, naming the file. That is the engine's
 half of this rule and it needs 2026.9.6.5.
 
 The floor is the mcpp release whose engine carries what the member relies on.
-From 0.2.4 every rule shares one: **2026.9.6.6**, the release in which a payload
-a DEPENDENCY declared is both installed and answerable. Before it a rule could
+From 0.3.0 every rule shares one: **2026.9.7.1**, the release that reads
+`device_extensions` and `rule_module`, reports `[language] modules` and the
+package's own name to a build program, and writes the build program a declared
+rule set describes. A client below it does not get a degraded surface; it gets a
+build in which the rules never route -- the file falls through to the ordinary
+source scan and mcpp says it has no role for the extension.
+
+The previous shared floor was 2026.9.6.6, the release in which a payload a
+DEPENDENCY declared is both installed and answerable. Before it a rule could
 declare `>=8.5.0`, have it installed, and still be told by `xpkg_dir` that
 nothing was there -- which is why each rule's list used to be repeated in every
 project that used it. The earlier per-member floors are still the floors of the
@@ -136,6 +143,12 @@ rules themselves (`rules-spirv` needs the shader extensions in the device-source
 table, 2026.9.5.3; `tools-embed` needs the fast path to compare a declared file
 input, 2026.9.5.4; `rules-sycl` needs `.sycl` in that table, 2026.9.6.1), and
 they are all below the shared one.
+
+`rules-slang` is the member that does NOT appear in that list, and its absence
+is the point: `.slang` is in no engine table at any version. The feature
+declares the extension and the module that compiles it, so the release it needs
+is the one that reads those two keys rather than the one that would have carried
+its extension.
 
 The index descriptor states the highest floor among the members, so it is the
 floor of the collection rather than of any one feature; a project on an older
