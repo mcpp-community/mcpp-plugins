@@ -503,6 +503,20 @@ inline std::optional<emitted> emit(std::span<const item> items, const options& o
     }
 
     const auto segs = split_module_name(opt.module_name);
+    // REFUSED HERE, NOT IN THE GENERATED FILE. The module name is the one part
+    // of this surface a project writes itself, and each of its segments becomes
+    // a namespace. A segment that is not an identifier -- empty, starting with
+    // a digit, carrying a `-`, or reserved -- produces a generated file that
+    // does not parse, and the error then names a line nobody wrote.
+    for (std::size_t i = 0; i < segs.size(); ++i) {
+        if (segs[i] == identifier(segs[i], "")) continue;
+        std::cerr << std::format(
+            "mcpp.plugins.surface: `{}` is not a usable module name: the segment `{}` "
+            "is not a C++ identifier.\n  Each segment becomes a namespace, so it has "
+            "to be one; `{}` would work.\n",
+            opt.module_name, segs[i], identifier(segs[i], "part"));
+        return std::nullopt;
+    }
     const auto by   = opt.produced_by.empty() ? std::string("mcpp.plugins.surface")
                                               : opt.produced_by;
 
