@@ -261,6 +261,69 @@ before this every translation unit that included one carried its own copy.
 Exactly one translation unit -- the generated implementation -- includes them
 now, and every consumer reaches the same array through the accessor.
 
+## The other generated interface: an island's boundary
+
+`mcpp::plugins::surface` generates the whole interface for a **data** payload,
+because an address and a size are all there is to decide.
+`mcpp::plugins::island` generates what is mechanical about a **code** island --
+and only that.
+
+```cpp
+// build.mcpp
+const std::vector<std::string> entries{
+    "int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n)",
+};
+mcpp::plugins::island::options opt;
+opt.module_name = "myapp.kernels";
+opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
+const auto out  = mcpp::plugins::island::emit(entries, opt);
+mcpp::include_dir(out->include_dir.c_str());
+mcpp::generated(out->interface_file.c_str());
+```
+
+Two files come out of that one declaration: the `extern "C"` header the device
+translation unit includes, guards and `__cplusplus` dance included, and the
+module the C++ side imports.
+
+**The declaration still exists once.** Without this, a project writes it twice --
+in a header, and again wherever the C++ side reaches it. C language linkage does
+not mangle, so two copies that disagree are one symbol: the link is clean and
+each side reads the arguments by its own ABI, with no compile error and no link
+error. That is the copy this removes.
+
+**The module re-exports names, not signatures.** `export using ::saxpy_device;`
+needs the identifier and nothing else, so the generator has no C parser in it and
+the header stays the only place a signature is written. Measured on both
+implementations this package supports: a consumer that imports the module and
+never includes the header calls the entry point and links against an
+implementation built by a different driver, under GCC 16.1 and clang 22.1.8.
+
+**The C++ interface is still yours.** A seam that turns raw pointers into
+`std::optional<std::vector<float>>` is a design decision, and no generator makes
+it well. This removes the boilerplate around the boundary, not the boundary's
+design. `emit_module = false` emits the header alone for a project that keeps a
+hand-written seam that includes rather than imports.
+
+### Why the generators live here and not in mcpp
+
+The engine's `mcpp` module is compiled into the mcpp binary and carries the
+**protocol** -- what a build program can tell mcpp: `action`, `generated`,
+`include_dir`, `fact`, `floor`. A generator is a **library on top of** that
+protocol: it reads declarations, writes files, and hands them back through
+`mcpp::generated`. It extends nothing.
+
+So the line is: the engine's module carries the protocol, and generators are
+libraries. Both of these are opinionated and will change -- what a `payload`
+looks like, how a namespace is derived, which storages exist -- and code inside
+the engine changes only with an engine release, which is the coupling this
+version's `device_extensions` work exists to remove.
+
+A rule package outside this collection reaches them by depending on
+`mcpp:plugins` and activating no feature: the lib root alone, one small module.
+That is a package dependency it chooses, not a coupling the engine imposes. If
+they stabilise, moving them into the engine later is a low-risk step; the reverse
+is not.
+
 ## How the engine sees this package
 
 mcpp compiles every module interface unit among a host-module package's

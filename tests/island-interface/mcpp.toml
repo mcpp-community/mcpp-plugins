@@ -1,0 +1,38 @@
+# The consumer that tests `mcpp.plugins.island`.
+#
+# WHY THE ISLAND HERE IS A `.c` AND NOT A `.cu`.
+#
+# The generator does not know what compiler produced the object. What it knows
+# is that the boundary is `extern "C"` and that one side is a module -- which is
+# exactly the arrangement a CUDA, HIP, SYCL or Ascend C island has, and is
+# reproducible without a vendor toolkit. A fixture that needed one could only
+# run where that toolkit is published, and the half of this that could break is
+# the generated files rather than the device compiler.
+#
+# What it asserts:
+#
+#   - the header the island includes is GENERATED, so the guard, the
+#     `extern "C"` block and the `__cplusplus` dance are not written by hand;
+#   - the module the C++ side imports is generated too, and re-exports the entry
+#     points by name rather than restating their signatures;
+#   - the consumer never includes the header.
+[package]
+name        = "island-interface"
+namespace   = "example"
+version     = "0.1.0"
+description = "An extern \"C\" island reached through a generated module"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", host-module = true }
+
+[build]
+sources = ["src/*.cpp", "src/kernels/*.c"]
+
+[targets.island-interface]
+kind = "bin"
+main = "src/main.cpp"

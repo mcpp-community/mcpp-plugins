@@ -198,6 +198,45 @@ jobs:
           rm -f dup.log restored.log
           echo "ok: and it builds again with one shader per stem"
 
+      # THE OTHER GENERATED INTERFACE, AND THE ONE THAT IS NOT A PAYLOAD.
+      #
+      # `mcpp.plugins.island` generates the boundary a device island is reached
+      # across: the `extern "C"` header its compiler includes, and the module the
+      # C++ side imports. The entry points are declared once, so the copy that
+      # can drift is gone -- and at a C-linkage boundary that copy is the worst
+      # one available, because nothing mangles and two disagreeing declarations
+      # link cleanly.
+      #
+      # The island here is a `.c` rather than a `.cu`: the generator does not
+      # know what compiler produced the object, and a fixture needing a vendor
+      # toolkit could only run where that toolkit is published.
+      - name: island interfaces are generated, not written
+        working-directory: tests/island-interface
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' run.log
+          grep -q '^all ok' run.log
+          # Neither artefact is written by hand.
+          test ! -f include/island_interface.kernels.h
+          d=target/.build-mcpp/out/island
+          grep -q 'extern "C" {' "$d/island_interface.kernels.h"
+          grep -q '^export using ::saxpy_device;' "$d/island_interface.kernels.cppm"
+          grep -q '^export using ::scale_device;'  "$d/island_interface.kernels.cppm"
+          # The module re-exports NAMES: a second copy of a signature is the
+          # thing this generator exists to remove, so its appearance here is a
+          # regression even though it would compile.
+          if grep -q 'int saxpy_device(' "$d/island_interface.kernels.cppm"; then
+            echo "FAIL: the module restated a signature instead of re-exporting a name"
+            exit 1
+          fi
+          # And the consumer includes nothing.
+          if grep -rn '#include' src/main.cpp; then
+            echo "FAIL: the C++ side includes rather than imports"
+            exit 1
+          fi
+          echo "ok: one declaration, two generated artefacts, no restated signature"
+
       # NO BUILD PROGRAM AT ALL, WHICH IS WHAT THE TWO KEYS BUY.
       #
       # `spirv-consumer` and `spirv-module-consumer` both write a `build.mcpp`,
