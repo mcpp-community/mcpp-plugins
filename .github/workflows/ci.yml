@@ -176,15 +176,23 @@ jobs:
 
       # TWO SHADERS THAT DIFFER ONLY BY DIRECTORY.
       #
-      # The output name is the stem and the stage, so `a/x.vert` and `b/x.vert`
-      # both produce `x_vert.h` declaring `x_vert_spv`. Before this rule checked
-      # for it, ninja caught the duplicate output -- so it was never silent, but
-      # the message named the generated file and neither shader, arrived as a
-      # graph-loading failure rather than as this rule's refusal, and stated no
-      # way out. A project with one shader per stage never meets it, which is
-      # how it survived; a graphics project organising shaders by purpose is the
-      # first to have two.
-      - name: two shaders with one stem are refused, naming both
+      # They used to produce one output -- the name was the stem and the stage,
+      # so `a/x.vert` and `b/x.vert` both gave `x_vert.h` declaring
+      # `x_vert_spv` -- and the rule refused, because ninja's duplicate-output
+      # error named the generated file and neither shader.
+      #
+      # THE COLLISION IS GONE, and this step asserts what replaced it. The
+      # shader's directory is part of the generated file's path and of the
+      # array's name, so the two are two things. That change was not made for
+      # ergonomics: two byte-identical generated headers collapse under GCC's
+      # `#pragma once`, which treats two files of the same size and content as
+      # the same file, so the second include silently did nothing and both
+      # accessors returned one array.
+      #
+      # The rule's refusal stays, and its condition is now two shaders with one
+      # name in ONE directory. A single glob cannot construct that; an explicit
+      # `options::base_dir` can.
+      - name: two shaders with one stem are two payloads, not one
         working-directory: tests/spirv-consumer
         run: |
           set -e
@@ -194,21 +202,23 @@ jobs:
           cp mcpp.toml mcpp.toml.bak
           sed -i 's#shaders/\*.comp#shaders/**/*.comp#' mcpp.toml
           rm -rf target
-          if "$MCPP" build > dup.log 2>&1; then
-            echo "FAIL: two shaders mapping to one output were accepted"
-            exit 1
-          fi
-          for needle in 'two shaders map to one output' 'shaders/scale.comp' \
-                        'shaders/dup/scale.comp' 'scale_comp_spv' 'rename one of them'; do
-            grep -q -- "$needle" dup.log || {
-              echo "FAIL: the refusal does not mention '$needle'"
-              tail -20 dup.log
-              exit 1
-            }
-          done
-          echo "ok: refused, naming both shaders, the symbol and the way out"
-          # …and the fixture still builds once the duplicate is gone, so this
-          # step cannot leave a project that refuses everything.
+          "$MCPP" build > dup.log 2>&1 || {
+            echo "FAIL: two shaders differing only by directory were refused"
+            tail -20 dup.log; mv mcpp.toml.bak mcpp.toml; rm -rf shaders/dup; exit 1; }
+          # TWO declarations, and the directory is in the second one's name.
+          # A build that collapsed them would also produce a working binary, so
+          # the criterion is the generated names rather than the run.
+          d=target/.build-mcpp/out/spirv
+          find "$d" -name '*.h' | sort | sed 's/^/  /'
+          grep -rq 'scale_comp_spv' "$d" || {
+            echo "FAIL: the top-level shader lost its declaration"; exit 1; }
+          grep -rq 'dup_scale_comp_spv' "$d" || {
+            echo "FAIL: the shader in dup/ did not take its directory into its name"
+            grep -rho '[a-z_]*scale_comp_spv' "$d" | sort -u
+            exit 1; }
+          echo "ok: two directories sharing a stem are two payloads"
+          # …and the fixture still builds with one shader per stem, so this step
+          # cannot leave a project that refuses everything.
           mv mcpp.toml.bak mcpp.toml
           rm -rf shaders/dup target
           "$MCPP" build > restored.log 2>&1 || {
