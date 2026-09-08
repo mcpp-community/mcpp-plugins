@@ -1324,6 +1324,38 @@ jobs:
       # come from the GRAPH, not from the fixture. Without it, a fixture that
       # quietly regained an `[xlings.workspace]` would keep this green while the
       # claim stopped being true.
+      # THE ISLAND BOUNDARY, ON THE TWO HOSTS WHERE ITS DERIVATION HAD NEVER RUN.
+      #
+      # `mcpp.tools.island` compiles on all three hosts -- the fixture above
+      # imports it -- but until 0.5.1 nothing EXERCISED it outside Linux, and
+      # what it does is path arithmetic: a namespace is the path from a root to
+      # a file, and a path separator is not the same character everywhere.
+      # `force_include_flags` also answers `/FI<path>` as one token for MSVC
+      # where every other driver takes `-include <path>` as two, and that branch
+      # had no runner either.
+      #
+      # The fixture needs no accelerator payload: its islands are ordinary C,
+      # and `accel` selects which of the two roots the manifest compiles.
+      - name: the island boundary, generated and namespaced on this host
+        working-directory: tests/island-interface
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' run.log
+          grep -q '^all ok' run.log
+          d=target/.build-mcpp/out/island
+          # The namespace is the path from the layout root to the file, so this
+          # is the assertion a separator mistake fails.
+          grep -q '^export namespace island_interface::kernels {' \
+            "$d/island_interface.kernels.cppm"
+          grep -q '^export namespace island_interface::kernels::image {' \
+            "$d/island_interface.kernels.cppm"
+          if grep -q 'namespace' "$d/island_interface.kernels.h"; then
+            echo "FAIL: the generated header carries a namespace"; exit 1
+          fi
+          echo "ok: the boundary is generated and namespaced on this host"
+
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
         run: |
