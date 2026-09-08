@@ -9,7 +9,7 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  MCPP_VERSION: 2026.9.7.1
+  MCPP_VERSION: 2026.9.8.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -472,6 +472,157 @@ jobs:
             || { echo "FAIL: it failed for some other reason"; cat /tmp/away.log; exit 1; }
           echo "ok: found from the package root, reported missing from elsewhere"
 
+      # AN EDITED SHADER REACHES THE ARTIFACT, UNDER EVERY STORAGE.
+      #
+      # The three storage steps above assert STRUCTURE: the `.S` names the
+      # payload, the section is aligned, no C initialiser was written. All three
+      # passed against 0.3.0, in which object storage served a STALE artifact --
+      # the shader recompiled, the object did not, and the program reported the
+      # previous payload's byte count with a green build. Structure cannot see
+      # that. Only editing a shader and reading what comes out can.
+      #
+      # THE DENOMINATOR IS THE POINT. Header storage was already correct, so a
+      # run where only `object` fails names the mechanism, and a run where all
+      # three fail names the harness -- a distinction one fixture cannot make.
+      #
+      # The edit adds a statement guarded by a value the host never passes, so
+      # the compiled module must grow while the program's output stays
+      # comparable.
+      - name: an edited shader reaches the artifact under every storage
+        run: |
+          set -u
+          fail=0
+          for fx in spirv-module-consumer:header spirv-object-storage:object spirv-sidecar:sidecar; do
+            dir=${fx%%:*}; store=${fx##*:}
+            cd "$GITHUB_WORKSPACE/tests/$dir"
+            shader=$(find shaders -name '*.comp' | sort | head -1)
+            cp "$shader" /tmp/shader.bak
+            # `|| { ...; continue; }` and not a bare command: a `run:` block
+            # runs under `bash -e`, so a bare failing build would end the STEP
+            # here and the other two storages would never run -- losing the
+            # denominator this check is built around.
+            "$MCPP" build > /dev/null \
+              || { echo "FAIL[$store]: build"; fail=1; cp /tmp/shader.bak "$shader"; continue; }
+            before=$("$MCPP" run 2>&1 | sed -n 's/.*bytes=\([0-9]*\).*/\1/p' | awk '{s+=$1} END {print s+0}')
+            sed -i 's|void main() {|void main() {\n    if (push.n == 0xdeadu) { v[0] = 1.0; v[1] = 2.0; v[2] = 3.0; }|' "$shader"
+            "$MCPP" build > /dev/null \
+              || { echo "FAIL[$store]: rebuild"; fail=1; cp /tmp/shader.bak "$shader"; continue; }
+            after=$("$MCPP" run 2>&1 | sed -n 's/.*bytes=\([0-9]*\).*/\1/p' | awk '{s+=$1} END {print s+0}')
+            cp /tmp/shader.bak "$shader"
+            if [ -z "$before" ] || [ -z "$after" ]; then
+              echo "FAIL[$store]: no byte count printed (before='$before' after='$after')"
+              fail=1
+            elif [ "$before" = "$after" ]; then
+              echo "FAIL[$store]: the shader changed and the artifact did not (bytes=$before both times)"
+              fail=1
+            else
+              echo "ok[$store]: $before -> $after"
+            fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
+      # AN EDITED `#include` REACHES THE ARTIFACT.
+      #
+      # The step above edits the shader itself, which every rule declares as an
+      # action input. This edits a file the shader INCLUDES, which no rule
+      # declares: `a.input()` is fixed when build.mcpp runs, before the compiler
+      # has read a line, so the only channel is the depfile the compiler writes
+      # afterwards. `grep depfile rules/` returned nothing across all six rules
+      # until 0.3.1, and editing an included `.glsl` rebuilt nothing.
+      #
+      # ON THE HEADER-STORAGE FIXTURE, AND THAT IS NOT ARBITRARY. Run against
+      # `spirv-object-storage` this step tests two mechanisms at once: measured,
+      # it fails when EITHER the depfile or the `.incbin` declaration is absent,
+      # so a red run would not say which. Header storage compiles the payload in
+      # as generated source, where the compile edge is dirty for the ordinary
+      # reason, and what remains under test is the depfile alone.
+      #
+      # Both shader compilers were measured writing one that names the include:
+      #   glslangValidator --depfile   ->  out.spv: scale.comp ./common.glsl
+      #   glslc -MD -MF                ->  out2.spv: scale.comp common.glsl
+      - name: an edited include reaches the artifact
+        working-directory: tests/spirv-module-consumer
+        run: |
+          set -u
+          shader=shaders/default/scale.comp
+          inc=shaders/default/common.glsl
+          cp "$shader" /tmp/scale.bak
+          printf 'const float kBias = 0.0;\n' > "$inc"
+          sed -i 's|#version 450|#version 450\n#extension GL_GOOGLE_include_directive : require\n#include "common.glsl"|' "$shader"
+          sed -i 's|+ v\[push.n + i\];|+ v[push.n + i] + kBias;|' "$shader"
+          "$MCPP" build > /dev/null
+          before=$("$MCPP" run 2>&1 | sed -n 's/.*bytes=\([0-9]*\).*/\1/p' | awk '{s+=$1} END {print s+0}')
+          # ONLY THE INCLUDED FILE CHANGES NOW. Nothing any rule declared as an
+          # input is touched, so a rebuild happens only if the depfile said so.
+          printf 'const float kBias = 1.0;\nconst float kPad0 = 2.0;\nconst float kPad1 = 3.0;\n' > "$inc"
+          "$MCPP" build > /dev/null
+          after=$("$MCPP" run 2>&1 | sed -n 's/.*bytes=\([0-9]*\).*/\1/p' | awk '{s+=$1} END {print s+0}')
+          cp /tmp/scale.bak "$shader"
+          rm -f "$inc"
+          if [ -z "$before" ] || [ -z "$after" ]; then
+            echo "FAIL: no byte count printed (before='$before' after='$after')"
+            exit 1
+          fi
+          if [ "$before" = "$after" ]; then
+            echo "FAIL: the included file changed and the artifact did not (bytes=$before both times)"
+            exit 1
+          fi
+          echo "ok: an included file reaches the artifact ($before -> $after)"
+
+      # OBJECT STORAGE WITHOUT THE TOOL IS REFUSED, AND THE REFUSAL SAYS WHAT
+      # TO ADD.
+      #
+      # `tools = [...]` is default-off: nothing is built unless a consumer asks,
+      # which is what keeps the DEFAULT storage free of a tool build. The cost
+      # is that a project can ask for object storage and not for the tool, and
+      # what it gets then is a message -- so the message is a contract. Asserted
+      # on the three strings a reader needs: that the tool is what is missing,
+      # the key that supplies it, and the storage that needs none.
+      - name: object storage without the tool is refused, naming the fix
+        run: |
+          set -u
+          W="$GITHUB_WORKSPACE/tests/spirv-object-storage"
+          cp "$W/mcpp.toml" /tmp/objstore.toml
+          # Remove only the tools request, leaving everything else in place.
+          sed -i 's/, tools = \["mcpp-embed"\]//' "$W/mcpp.toml"
+          cd "$W"
+          rm -rf target
+          if "$MCPP" build > refusal.log 2>&1; then
+            cp /tmp/objstore.toml mcpp.toml
+            echo "FAIL: object storage built with no way to generate its assembly"
+            exit 1
+          fi
+          cp /tmp/objstore.toml mcpp.toml
+          fail=0
+          grep -q 'mcpp-embed' refusal.log || { echo "FAIL: the refusal does not name the tool"; fail=1; }
+          grep -q 'tools = ' refusal.log   || { echo "FAIL: the refusal does not name the key that supplies it"; fail=1; }
+          grep -q 'storage::header' refusal.log || { echo "FAIL: the refusal does not name the way out"; fail=1; }
+          if [ "$fail" -ne 0 ]; then cat refusal.log; exit 1; fi
+          rm -f refusal.log
+          echo "ok: refused, naming the tool, the key and the alternative"
+
+      # EVERY RULE PASSES A DEPFILE, AND THE DENOMINATOR IS THE RULE COUNT.
+      #
+      # The step above proves the channel works for the one lane CI can run.
+      # The other four compile for accelerators no runner has, so what can be
+      # asserted about them is that each one declares the field -- read from the
+      # code rather than from a list written here, so a seventh rule is counted
+      # the day it is added and not the day someone remembers this step.
+      - name: every rule declares a depfile
+        run: |
+          set -u
+          cd "$GITHUB_WORKSPACE"
+          rules=$(ls rules/*.cppm | wc -l)
+          withdep=$(grep -l 'depfile' rules/*.cppm | wc -l)
+          echo "rules with a depfile: $withdep of $rules"
+          if [ "$withdep" -ne "$rules" ]; then
+            echo "FAIL: these rules pass no depfile:"
+            for f in rules/*.cppm; do
+              grep -q 'depfile' "$f" || echo "  $f"
+            done
+            exit 1
+          fi
+
       # SLANG: A DIFFERENT LANGUAGE, THE SAME SURFACE.
       #
       # The point of this step is not that Slang compiles -- it is that a
@@ -601,8 +752,25 @@ jobs:
           # `<name> = { ... }`. Reading keys out of the table BODY matched
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
-          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-                  | sed 's/^\[features\.//; s/\]$//' | sort)
+          # MEMBERS, NOT EVERY FEATURE. A feature that another feature
+          # IMPLIES is internal -- `surface` carries the build-program half of
+          # the generated surface and every member implies it, and a consumer
+          # never writes it. Subtracting the implied ones keeps this check
+          # meaning "the fixture names every member a consumer can activate";
+          # padding the fixture instead would make it mean less.
+          #
+          # The rule is read out of the manifest, not listed here, so a seventh
+          # MEMBER is still caught: nothing implies it.
+          # A TEMP FILE, NOT `<(...)`. This step also runs on windows-2022
+          # through Git Bash, where process substitution is emulated and not
+          # dependable -- and a check that behaves differently on one of the
+          # three hosts is the exact class of difference this job exists to
+          # catch, so it must not introduce one.
+          grep -oE '^implies[[:space:]]*=.*' mcpp.toml \
+            | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u > /tmp/implied.txt
+          grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/allfeats.txt
+          feats=$(comm -23 /tmp/allfeats.txt /tmp/implied.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
@@ -898,8 +1066,23 @@ jobs:
           # `<name> = { ... }`. Reading keys out of the table BODY matched
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
-          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-                  | sed 's/^\[features\.//; s/\]$//' | sort)
+          # MEMBERS, NOT EVERY FEATURE. A feature that another feature
+          # IMPLIES is internal -- `surface` carries the build-program half of
+          # the generated surface and every member implies it, and a consumer
+          # never writes it. Subtracting the implied ones keeps this check
+          # meaning "the fixture names every member a consumer can activate";
+          # padding the fixture instead would make it mean less. The rule is
+          # read out of the manifest, so a seventh MEMBER is still caught.
+          #
+          # A temp file, not `<(...)`: this step also runs on windows-2022
+          # through Git Bash, where process substitution is emulated and not
+          # dependable -- and a check that behaves differently on one of the
+          # three hosts is the class of difference this job exists to catch.
+          grep -oE '^implies[[:space:]]*=.*' mcpp.toml \
+            | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u > /tmp/implied.txt
+          grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/allfeats.txt
+          feats=$(comm -23 /tmp/allfeats.txt /tmp/implied.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {

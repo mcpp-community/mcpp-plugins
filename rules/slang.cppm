@@ -50,6 +50,7 @@ import mcpp;
 // consumer names, shared with `mcpp.rules.spirv` so a project that has both
 // reaches them through one shape.
 import mcpp.plugins;
+import mcpp.plugins.declare;
 
 // `std::println` is avoided here for the reason every file in this package
 // records: it is not header-only, and the symbols its overloads reach for were
@@ -340,7 +341,10 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     const std::string baseDir = opt.base_dir.empty() ? common_base_dir(shaders) : opt.base_dir;
     const std::string moduleName =
         opt.module_name.empty()
-            ? mcpp::plugins::surface::module_root_from_package() + ".shaders"
+            ? mcpp::plugins::surface::module_root_for(
+                  mcpp::package_name(),
+                  std::filesystem::path(mcpp::manifest_dir()).filename().string())
+              + ".shaders"
             : opt.module_name;
 
     // Two shaders whose stem and directory both match would produce one output,
@@ -424,6 +428,17 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         a.arg("-source-embed-style"); a.arg("u32");
         a.arg("-source-embed-name");  a.arg(sym.c_str());
         a.arg("-o"); a.arg(inc.c_str());
+        // What the shader `#include`s, which only slangc can know. `a.input()`
+        // below names the `.slang` and is fixed here, before the compiler has
+        // read a line; a shader including a second `.slang` therefore had no
+        // edge to it, and editing that file left a stale module behind a green
+        // build. slangc computes the answer while parsing and writes it out.
+        //
+        // Measured: `slangc ... -depfile s.d` writes
+        // `out.spv: <entry>.slang <included>.slang`.
+        const std::string dep = inc + ".d";
+        a.arg("-depfile"); a.arg(dep.c_str());
+        a.depfile = dep.c_str();
         a.arg(input.c_str());
         a.input(input.c_str());
         a.output(inc.c_str());
@@ -438,12 +453,13 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     so.module_name = moduleName;
     so.out_dir     = gen;
     so.produced_by = "mcpp.rules.slang";
+    // Answered here, not read there: `mcpp.plugins.surface` compiles into a
+    // plain binary as well as into this build program, so it takes its inputs.
+    so.target_os          = mcpp::target_os();
+    so.has_gas_assembler  = std::string_view(mcpp::compiler()) != "msvc";
 
-    const auto out = mcpp::plugins::surface::emit(items, so);
-    if (!out) return false;
-    mcpp::generated(out->interface_file.c_str());
-    mcpp::generated(out->impl_file.c_str());
-    if (!out->include_dir.empty()) mcpp::include_dir(out->include_dir.c_str());
+    const auto out = mcpp::plugins::surface_for(items, so);
+    if (!out.ok) return false;
 
     mcpp::fact("mcpp.plugins", std::string(mcpp::plugins::version).c_str());
     return true;

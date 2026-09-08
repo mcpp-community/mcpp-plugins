@@ -23,7 +23,13 @@ import_std = true
 # docs/05 section 2.6.1 exists for. `host-module = true` says which build-time
 # product is wanted; the section says whether the package reaches the target.
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["rules-spirv"], host-module = true }
+# `tools = [...]` and `host-module = true` are two axes of ONE edge, and this
+# fixture needs both. Object storage generates its assembly through an ACTION
+# so that the payloads can be that action's declared inputs, and an action's
+# command is a program -- `mcpp-embed`, built from this same package, so its
+# version cannot drift from the declarations it writes. The default storage
+# needs no program and no `tools`.
+plugins = { path = "../..", features = ["rules-spirv"], host-module = true, tools = ["mcpp-embed"] }
 
 # NO [xlings.workspace]. The rule declares the payloads it drives, under the
 # feature that selects it and the accelerator it serves, so this project names

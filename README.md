@@ -127,12 +127,28 @@ device source that reached no action, naming the file. That is the engine's
 half of this rule and it needs 2026.9.6.5.
 
 The floor is the mcpp release whose engine carries what the member relies on.
-From 0.3.0 every rule shares one: **2026.9.7.1**, the release that reads
+From 0.4.0 every rule shares one: **2026.9.8.1**, the release in which a
+package's host modules are ordered by their IMPORT GRAPH rather than by their
+paths. This package needs that: `src/declare.cppm` is imported by every member,
+and `rules/` sorts before `src/`, so before that release the members were
+compiled first and failed with "failed to read compiled module".
+
+**The floor could have been avoided, and was not.** `src/declare.cppm` sorts
+after `rules/`, which is exactly why it needs the ordering fix -- and naming it
+`aa_declare.cppm` at the package root would make the old PATH order happen to be
+correct, so 0.4.0 would run on 2026.9.7.1 with no floor move at all. That is
+declined on purpose: it encodes a load-bearing constraint in a filename with
+nothing enforcing it, which is the fragility the engine fix removes. A file
+renamed for a reason nobody can see is a defect waiting for the rename that
+looks harmless.
+
+The previous shared floor was 2026.9.7.1, the release that reads
 `device_extensions` and `rule_module`, reports `[language] modules` and the
-package's own name to a build program, and writes the build program a declared
-rule set describes. A client below it does not get a degraded surface; it gets a
-build in which the rules never route -- the file falls through to the ordinary
-source scan and mcpp says it has no role for the extension.
+package's own name to a build program, writes the build program a declared rule
+set describes, and gives `mcpp::action` its `depfile` field. A client below it
+does not get a degraded surface; it gets a build in which the rules never route
+-- the file falls through to the ordinary source scan and mcpp says it has no
+role for the extension.
 
 The previous shared floor was 2026.9.6.6, the release in which a payload a
 DEPENDENCY declared is both installed and answerable. Before it a rule could
@@ -223,6 +239,41 @@ identical under all three, so a project changes this and no consumer changes.
 | `header` (default) | a C array in generated source, compiled in | almost always |
 | `object` | a section, through `.incbin` in a generated `.S` | total payload is large |
 | `sidecar` | a file beside the artifact, read at run time | hot reload, or a payload too large to link |
+
+**Every payload a compile reads is in the build graph.** Two mechanisms carry
+that, and which one applies is decided by WHEN the thing is known.
+
+A shader's `#include` is discovered by the compiler while it runs, so it arrives
+afterwards, in a depfile. `mcpp::action::depfile` carries it and all six rules
+pass one -- each spelling measured against the tool rather than read from its
+help text.
+
+An `.incbin` is discovered by nobody. The assembler opens the file at assembly
+time; the generated `.S`'s own text does not change when the payload does; the
+object is assembled once. Measured on 0.3.0, in a sandbox against the published
+packages: editing a shader left the program printing the previous payload's byte
+count, with a green build.
+
+Asking the assembler does not fix it, and that was measured rather than assumed.
+The compiler driver's `-MD` is a preprocessor channel that never sees `.incbin`;
+GNU as names it in its own `--MD`; clang's integrated assembler has no
+dependency output of any kind. Tracking it that way would work under GCC and
+fail silently under Clang -- worse than failing under both.
+
+**So under `object` storage the generation is an ACTION and the payloads are its
+declared inputs.** That is the one graph primitive the engine has, used for what
+it is: a payload changes, the action reruns, its outputs count as new, and the
+edge that assembles them reruns. The command is `mcpp-embed`, built from this
+package through `tools = ["mcpp-embed"]` -- not published separately, because
+docs/05 section 2.14 states what that costs: "the tool's version IS the
+dependency's version, so a `protoc` that does not match its runtime is not
+expressible."
+
+`header` and `sidecar` need none of it, and that was checked rather than
+assumed. Under `header` the bytes reach the artifact through generated data
+headers the payload's own compiler already writes as action outputs; under
+`sidecar` they are never compiled at all. So the default path builds no tool,
+and a consumer that never opts into object storage writes nothing extra.
 
 **Which one is a measurement, not a preference.** With GCC 16.1 on 100 payloads
 of 16 KB each -- the size of an ordinary compute shader:
