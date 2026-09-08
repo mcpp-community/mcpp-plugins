@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.5.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.5.1", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -61,7 +61,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.5.0", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.5.1", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -142,8 +142,8 @@ nothing enforcing it, which is the fragility the engine fix removes. A file
 renamed for a reason nobody can see is a defect waiting for the rename that
 looks harmless.
 
-0.5.0 does not move it. Naming an island's entry points is a change to what this
-package generates, not to what it asks the engine for.
+0.5.0 and 0.5.1 do not move it. Naming an island's entry points is a change to
+what this package generates, not to what it asks the engine for.
 
 The previous shared floor was 2026.9.7.1, the release that reads
 `device_extensions` and `rule_module`, reports `[language] modules` and the
@@ -379,7 +379,9 @@ src/backends/cuda/image/blur.cu   myapp_blur   ->  myapp::kernels::image::myapp_
 src/backends/cuda/saxpy.cu        myapp_saxpy  ->  myapp::kernels::myapp_saxpy
 ```
 
-**A root is a tree, and one of them supplies the shape.** `options::roots` names
+**A root is a tree, and one of them supplies the shape.** Overlapping roots are
+refused: a file reachable from two of them has two namespace paths, and which
+one it got would depend on the order of the list. `options::roots` names
 the directories implementations live under; `options::layout_root` names the one
 whose directory structure decides where entry points live, and defaults to the
 first. Every other root only has to define the names, so a fallback tree may be
