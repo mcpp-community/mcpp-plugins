@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.3.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.5.0", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -61,7 +61,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.3.0", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.5.0", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -141,6 +141,9 @@ declined on purpose: it encodes a load-bearing constraint in a filename with
 nothing enforcing it, which is the fragility the engine fix removes. A file
 renamed for a reason nobody can see is a defect waiting for the rename that
 looks harmless.
+
+0.5.0 does not move it. Naming an island's entry points is a change to what this
+package generates, not to what it asks the engine for.
 
 The previous shared floor was 2026.9.7.1, the release that reads
 `device_extensions` and `rule_module`, reports `[language] modules` and the
@@ -348,10 +351,13 @@ int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n
 ```cpp
 // build.mcpp
 mcpp::tools::island::options opt;
-opt.module_name = "myapp.kernels";
-opt.out_dir     = std::string(mcpp::out_dir()) + "/island";
+opt.module_name  = "myapp.kernels";
+opt.out_dir      = std::string(mcpp::out_dir()) + "/island";
+opt.roots        = { root + "/src/backends/cuda", root + "/src/backends/cpu" };
+opt.layout_root  = root + "/src/backends/cuda";   // default: roots.front()
+opt.strip_prefix = "myapp_";                       // optional short spelling
 
-const auto entries = mcpp::tools::island::scan(islands, opt);
+const auto entries = mcpp::tools::island::scan(opt);
 const auto out     = mcpp::tools::island::emit(*entries, opt);
 mcpp::include_dir(out->include_dir.c_str());
 mcpp::generated(out->interface_file.c_str());
@@ -361,6 +367,52 @@ Two files come out of that one marked declaration: the `extern "C"` header the
 device translation unit includes, guards and `__cplusplus` dance included, and
 the module the C++ side imports.
 
+**The names arrive in the module's own namespace (0.5.0).** `docs/42` states one
+rule for both lanes -- the module name and the namespace are one identifier path
+-- and this generator did not follow it: every entry point was at global scope,
+so `import myapp.kernels` bought a file name and nothing else. It follows it
+now, and a directory below the layout root extends the path exactly as a payload
+tree's does:
+
+```
+src/backends/cuda/image/blur.cu   myapp_blur   ->  myapp::kernels::image::myapp_blur
+src/backends/cuda/saxpy.cu        myapp_saxpy  ->  myapp::kernels::myapp_saxpy
+```
+
+**A root is a tree, and one of them supplies the shape.** `options::roots` names
+the directories implementations live under; `options::layout_root` names the one
+whose directory structure decides where entry points live, and defaults to the
+first. Every other root only has to define the names, so a fallback tree may be
+one flat file or six directories and may be reorganised without renaming
+anything a consumer wrote. This is a naming role and not a rank: every root
+compiles, links, and is equally a backend.
+
+A file list would not do: its common ancestor moves when a file is added, and a
+consumer's qualified name would move with it. Roots also must not come from
+`mcpp::device_sources()`, which `accel` narrows to nothing under `--no-accel` --
+the device tree would vanish and the namespace would come from the fallback.
+
+`scan` registers every file it reads as a declared input and each root as a
+glob, so **adding** a file re-runs the program. Declared inputs are hashed
+contents, and a new file changes none of them.
+
+**A short spelling, when the prefix repeats the namespace.** An island's symbol
+is global to the whole program, so an entry point carries a package prefix
+whether or not it sits in a namespace. `options::strip_prefix` emits a second
+spelling beside the first:
+
+```cpp
+export namespace myapp::kernels::image {
+using ::myapp_blur;                          // the authored name; this is the symbol
+inline constexpr auto blur = myapp_blur;     // the short name, for the call site
+}
+```
+
+Both are exported and the authored one stays canonical -- it is what `nm`, a
+link error, a profiler and `dlsym` show. A `constexpr` function pointer costs
+the artifact nothing: the pair is one symbol. A short name that collides with
+another entry point's name in the same namespace is refused, naming both.
+
 The C++ side is usually a **seam module** of the project rather than a consumer
 directly: `app.cppm` imports the generated module and turns pointers and a count
 back into spans, and it is the one place a backend can be exchanged. That means
@@ -369,10 +421,11 @@ build directory during the same build; the ordering comes from the scan seeing
 the import, and nothing has to be declared for it.
 
 **Three layers, and each overrides the one above.** `scan` reads the marked
-declarations out of the island, which puts the signature beside the definition;
-`emit` takes a list directly, for entry points a scan cannot see; and a project
-that wants neither writes its own header and its own module wrapper. The default
-is the one that keeps the signature in one place.
+declarations out of the roots, which puts the signature beside the definition;
+`island::declared` builds an entry from a declaration the scan cannot see, for
+`emit` to take directly; and a project that wants neither writes its own header
+and its own module wrapper. The default is the one that keeps the signature in
+one place.
 
 **The marker selects.** An island has internal functions, and a generator that
 exported whatever the file contained would make the boundary an accident of the
@@ -425,29 +478,30 @@ where it was written rather than at the link:
 src/kernels/saxpy.c:22:5: error: conflicting types for 'scale_device'
 ```
 
-**A seam has two halves, and `scan` is where they are compared.** A device
-island and a host fallback implement one `extern "C"` boundary, and exactly one
-of them is in any link. A build program hands `scan` both, unconditionally --
-both files exist on disk in either build, and which one is compiled is the
-manifest's decision rather than a condition the build program repeats:
+**Two checks, and they answer different questions.**
 
-```cpp
-const std::vector<std::string> islands{
-    std::string(mcpp::manifest_dir()) + "/src/kernels/saxpy.cu",
-    std::string(mcpp::manifest_dir()) + "/src/cpu/saxpy.cpp",
-};
+One name declared twice in ONE root is a collision. C language linkage does not
+mangle, so those are one symbol, and a namespace that appeared to separate them
+would promise an isolation the linker does not provide -- measured: two modules
+re-exporting one `extern "C"` name into two namespaces give `&a::f == &b::f`.
+It is refused, naming both files and saying that two implementations of one
+entry point belong in two roots. That refusal is what makes the namespaces
+honest: a name exists in exactly one of them.
+
+One name in SEVERAL roots is one entry point implemented several times, which is
+the ordinary shape of a seam -- a device island and a host fallback, exactly one
+of them in any link. Every root is read unconditionally, because all of them
+exist on disk in either build and which one is compiled is the manifest's
+decision rather than a condition the build program repeats. The declarations
+must then agree verbatim, and two that declare it **differently** are refused,
+naming both files and both signatures:
+
 ```
-
-Entries are merged by name, so the two halves produce one set of declarations.
-Two definitions of one name that declare it **differently** are refused, naming
-both files and both signatures:
-
-```
-mcpp.tools.island: two definitions of `scale_device` declare it differently.
-  src/kernels/saxpy.c
-    int scale_device(float a, float* out, unsigned n)
-  src/cpu/saxpy.c
-    int scale_device(float a, float* out, double n)
+mcpp.tools.island: two definitions of `island_scale` declare it differently.
+  src/kernels/image/scale.c
+    int island_scale(float a, float* out, unsigned n)
+  src/cpu/ops.c
+    int island_scale(float a, float* out, double n)
   C language linkage does not mangle, so these never meet at the link:
   whichever one is in the artifact reads its arguments by its own signature.
 ```
@@ -457,6 +511,10 @@ translation unit and never in one link, and C linkage does not mangle, so a
 build with disagreeing halves is clean and the artifact reads its arguments by
 whichever signature it was compiled with. `scan` is the only point at which both
 texts exist at once.
+
+**A root that yields nothing is an error.** A misspelled path or a marker that
+never arrived would otherwise produce a module exporting nothing, and the
+failure would surface as an unresolved name in a consumer three files away.
 
 **The declaration still exists once.** Without this, a project writes it twice --
 in a header, and again wherever the C++ side reaches it. C language linkage does

@@ -49,9 +49,148 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.4.0";
+inline constexpr std::string_view version = "0.5.0";
 
 } // namespace mcpp::plugins
+
+// mcpp::plugins::names -- the derivations that turn a path into a C++ name.
+//
+// THESE ARE SHARED BECAUSE THEY WERE COPIED. `common_base_dir` and
+// `namespace_of` were written in `rules/spirv.cppm` and written again in
+// `rules/slang.cppm`, and `mcpp.tools.island` is the third caller needing the
+// same answers. Two copies that agree today are still two copies: a directory
+// named `default` or `2d` has to get ONE answer, and one function is how that
+// is guaranteed rather than two files that happen to say the same thing.
+export namespace mcpp::plugins::names {
+
+// A GENERATED NAME THE C++ COMPILER WILL ACCEPT.
+//
+// Three transformations, and the third is the one every hand-rolled copy of
+// this function was missing. Non-identifier characters become `_`; a leading
+// digit gets a `_` in front; and a result that is a KEYWORD gets a trailing `_`.
+//
+// The keyword case is not hypothetical. The first two rules accept `default`,
+// `template`, `operator`, `private` and `union` unchanged -- they are valid
+// identifiers to a character filter and reserved to the compiler -- and
+// `shaders/default/` is an ordinary name for a shader directory. What it
+// produced was `namespace default {` in a generated file, and an error naming a
+// line its author never wrote.
+//
+// TRAILING `_`, not a prefix: `_default` is reserved at namespace scope
+// (a leading underscore in the global namespace), and prefixing would trade one
+// reserved name for another.
+//
+// The list is the keywords of the standard this collection targets. A word that
+// is contextual rather than reserved (`final`, `override`, `import`, `module`)
+// is a legal identifier and is left alone.
+inline bool is_cxx_keyword(std::string_view w) {
+    static constexpr std::string_view kWords[] = {
+        "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor",
+        "bool", "break", "case", "catch", "char", "char8_t", "char16_t",
+        "char32_t", "class", "compl", "concept", "const", "consteval",
+        "constexpr", "constinit", "const_cast", "continue", "co_await",
+        "co_return", "co_yield", "decltype", "default", "delete", "do", "double",
+        "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false",
+        "float", "for", "friend", "goto", "if", "inline", "int", "long",
+        "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
+        "operator", "or", "or_eq", "private", "protected", "public", "register",
+        "reinterpret_cast", "requires", "return", "short", "signed", "sizeof",
+        "static", "static_assert", "static_cast", "struct", "switch",
+        "template", "this", "thread_local", "throw", "true", "try", "typedef",
+        "typeid", "typename", "union", "unsigned", "using", "virtual", "void",
+        "volatile", "wchar_t", "while", "xor", "xor_eq",
+    };
+    for (auto k : kWords) if (k == w) return true;
+    return false;
+}
+
+// `fallback` is used when the input sanitises to nothing, which a file named
+// only in punctuation does.
+//
+// INDEXED RATHER THAN A RANGE-FOR over the string, for the reason recorded in
+// `mcpp.tools.island`: iterating a `std::string` inside an exported inline
+// function makes GCC 16 instantiate its iterator in this BMI, and a consumer's
+// build program then fails to compile on `always_inline` in a header naming
+// neither this file nor this loop.
+inline std::string identifier(std::string_view raw, std::string_view fallback) {
+    std::string s;
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const char c = raw[i];
+        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
+    }
+    if (s.empty()) s = std::string(fallback);
+    if (!s.empty() && std::isdigit(static_cast<unsigned char>(s.front())))
+        s.insert(s.begin(), '_');
+    if (is_cxx_keyword(s)) s += '_';
+    return s;
+}
+
+
+// ---- internals -------------------------------------------------------------
+
+inline std::vector<std::string> split_module_name(std::string_view name) {
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i <= name.size();) {
+        auto dot = name.find('.', i);
+        auto one = dot == std::string_view::npos ? name.substr(i) : name.substr(i, dot - i);
+        if (!one.empty()) out.emplace_back(one);
+        if (dot == std::string_view::npos) break;
+        i = dot + 1;
+    }
+    return out;
+}
+
+// THE BASE DIRECTORY IS DERIVED, NOT ASKED FOR.
+//
+// A payload's namespace comes from where it sits relative to the tree the
+// project globbed, so something has to say where that tree starts. Asking the
+// project would put a second spelling of the glob in the manifest, and the two
+// would disagree the first time a glob moved. The shallowest directory every
+// path shares is the same answer without the second spelling: for
+// `shaders/*.comp` it is `shaders` and every namespace is empty; for
+// `shaders/a/x.comp` and `shaders/b/y.comp` it is still `shaders`, and the two
+// land in `::a` and `::b`.
+//
+// A single path has no common prefix with anything, so its own directory is the
+// base and its namespace is empty -- which is the same answer the general case
+// gives once a second file appears beside it.
+inline std::string common_base_dir(std::span<const std::string> paths) {
+    std::vector<std::string> prefix;
+    bool first = true;
+    for (auto const& src : paths) {
+        std::vector<std::string> segs;
+        for (auto const& part : std::filesystem::path(src).parent_path())
+            if (auto s = part.string(); !s.empty() && s != ".") segs.push_back(s);
+        if (first) { prefix = std::move(segs); first = false; continue; }
+        std::size_t keep = 0;
+        while (keep < prefix.size() && keep < segs.size() && prefix[keep] == segs[keep]) ++keep;
+        prefix.resize(keep);
+    }
+    std::string out;
+    for (auto const& s : prefix) { if (!out.empty()) out += '/'; out += s; }
+    return out;
+}
+
+// The namespace segments a file sits in, below the group's own: the path from
+// the base directory to the file, sanitised one segment at a time. `..` cannot
+// appear, because the base is a prefix of every path by construction.
+inline std::vector<std::string> namespace_of(std::string_view src, std::string_view base) {
+    std::vector<std::string> out;
+    auto dir = std::filesystem::path(src).parent_path().string();
+    if (!base.empty() && dir.size() >= base.size() && dir.compare(0, base.size(), base) == 0)
+        dir.erase(0, base.size());
+    for (auto const& part : std::filesystem::path(dir)) {
+        auto s = part.string();
+        if (s.empty() || s == "." || s == "/") continue;
+        // `shaders/default/` is an ordinary directory name and
+        // `namespace default {` is not a namespace.
+        out.push_back(identifier(s, "dir"));
+    }
+    return out;
+}
+
+} // namespace mcpp::plugins::names
+
 
 // mcpp.plugins.surface -- the interface a consumer names for an embedded payload.
 //
@@ -115,6 +254,14 @@ inline constexpr std::string_view version = "0.4.0";
 // exactly one translation unit includes it -- the generated implementation --
 // and every consumer reaches the same array through the accessor.
 export namespace mcpp::plugins::surface {
+
+// The name derivations live in `mcpp::plugins::names`. They are reachable under
+// this namespace as well, because every rule in this collection already spells
+// them this way -- one definition under two spellings is not two definitions.
+using names::identifier;
+using names::split_module_name;
+using names::common_base_dir;
+using names::namespace_of;
 
 // How a consumer names the payloads.
 //
@@ -287,20 +434,6 @@ struct emitted {
     std::string include_dir;
 };
 
-// ---- internals -------------------------------------------------------------
-
-inline std::vector<std::string> split_module_name(std::string_view name) {
-    std::vector<std::string> out;
-    for (std::size_t i = 0; i <= name.size();) {
-        auto dot = name.find('.', i);
-        auto one = dot == std::string_view::npos ? name.substr(i) : name.substr(i, dot - i);
-        if (!one.empty()) out.emplace_back(one);
-        if (dot == std::string_view::npos) break;
-        i = dot + 1;
-    }
-    return out;
-}
-
 // The linker symbol an accessor carries. It is derived from the module name and
 // the payload's full namespace path rather than from the identifier alone,
 // because two groups in one link unit -- a project with shaders and with
@@ -316,68 +449,6 @@ inline std::string accessor_base(const options& opt, const item& it) {
     for (auto const& seg : split_module_name(opt.module_name)) add(seg);
     for (auto const& seg : it.name_space) add(seg);
     add(it.identifier);
-    return s;
-}
-
-// A GENERATED NAME THE C++ COMPILER WILL ACCEPT.
-//
-// Three transformations, and the third is the one every hand-rolled copy of
-// this function was missing. Non-identifier characters become `_`; a leading
-// digit gets a `_` in front; and a result that is a KEYWORD gets a trailing `_`.
-//
-// The keyword case is not hypothetical. The first two rules accept `default`,
-// `template`, `operator`, `private` and `union` unchanged -- they are valid
-// identifiers to a character filter and reserved to the compiler -- and
-// `shaders/default/` is an ordinary name for a shader directory. What it
-// produced was `namespace default {` in a generated file, and an error naming a
-// line its author never wrote.
-//
-// TRAILING `_`, not a prefix: `_default` is reserved at namespace scope
-// (a leading underscore in the global namespace), and prefixing would trade one
-// reserved name for another.
-//
-// The list is the keywords of the standard this collection targets. A word that
-// is contextual rather than reserved (`final`, `override`, `import`, `module`)
-// is a legal identifier and is left alone.
-inline bool is_cxx_keyword(std::string_view w) {
-    static constexpr std::string_view kWords[] = {
-        "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor",
-        "bool", "break", "case", "catch", "char", "char8_t", "char16_t",
-        "char32_t", "class", "compl", "concept", "const", "consteval",
-        "constexpr", "constinit", "const_cast", "continue", "co_await",
-        "co_return", "co_yield", "decltype", "default", "delete", "do", "double",
-        "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false",
-        "float", "for", "friend", "goto", "if", "inline", "int", "long",
-        "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
-        "operator", "or", "or_eq", "private", "protected", "public", "register",
-        "reinterpret_cast", "requires", "return", "short", "signed", "sizeof",
-        "static", "static_assert", "static_cast", "struct", "switch",
-        "template", "this", "thread_local", "throw", "true", "try", "typedef",
-        "typeid", "typename", "union", "unsigned", "using", "virtual", "void",
-        "volatile", "wchar_t", "while", "xor", "xor_eq",
-    };
-    for (auto k : kWords) if (k == w) return true;
-    return false;
-}
-
-// `fallback` is used when the input sanitises to nothing, which a file named
-// only in punctuation does.
-//
-// INDEXED RATHER THAN A RANGE-FOR over the string, for the reason recorded in
-// `mcpp.tools.island`: iterating a `std::string` inside an exported inline
-// function makes GCC 16 instantiate its iterator in this BMI, and a consumer's
-// build program then fails to compile on `always_inline` in a header naming
-// neither this file nor this loop.
-inline std::string identifier(std::string_view raw, std::string_view fallback) {
-    std::string s;
-    for (std::size_t i = 0; i < raw.size(); ++i) {
-        const char c = raw[i];
-        s += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
-    }
-    if (s.empty()) s = std::string(fallback);
-    if (!s.empty() && std::isdigit(static_cast<unsigned char>(s.front())))
-        s.insert(s.begin(), '_');
-    if (is_cxx_keyword(s)) s += '_';
     return s;
 }
 

@@ -15,9 +15,9 @@ export module mcpp.tools.island;
 
 import std;
 import mcpp;
-// For `write_if_different`, which the lib root owns because every generator in
-// this package needs the same "do not touch a file whose content is unchanged"
-// rule.
+// For `write_if_different` and for the path-to-namespace derivations, which the
+// lib root owns because the shader lane and this one must answer a directory
+// named `default` the same way.
 import mcpp.plugins;
 
 
@@ -31,10 +31,9 @@ import mcpp.plugins;
 // design decision no generator makes well. That interface stays hand-written.
 //
 // What is mechanical is everything AROUND the entry points: an include guard,
-// an `extern "C"` block, the `__cplusplus` dance, and a module wrapper whose
-// only content is a global module fragment and a re-export. Ten lines of
-// boilerplate per one line of content, written the same way in every project
-// that has an island. That is what this generates.
+// an `extern "C"` block, the `__cplusplus` dance, the namespace the C++ side
+// reaches them through, and a module wrapper. Ten lines of boilerplate per one
+// line of content, written the same way in every project that has an island.
 //
 // THE DECLARATION STILL EXISTS ONCE. It moves from a hand-written header into
 // the build program, and both artefacts are produced from it -- the header the
@@ -52,6 +51,24 @@ import mcpp.plugins;
 // entry point and links against an implementation compiled by a DIFFERENT
 // driver, which is the arrangement a device island actually has.
 //
+// THE NAMES ARE IN A NAMESPACE, AND THE NAMESPACE IS THE MODULE'S PATH.
+//
+// `docs/42` states one rule for both lanes: the module name and the namespace
+// are one identifier path. The shader lane obeys it; this generator did not,
+// and put every entry point at global scope, so `import app.kernels` bought a
+// file name and nothing else. It obeys it now: a root's directories extend the
+// namespace exactly as a payload tree's do.
+//
+// A NAMESPACE OVER A FLAT SYMBOL IS A LOOKUP ALIAS, AND THE CHECK IS WHAT MAKES
+// IT HONEST. Measured 2026-09-08 with clang++ (DPC++ 7.1.0), `-std=c++23`: two
+// modules re-exporting one `extern "C"` name into two namespaces produce two
+// spellings of ONE entity -- `&a::f == &b::f`. The shader lane does not have
+// this problem because it composes its own symbols and can put the path in
+// them; an island's symbol is written by its author and this generator only
+// reads it. So `scan` refuses two entry points with one name in one root: a
+// name then exists in exactly one namespace, and the namespace cannot lie about
+// what a call resolves to.
+//
 // IT IS OPTIONAL, AND A PROJECT THAT WRITES ITS OWN HEADER KEEPS IT. Nothing
 // here is required to have an island; it removes boilerplate from projects that
 // want it removed.
@@ -59,7 +76,8 @@ export namespace mcpp::tools::island {
 
 struct options {
     // The module the C++ side imports: `myapp.kernels`. The header is named
-    // after it too, so one name places both files.
+    // after it too, so one name places both files, and it is also the namespace
+    // the entry points arrive in: `myapp::kernels::…`.
     std::string module_name;
     // Where they are written. The caller puts this on the include path so the
     // device translation unit can include the header.
@@ -69,6 +87,54 @@ struct options {
     // False emits the header alone, for a project that wants the boilerplate
     // removed but keeps a hand-written seam that includes rather than imports.
     bool emit_module = true;
+
+    // WHERE THE ISLANDS ARE, AND WHY THIS IS A TREE RATHER THAN A FILE LIST.
+    //
+    // A root is a directory that holds implementations. Its internal structure
+    // is what extends the namespace, so it is DECLARED rather than inferred
+    // from the set of files handed in -- a file list's common ancestor moves
+    // when a file is added, and a consumer's qualified name would move with it.
+    //
+    // Several roots mean one entry point implemented several times: a device
+    // island and a host fallback are two roots, and exactly one of them is in
+    // any link. A single file is also a legal root, for a project that keeps
+    // one implementation beside another in one directory.
+    //
+    // THEY MUST NOT DEPEND ON THE ACCELERATOR. `mcpp::device_sources()` is
+    // narrowed by `accel` and is empty under `--no-accel`; roots taken from it
+    // would lose the device tree in a CPU-only build, and the entry point's
+    // namespace would then come from the fallback tree instead. Roots are
+    // directories on disk, and `accel` decides only what is compiled.
+    std::vector<std::string> roots;
+
+    // The root whose directory structure says WHERE entry points live. Every
+    // other root supplies implementations and its structure is never read for
+    // naming, so a fallback tree may be one flat file or six directories and
+    // may be reorganised without renaming anything a consumer wrote.
+    //
+    // This is a naming role and not a rank: every root compiles, links and is
+    // equally a backend. Empty means `roots.front()`.
+    //
+    // An entry point the layout root does not declare -- a kernel only one
+    // backend has -- takes the namespace of the first root that does.
+    std::string layout_root;
+
+    // The files a root is read for. Headers are deliberately absent: a project
+    // that declares its entry points in a `.cuh` and defines them in a `.cu`
+    // would otherwise hand the uniqueness check two files for one name and be
+    // refused for a layout that is correct.
+    std::vector<std::string> extensions;
+
+    // Non-empty emits a second spelling beside each entry point that carries
+    // it: `inline constexpr auto blur = opkit_blur;`.
+    //
+    // An island's symbol is global to the whole program, so an entry point
+    // carries a package prefix whether or not it sits in a namespace, and the
+    // namespace then repeats what the prefix already said. The authored name is
+    // always emitted and stays canonical -- it is what `nm`, a link error, a
+    // profiler and `dlsym` show. This is a convenience at the call site.
+    std::string strip_prefix;
+
     // The marker `scan()` looks for. It is defined as nothing by the generated
     // header, so the island includes that header and then writes the marker in
     // front of each entry point it exports.
@@ -93,12 +159,31 @@ struct options {
     std::string marker = "MCPP_EXPORT_C";
 };
 
+// One marked entry point. `decl` is what the header will contain, copied
+// verbatim from the island; `name_space` is where the C++ side reaches it.
+struct entry {
+    std::string decl;
+    std::string name;
+    std::vector<std::string> name_space;
+    std::string origin;                  // the file it was first seen in
+};
+
 struct emitted {
     std::string header_file;      // the generated boundary header
     std::string interface_file;   // the `.cppm`; empty when `emit_module` is false
     std::string include_dir;      // for `mcpp::include_dir`
     std::string module_name;      // empty when `emit_module` is false
 };
+
+// The extensions a root is read for when `options::extensions` is empty. Every
+// language a device compiler consumes that produces an OBJECT, plus the C and
+// C++ a host implementation of the same boundary is written in. A shading
+// language is absent: a `.comp` is data by the time it reaches a link and
+// carries no `extern "C"` entry point.
+inline std::vector<std::string> default_extensions() {
+    return {".c", ".cc", ".cpp", ".cxx", ".cu", ".hip", ".sycl",
+            ".asc", ".cce", ".cl", ".metal"};
+}
 
 // The flags that make a compiler read the generated header before the island's
 // first line, so the island writes neither an include nor anything else.
@@ -141,12 +226,142 @@ inline std::string entry_name(std::string_view decl) {
     return std::string(decl.substr(begin, end - begin));
 }
 
+// An entry point the scan cannot see -- generated by something else, or behind
+// a macro this does not expand. The project states the declaration and where it
+// belongs, and everything downstream is identical.
+inline entry declared(std::string decl, std::vector<std::string> name_space = {}) {
+    entry e;
+    e.name = entry_name(decl);
+    e.decl = std::move(decl);
+    e.name_space = std::move(name_space);
+    e.origin = "declared in the build program";
+    return e;
+}
+
+// ─── the scan ──────────────────────────────────────────────────────────────
+
+namespace detail {
+
+// Runs of whitespace collapsed, so a wrapped signature reads as one
+// declaration and two halves that wrote it differently still compare equal.
+//
+// INDEXED RATHER THAN A RANGE-FOR, AND THAT IS NOT A STYLE CHOICE.
+//
+// `for (char c : decl)` over a `std::string` inside an exported inline function
+// makes GCC 16 instantiate `std::string::iterator` in this BMI, and the
+// consumer's build program then fails to compile with
+//
+//   error: inlining failed in call to 'always_inline'
+//   __normal_iterator<char*, basic_string<char>>::operator*():
+//   function body not available
+//
+// in `<bits/stl_iterator.h>`, naming neither this file nor this loop. Indexing
+// touches no iterator type and compiles.
+inline std::string flatten(std::string_view decl) {
+    std::string flat;
+    bool space = false;
+    for (std::size_t k = 0; k < decl.size(); ++k) {
+        const char c = decl[k];
+        if (c == '\n' || c == '\t' || c == '\r' || c == ' ') {
+            if (!flat.empty()) space = true;
+        } else {
+            if (space) flat += ' ';
+            space = false;
+            flat += c;
+        }
+    }
+    return flat;
+}
+
+inline bool has_extension(const std::filesystem::path& p,
+                          std::span<const std::string> exts) {
+    const auto e = p.extension().string();
+    for (auto const& want : exts) if (e == want) return true;
+    return false;
+}
+
+// The files of one root, sorted. THE ORDER IS PART OF THE CONTRACT: the walk
+// order of a directory is the filesystem's, so without the sort the generated
+// files differ between two runs that changed nothing, `write_if_different`
+// rewrites them, the force-included header's timestamp moves and every island
+// translation unit rebuilds.
+inline bool files_under(const std::string& root, std::span<const std::string> exts,
+                        std::vector<std::string>& out, std::string& base) {
+    std::error_code ec;
+    const std::filesystem::path p(root);
+    if (std::filesystem::is_regular_file(p, ec)) {
+        base = p.parent_path().string();
+        out.push_back(p.string());
+        return true;
+    }
+    if (!std::filesystem::is_directory(p, ec)) return false;
+    base = p.string();
+    for (std::filesystem::recursive_directory_iterator it(p, ec), end; it != end;
+         it.increment(ec)) {
+        if (ec) return false;
+        if (!it->is_regular_file(ec)) continue;
+        if (has_extension(it->path(), exts)) out.push_back(it->path().string());
+    }
+    std::sort(out.begin(), out.end());
+    return true;
+}
+
+// The declarations one file marks, in source order.
+inline bool marked_in(const std::string& src, const std::string& marker,
+                      std::vector<std::string>& decls) {
+    std::ifstream in(src);
+    if (!in) {
+        std::cerr << std::format("mcpp.tools.island: cannot read {}\n", src);
+        return false;
+    }
+    std::string text((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    for (std::size_t at = text.find(marker); at != std::string::npos;
+         at = text.find(marker, at + 1)) {
+        // The marker's own definition in the generated header is not an entry
+        // point. Skipped by requiring a `(` before the next `;` or `{`, which a
+        // `#define` line does not have.
+        std::size_t i = at + marker.size();
+        int depth = 0;
+        bool sawOpen = false;
+        std::size_t end = std::string::npos;
+        for (; i < text.size(); ++i) {
+            const char c = text[i];
+            if (c == '(') { ++depth; sawOpen = true; }
+            else if (c == ')') {
+                if (--depth == 0) { end = i; break; }
+            } else if (!sawOpen && (c == ';' || c == '{' || c == '\n')) {
+                if (c == '\n') continue;   // a signature may wrap
+                break;                      // `;` or `{` with no `(`
+            }
+        }
+        if (end == std::string::npos) {
+            if (!sawOpen) continue;         // a `#define` of the marker
+            std::cerr << std::format(
+                "mcpp.tools.island: {} carries `{}` whose parameter list does not "
+                "close.\n  A marked entry point is one declaration, and the generator "
+                "copies it verbatim.\n", src, marker);
+            return false;
+        }
+        auto flat = flatten(text.substr(at + marker.size(),
+                                        end + 1 - (at + marker.size())));
+        if (!flat.empty()) decls.push_back(std::move(flat));
+    }
+    return true;
+}
+
+inline std::string joined(std::span<const std::string> segs) {
+    std::string s;
+    for (auto const& one : segs) { if (!s.empty()) s += "::"; s += one; }
+    return s;
+}
+
+} // namespace detail
+
 // THE ENTRY POINTS, TAKEN FROM WHERE THEY ARE DEFINED.
 //
-// `emit` takes a list of declarations, which is exact and requires the project
-// to write each signature in its build program. This reads them out of the
-// island instead, so the signature lives beside the definition and exists once
-// -- which is the arrangement a reader expects and the one that cannot drift.
+// The signature lives beside the definition and exists once, which is the
+// arrangement a reader expects and the one that cannot drift.
 //
 // IT IS NOT A C PARSER, AND DOES NOT NEED TO BE. From the marker it copies
 // verbatim up to the parenthesis that closes the parameter list, matching
@@ -155,126 +370,151 @@ inline std::string entry_name(std::string_view decl) {
 // a declaration -- a macro, a qualifier, a multi-line signature -- travels
 // through unexamined.
 //
-// A marker with no `(` after it is refused rather than skipped: a marked entry
-// point that produced no declaration would leave the island defining a function
-// nothing declares, and the consumer's failure would be an unresolved name in a
-// different file.
+// TWO REFUSALS, AND THEY ANSWER DIFFERENT QUESTIONS.
 //
-// SEVERAL SOURCES MAY DEFINE THE SAME ENTRY POINT, AND THEY MUST AGREE.
+// One name twice in ONE root is a collision: C language linkage does not
+// mangle, so those are one symbol, and a namespace that appeared to separate
+// them would be a lookup alias promising an isolation the linker does not
+// provide. Refused, naming both files.
 //
-// That is the ordinary shape of a seam: a device island and a host fallback
-// define one boundary, and exactly one of them is in any given link. A build
-// program hands both to this function and gets one set of declarations back,
-// so it does not have to ask which build it is in.
-//
-// Two definitions of one name whose declarations differ are REFUSED here,
-// naming both files. Nothing else in the toolchain catches that: C language
-// linkage does not mangle, so the two never meet at the link, and whichever
-// one is present reads its arguments by its own idea of the signature. This is
-// the only point at which both texts exist at once.
-inline std::optional<std::vector<std::string>>
-scan(std::span<const std::string> sources, const options& opt) {
-    std::vector<std::string> entries;
-    // Where each entry was found, for the disagreement diagnostic. Parallel to
-    // `entries`, which is the return value and cannot carry it.
-    std::vector<std::string> origin;
-    for (auto const& src : sources) {
-        std::ifstream in(src);
-        if (!in) {
-            std::cerr << std::format("mcpp.tools.island: cannot read {}\n", src);
+// One name in SEVERAL roots is one entry point implemented several times --
+// the ordinary shape of a seam, where exactly one implementation is in any
+// link. The declarations must then agree verbatim, and this is the only place
+// in the toolchain where both texts exist at once: the two never meet at the
+// link, so nothing else can compare them.
+inline std::optional<std::vector<entry>> scan(const options& opt) {
+    if (opt.roots.empty()) {
+        std::cerr << "mcpp.tools.island: options::roots is empty; there is nothing "
+                     "to scan.\n  A root is the directory an island's sources live "
+                     "under.\n";
+        return std::nullopt;
+    }
+    const std::string layout = opt.layout_root.empty() ? opt.roots.front()
+                                                       : opt.layout_root;
+    if (std::find(opt.roots.begin(), opt.roots.end(), layout) == opt.roots.end()) {
+        std::cerr << std::format(
+            "mcpp.tools.island: layout_root `{}` is not one of the roots.\n"
+            "  The root that supplies the shape has to be a root.\n", layout);
+        return std::nullopt;
+    }
+    const auto exts = opt.extensions.empty() ? default_extensions() : opt.extensions;
+
+    struct record {
+        entry e;
+        std::size_t root = 0;
+        bool from_layout = false;
+    };
+    std::vector<record> found;
+    auto find_by_name = [&](std::string_view n) -> record* {
+        for (auto& r : found) if (r.e.name == n) return &r;
+        return nullptr;
+    };
+
+    for (std::size_t ri = 0; ri < opt.roots.size(); ++ri) {
+        const auto& root = opt.roots[ri];
+        std::vector<std::string> files;
+        std::string base;
+        if (!detail::files_under(root, exts, files, base)) {
+            std::cerr << std::format(
+                "mcpp.tools.island: `{}` is neither a directory nor a file.\n"
+                "  Roots are where an island's sources live, on disk.\n", root);
             return std::nullopt;
         }
-        std::string text((std::istreambuf_iterator<char>(in)),
-                         std::istreambuf_iterator<char>());
-        for (std::size_t at = text.find(opt.marker); at != std::string::npos;
-             at = text.find(opt.marker, at + 1)) {
-            // The marker's own definition in the generated header is not an
-            // entry point. Skipped by requiring a `(` before the next `;` or
-            // `{`, which a `#define` line does not have.
-            std::size_t i = at + opt.marker.size();
-            int depth = 0;
-            bool sawOpen = false;
-            std::size_t end = std::string::npos;
-            for (; i < text.size(); ++i) {
-                const char c = text[i];
-                if (c == '(') { ++depth; sawOpen = true; }
-                else if (c == ')') {
-                    if (--depth == 0) { end = i; break; }
-                } else if (!sawOpen && (c == ';' || c == '{' || c == '\n')) {
-                    if (c == '\n') continue;   // a signature may wrap
-                    break;                      // `;` or `{` with no `(`
+        for (auto const& f : files) {
+            mcpp::rerun_if_changed(f.c_str());
+            std::vector<std::string> decls;
+            if (!detail::marked_in(f, opt.marker, decls)) return std::nullopt;
+            const auto ns = mcpp::plugins::names::namespace_of(f, base);
+            for (auto& d : decls) {
+                const auto name = entry_name(d);
+                if (name.empty()) {
+                    std::cerr << std::format(
+                        "mcpp.tools.island: cannot find an entry point name in `{}`\n"
+                        "  in {}.\n", d, f);
+                    return std::nullopt;
                 }
-            }
-            if (end == std::string::npos) {
-                if (!sawOpen) continue;         // a `#define` of the marker
-                std::cerr << std::format(
-                    "mcpp.tools.island: {} carries `{}` whose parameter list does not "
-                    "close.\n  A marked entry point is one declaration, and the generator "
-                    "copies it verbatim.\n", src, opt.marker);
-                return std::nullopt;
-            }
-            auto decl = text.substr(at + opt.marker.size(),
-                                    end + 1 - (at + opt.marker.size()));
-            // Collapse the runs of whitespace a wrapped signature carries, so
-            // the header reads as one declaration per line.
-            // INDEXED RATHER THAN A RANGE-FOR, AND THAT IS NOT A STYLE CHOICE.
-            //
-            // `for (char c : decl)` over a `std::string` inside an exported
-            // inline function makes GCC 16 instantiate `std::string::iterator`
-            // in this BMI, and the consumer's build program then fails to
-            // compile with
-            //
-            //   error: inlining failed in call to 'always_inline'
-            //   __normal_iterator<char*, basic_string<char>>::operator*():
-            //   function body not available
-            //
-            // in `<bits/stl_iterator.h>`, naming neither this file nor this
-            // loop. Indexing touches no iterator type and compiles.
-            std::string flat;
-            bool space = false;
-            for (std::size_t k = 0; k < decl.size(); ++k) {
-                const char c = decl[k];
-                if (c == '\n' || c == '\t' || c == '\r' || c == ' ') {
-                    if (!flat.empty()) space = true;
-                } else {
-                    if (space) flat += ' ';
-                    space = false;
-                    flat += c;
+                if (auto* seen = find_by_name(name)) {
+                    if (seen->root == ri) {
+                        std::cerr << std::format(
+                            "mcpp.tools.island: `{}` is declared twice in the root `{}`.\n"
+                            "  {}\n  {}\n"
+                            "  C language linkage does not mangle, so these are one "
+                            "symbol and\n  a namespace would not separate them. If they "
+                            "are two implementations of\n  one entry point, they belong "
+                            "in two roots.\n",
+                            name, root, seen->e.origin, f);
+                        return std::nullopt;
+                    }
+                    if (seen->e.decl != d) {
+                        std::cerr << std::format(
+                            "mcpp.tools.island: two definitions of `{}` declare it "
+                            "differently.\n"
+                            "  {}\n    {}\n"
+                            "  {}\n    {}\n"
+                            "  C language linkage does not mangle, so these never meet "
+                            "at the link:\n  whichever one is in the artifact reads its "
+                            "arguments by its own signature.\n",
+                            name, seen->e.origin, seen->e.decl, f, d);
+                        return std::nullopt;
+                    }
+                    // The shape comes from one stated root. A second
+                    // implementation adds nothing to where the entry point
+                    // lives, unless the layout root is the one adding it.
+                    if (!seen->from_layout && root == layout) {
+                        seen->e.name_space = ns;
+                        seen->from_layout = true;
+                    }
+                    continue;
                 }
+                record r;
+                r.e.decl = d;
+                r.e.name = name;
+                r.e.name_space = ns;
+                r.e.origin = f;
+                r.root = ri;
+                r.from_layout = (root == layout);
+                found.push_back(std::move(r));
             }
-            if (flat.empty()) continue;
-
-            // MERGED BY ENTRY NAME. A second definition of a name already seen
-            // is either the same declaration -- the seam's two halves agreeing,
-            // which is the expected case -- or a disagreement that has to stop
-            // the build here.
-            const auto name = entry_name(flat);
-            std::size_t seen = entries.size();
-            for (std::size_t k = 0; k < entries.size(); ++k)
-                if (entry_name(entries[k]) == name) { seen = k; break; }
-
-            if (seen == entries.size()) {
-                entries.push_back(std::move(flat));
-                origin.push_back(src);
-                continue;
-            }
-            if (entries[seen] == flat) continue;   // both halves agree
-
-            std::cerr << std::format(
-                "mcpp.tools.island: two definitions of `{}` declare it differently.\n"
-                "  {}\n    {}\n"
-                "  {}\n    {}\n"
-                "  C language linkage does not mangle, so these never meet at the "
-                "link:\n  whichever one is in the artifact reads its arguments by its "
-                "own signature.\n",
-                name, origin[seen], entries[seen], src, flat);
-            return std::nullopt;
+        }
+        // ADDING A FILE HAS TO RE-RUN THIS PROGRAM. Declared inputs are hashed
+        // contents, so a new file changes none of them; the glob's fingerprint
+        // is the sorted set of matching paths, which is exactly the question
+        // "which files are here". The pattern is relative to the manifest
+        // directory, so a root outside it registers its files and nothing else.
+        const auto rel = std::filesystem::path(base).lexically_relative(
+                             std::filesystem::path(mcpp::manifest_dir()));
+        const auto reltext = rel.generic_string();
+        if (!reltext.empty() && !reltext.starts_with("..")) {
+            for (auto const& e : exts)
+                mcpp::rerun_if_changed_glob((reltext + "/**/*" + e).c_str());
         }
     }
-    return entries;
+
+    if (found.empty()) {
+        std::string where;
+        for (auto const& r : opt.roots) { if (!where.empty()) where += ", "; where += r; }
+        std::cerr << std::format(
+            "mcpp.tools.island: no entry point marked `{}` under {}.\n"
+            "  A root that yields nothing is a misspelled path or a marker that "
+            "never arrived,\n  and an empty module fails later and less clearly.\n",
+            opt.marker, where);
+        return std::nullopt;
+    }
+
+    std::vector<entry> out;
+    out.reserve(found.size());
+    for (auto& r : found) out.push_back(std::move(r.e));
+    // Grouped and stable: the generated files are a function of the tree.
+    std::sort(out.begin(), out.end(), [](const entry& a, const entry& b) {
+        const auto an = detail::joined(a.name_space), bn = detail::joined(b.name_space);
+        return an == bn ? a.name < b.name : an < bn;
+    });
+    return out;
 }
 
-inline std::optional<emitted> emit(std::span<const std::string> entries,
+// ─── the emission ──────────────────────────────────────────────────────────
+
+inline std::optional<emitted> emit(std::span<const entry> entries,
                                    const options& opt) {
     if (entries.empty()) return emitted{};
     if (opt.module_name.empty() || opt.out_dir.empty()) {
@@ -285,31 +525,46 @@ inline std::optional<emitted> emit(std::span<const std::string> entries,
                                              : opt.produced_by;
     const auto dir = std::filesystem::path(opt.out_dir);
 
-    // A name the generator could not find is refused rather than skipped: a
-    // declaration that produced no re-export would compile, and the consumer's
-    // failure would be an unresolved name three files away.
-    std::vector<std::string> names;
+    const auto modSegs = mcpp::plugins::names::split_module_name(opt.module_name);
+    if (modSegs.empty()) {
+        std::cerr << std::format("mcpp.tools.island: `{}` is not a usable module name\n",
+                                 opt.module_name);
+        return std::nullopt;
+    }
+    for (auto const& seg : modSegs) {
+        if (mcpp::plugins::names::identifier(seg, "x") != seg) {
+            std::cerr << std::format(
+                "mcpp.tools.island: `{}` is not a usable module name: the segment `{}` "
+                "is not a C++ identifier.\n  Each segment becomes a namespace.\n",
+                opt.module_name, seg);
+            return std::nullopt;
+        }
+    }
+
     for (auto const& e : entries) {
-        auto n = entry_name(e);
-        if (n.empty()) {
+        if (e.name.empty()) {
             std::cerr << std::format(
                 "mcpp.tools.island: cannot find an entry point name in `{}`.\n"
                 "  Each entry is a C declaration, e.g.\n"
-                "    \"int saxpy_device(float a, const float* x, unsigned n)\"\n", e);
+                "    \"int saxpy_device(float a, const float* x, unsigned n)\"\n", e.decl);
             return std::nullopt;
         }
-        names.push_back(std::move(n));
     }
 
     emitted out;
     const auto guard = [&] {
         std::string g = "MCPP_ISLAND_";
-        for (char c : opt.module_name)
+        for (std::size_t i = 0; i < opt.module_name.size(); ++i) {
+            const char c = opt.module_name[i];
             g += std::isalnum(static_cast<unsigned char>(c))
                ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : '_';
+        }
         return g + "_H";
     }();
 
+    // THE HEADER IS FLAT AND HAS NO NAMESPACES, and that is not an omission. It
+    // is read by a C or a device compiler, and neither has a namespace to read.
+    // The module is a view onto it.
     std::string h;
     h += std::format("// Generated by mcpp.tools.island for {0}. Do not edit.\n"
                      "//\n"
@@ -323,7 +578,7 @@ inline std::optional<emitted> emit(std::span<const std::string> entries,
                      "#ifndef {2}\n#define {2}\n#endif\n"
                      "#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n",
                      by, guard, opt.marker);
-    for (auto const& e : entries) h += e + ";\n";
+    for (auto const& e : entries) h += e.decl + ";\n";
     h += "\n#ifdef __cplusplus\n}\n#endif\n#endif\n";
 
     out.header_file = (dir / (opt.module_name + ".h")).string();
@@ -345,7 +600,57 @@ inline std::optional<emitted> emit(std::span<const std::string> entries,
                      "export module {2};\n\n", by,
                      std::filesystem::path(out.header_file).filename().string(),
                      opt.module_name);
-    for (auto const& n : names) m += std::format("export using ::{};\n", n);
+
+    // One block per namespace. `entries` arrives grouped, and a caller that
+    // built the list itself gets the same grouping from this loop as long as it
+    // kept equal namespaces adjacent.
+    std::vector<std::string> shortNames;      // per entry, empty when there is none
+    shortNames.resize(entries.size());
+    if (!opt.strip_prefix.empty()) {
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            if (!entries[i].name.starts_with(opt.strip_prefix)) continue;
+            auto s = mcpp::plugins::names::identifier(
+                entries[i].name.substr(opt.strip_prefix.size()), "entry");
+            if (s.empty() || s == entries[i].name) continue;
+            shortNames[i] = std::move(s);
+        }
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            if (shortNames[i].empty()) continue;
+            for (std::size_t j = 0; j < entries.size(); ++j) {
+                if (i == j) continue;
+                const bool sameNs = entries[i].name_space == entries[j].name_space;
+                if (!sameNs) continue;
+                if (shortNames[i] == shortNames[j] || shortNames[i] == entries[j].name) {
+                    std::cerr << std::format(
+                        "mcpp.tools.island: `{}` and `{}` both reach `{}` once `{}` is "
+                        "stripped.\n  {}\n  {}\n  A short name is a second spelling of "
+                        "one entry point, not a shared one.\n",
+                        entries[i].name, entries[j].name, shortNames[i],
+                        opt.strip_prefix, entries[i].origin, entries[j].origin);
+                    return std::nullopt;
+                }
+            }
+        }
+    }
+
+    std::string openNs;
+    bool open = false;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        std::vector<std::string> full = modSegs;
+        for (auto const& seg : entries[i].name_space) full.push_back(seg);
+        const auto path = detail::joined(full);
+        if (!open || path != openNs) {
+            if (open) m += "}\n\n";
+            m += std::format("export namespace {} {{\n", path);
+            openNs = path;
+            open = true;
+        }
+        m += std::format("using ::{};\n", entries[i].name);
+        if (!shortNames[i].empty())
+            m += std::format("inline constexpr auto {} = {};\n",
+                             shortNames[i], entries[i].name);
+    }
+    if (open) m += "}\n";
 
     out.interface_file = (dir / (opt.module_name + ".cppm")).string();
     out.module_name    = opt.module_name;
