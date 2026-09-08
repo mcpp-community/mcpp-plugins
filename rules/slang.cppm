@@ -240,41 +240,12 @@ inline std::vector<std::string> device_shaders() {
 
 // ─── Naming ────────────────────────────────────────────────────────────────
 
-// `shaders/post/tone.slang` under a base of `shaders` -> `{"post"}`. The same
-// derivation `mcpp.rules.spirv` uses, because a project with both must not have
-// to learn two.
-inline std::string common_base_dir(std::span<const std::string> shaders) {
-    std::vector<std::string> prefix;
-    bool first = true;
-    for (auto const& src : shaders) {
-        std::vector<std::string> segs;
-        for (auto const& part : std::filesystem::path(src).parent_path())
-            if (auto s = part.string(); !s.empty() && s != ".") segs.push_back(s);
-        if (first) { prefix = std::move(segs); first = false; continue; }
-        std::size_t keep = 0;
-        while (keep < prefix.size() && keep < segs.size() && prefix[keep] == segs[keep]) ++keep;
-        prefix.resize(keep);
-    }
-    std::string out;
-    for (auto const& s : prefix) { if (!out.empty()) out += '/'; out += s; }
-    return out;
-}
-
-inline std::vector<std::string> namespace_of(std::string_view src, std::string_view base) {
-    std::vector<std::string> out;
-    auto dir = std::filesystem::path(src).parent_path().string();
-    if (!base.empty() && dir.size() >= base.size() && dir.compare(0, base.size(), base) == 0)
-        dir.erase(0, base.size());
-    for (auto const& part : std::filesystem::path(dir)) {
-        auto s = part.string();
-        if (s.empty() || s == "." || s == "/") continue;
-        // Through the lib root, which is the one place that knows a segment
-        // may not be a keyword: `shaders/default/` is an ordinary directory
-        // name and `namespace default {` is not a namespace.
-        out.push_back(mcpp::plugins::surface::identifier(s, "dir"));
-    }
-    return out;
-}
+// The path-to-namespace derivations come from the lib root. They were written
+// here and again in the other rule that has a namespaced surface; one function
+// is what makes a directory named `default` get one answer rather than two that
+// agree by inspection.
+using mcpp::plugins::names::common_base_dir;
+using mcpp::plugins::names::namespace_of;
 
 // The array the embedded output declares. The namespace path is part of it for
 // the reason `mcpp.rules.spirv` records: one translation unit includes every

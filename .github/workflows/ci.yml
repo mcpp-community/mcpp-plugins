@@ -239,7 +239,13 @@ jobs:
       # The island here is a `.c` rather than a `.cu`: the generator does not
       # know what compiler produced the object, and a fixture needing a vendor
       # toolkit could only run where that toolkit is published.
-      - name: island interfaces are generated, not written
+      #
+      # THE FIXTURE'S SHAPE IS ITSELF A CRITERION. `src/kernels` is the layout
+      # root and holds a subdirectory; `src/cpu` implements the same two entry
+      # points in ONE FLAT FILE. A generator that derived a namespace from every
+      # root would give `island_scale` two of them, and one that required the
+      # trees to have equal shapes would refuse this layout outright.
+      - name: island interfaces are generated, namespaced, and not written
         working-directory: tests/island-interface
         run: |
           "$MCPP" build
@@ -250,12 +256,45 @@ jobs:
           test ! -f include/island_interface.kernels.h
           d=target/.build-mcpp/out/island
           grep -q 'extern "C" {' "$d/island_interface.kernels.h"
-          grep -q '^export using ::saxpy_device;' "$d/island_interface.kernels.cppm"
-          grep -q '^export using ::scale_device;'  "$d/island_interface.kernels.cppm"
+          # THE MODULE NAME AND THE NAMESPACE ARE ONE IDENTIFIER PATH, which is
+          # the rule docs/42 states for both lanes and the one this generator
+          # did not follow before 0.5.0: it put every entry point at global
+          # scope, so `import app.kernels` bought a file name and nothing else.
+          grep -q '^export namespace island_interface::kernels {' \
+            "$d/island_interface.kernels.cppm"
+          # A directory below the layout root extends it. `image/scale.c` is
+          # what puts this block in the file, and a generator that ignored
+          # directories would still pass every other check here.
+          grep -q '^export namespace island_interface::kernels::image {' \
+            "$d/island_interface.kernels.cppm"
+          grep -q '^using ::island_saxpy;' "$d/island_interface.kernels.cppm"
+          grep -q '^using ::island_scale;'  "$d/island_interface.kernels.cppm"
+          # TWO, not four. Both roots implement the same two entry points, and a
+          # merge that appended instead would declare each one twice -- which
+          # the module rejects as a redefinition and the header silently
+          # accepts, so the count catches it in both surfaces.
+          n=$(grep -c '^using ::' "$d/island_interface.kernels.cppm")
+          [ "$n" = 2 ] || { echo "FAIL: the module re-exports $n names; the two roots declare 2"
+                            cat "$d/island_interface.kernels.cppm"; exit 1; }
+          # THE SHORT NAME, AND THE ONE IT IS A SPELLING OF. An island's symbol
+          # is global to the whole program, so an entry point carries a prefix
+          # the namespace then repeats. Both spellings are emitted and the
+          # authored one stays canonical.
+          grep -q '^inline constexpr auto saxpy = island_saxpy;' \
+            "$d/island_interface.kernels.cppm"
+          grep -q '^inline constexpr auto scale = island_scale;' \
+            "$d/island_interface.kernels.cppm"
+          # THE HEADER IS FLAT. It is read by a C compiler, which has no
+          # namespace to read, and by no other means could the device half
+          # compile against it.
+          if grep -q 'namespace' "$d/island_interface.kernels.h"; then
+            echo "FAIL: the generated header carries a namespace"
+            grep -n namespace "$d/island_interface.kernels.h"; exit 1
+          fi
           # The module re-exports NAMES: a second copy of a signature is the
           # thing this generator exists to remove, so its appearance here is a
           # regression even though it would compile.
-          if grep -q 'int saxpy_device(' "$d/island_interface.kernels.cppm"; then
+          if grep -q 'int island_saxpy(' "$d/island_interface.kernels.cppm"; then
             echo "FAIL: the module restated a signature instead of re-exporting a name"
             exit 1
           fi
@@ -263,7 +302,8 @@ jobs:
           # island reads the generated header through the compiler's
           # forced-include flag -- so a project using this generator has no
           # header in its source tree and no line naming one.
-          if grep -rn '#include' src/main.cpp src/app.cppm src/kernels/saxpy.c src/cpu/saxpy.c; then
+          if grep -rn '#include' src/main.cpp src/app.cppm src/kernels/saxpy.c \
+               src/kernels/image/scale.c src/cpu/ops.c; then
             echo "FAIL: a source names an include; the generator exists to remove it"
             exit 1
           fi
@@ -279,15 +319,11 @@ jobs:
           # criterion then reports the file for saying what it does. Comment
           # lines are stripped first, which is the difference between asking
           # "does this file mention the name" and "does this file use it".
-          if sed 's://.*::' src/main.cpp | grep -q 'saxpy_device\|scale_device'; then
+          if sed 's://.*::' src/main.cpp | grep -q 'island_saxpy\|island_scale'; then
             echo "FAIL: the consumer names a boundary symbol; the seam exists to hide it"
-            sed 's://.*::' src/main.cpp | grep -n 'saxpy_device\|scale_device'
+            sed 's://.*::' src/main.cpp | grep -n 'island_saxpy\|island_scale'
             exit 1
           fi
-          # AND THE CHECK THAT INCLUDE USED TO DO IS STILL THERE. The compiler
-          # sees the declarations, so a definition whose signature drifted from
-          # the generated header fails where it was written rather than at the
-          # link.
           # THE MECHANISM, NOT THE WORD. `grep 'include'` matched this build
           # program's own comments and its `mcpp::include_dir` line, so it
           # would have passed with the forced include removed -- a criterion
@@ -298,7 +334,7 @@ jobs:
           # a static helper and an unmarked external function; a scan that
           # exported whatever the file contained would still pass every check
           # above, because both generated files would merely be larger.
-          for name in internal_device unexported_helper; do
+          for name in internal_device unexported_helper host_only_helper; do
             if grep -q "$name" "$d/island_interface.kernels.h" \
             || grep -q "$name" "$d/island_interface.kernels.cppm"; then
               echo "FAIL: $name is not marked and reached the generated boundary"
@@ -310,71 +346,216 @@ jobs:
           grep -q '^#define MCPP_EXPORT_C$' "$d/island_interface.kernels.h"
           # A signature that wrapped across lines survived: the scan matches
           # parentheses rather than reading lines.
-          grep -q 'int scale_device(float a, float\* out, unsigned n);' \
+          grep -q 'int island_scale(float a, float\* out, unsigned n);' \
             "$d/island_interface.kernels.h"
           echo "ok: one declaration, two generated artefacts, and only what was marked"
 
-      # THE SEAM'S OTHER HALF, AND THE DISAGREEMENT THAT NOTHING ELSE CATCHES.
+      # ONE ENTITY, TWO SPELLINGS, AND NO SECOND SYMBOL.
+      #
+      # The short name is a `constexpr` function pointer, so it costs the
+      # artifact nothing and `nm` shows the authored name alone. A generator
+      # that emitted a forwarding FUNCTION instead would pass every check above
+      # and put a second symbol in every artifact.
+      - name: the short name is a spelling, not a second function
+        working-directory: tests/island-interface
+        run: |
+          bin=$(find target -name island-interface -type f | head -1)
+          test -n "$bin" || { echo "FAIL: no artifact"; exit 1; }
+          n=$(nm "$bin" | grep -c ' island_saxpy$')
+          [ "$n" = 1 ] || { echo "FAIL: $n definitions of island_saxpy"; exit 1; }
+          if nm "$bin" | grep -qE ' (T|t|W) saxpy$'; then
+            echo "FAIL: the short name became a symbol of its own"
+            nm "$bin" | grep -E ' saxpy$'; exit 1
+          fi
+          echo "ok: one symbol for the pair"
+
+      # THE SEAM'S OTHER HALF, AND THE NAME THAT DOES NOT MOVE WITH IT.
       #
       # A seam has two implementations of one `extern "C"` boundary -- a device
       # island and a host fallback -- and exactly one of them is in any link.
-      # `build.mcpp` hands `scan` both files unconditionally, because both exist
-      # on disk in either build and the manifest decides which is compiled. A
-      # build program that asked `mcpp::accel()` instead would carry a second
-      # copy of a decision the manifest already states.
+      # `build.mcpp` names both roots unconditionally, because both exist on
+      # disk in either build and the manifest decides which is compiled.
       #
-      # The CPU leg is not a variant of the step above. It is the build in which
-      # the device half is ABSENT, so a generator that read only the file it was
-      # given first would produce an empty boundary and the C++ side would fail
-      # on an unresolved name.
-      - name: the same boundary, generated from the half the build selected
+      # The criterion is stronger than "the CPU leg builds": the generated
+      # module must be BYTE-IDENTICAL to the device leg's. The consumer's
+      # qualified name is what would otherwise differ between two builds of one
+      # project, and it is the failure a namespace derived from every root
+      # produces.
+      - name: the same boundary and the same names, from the half the build selected
         working-directory: tests/island-interface
         run: |
+          d=target/.build-mcpp/out/island
+          cp "$d/island_interface.kernels.cppm" /tmp/device-leg.cppm
           rm -rf target
           "$MCPP" build --no-accel > cpu.log 2>&1 || {
             echo "FAIL: the CPU leg does not build"; tail -25 cpu.log; exit 1; }
           "$MCPP" run --no-accel | tee cpurun.log
           grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' cpurun.log
           grep -q '^all ok' cpurun.log
-          # ONE set of declarations, not two. Both files mark the same two entry
-          # points; a merge that appended would declare each twice, which the
-          # module rejects as a redefinition and the header silently accepts.
-          d=target/.build-mcpp/out/island
-          n=$(grep -c '^export using ::' "$d/island_interface.kernels.cppm")
-          [ "$n" = 2 ] || {
-            echo "FAIL: the module re-exports $n names; the two halves declare 2"
-            cat "$d/island_interface.kernels.cppm"; exit 1; }
-          echo "ok: the CPU leg reaches the same generated boundary"
+          diff /tmp/device-leg.cppm "$d/island_interface.kernels.cppm" || {
+            echo "FAIL: the qualified names differ between the two legs"; exit 1; }
+          echo "ok: the CPU leg reaches the same qualified names"
 
-      # AND THE REVERSE LEG, WHICH IS THE POINT OF SCANNING BOTH.
+      # THE SHAPE COMES FROM ONE STATED ROOT.
       #
-      # C language linkage does not mangle and the two halves are never in one
-      # link, so two declarations of one name that disagree produce a clean
+      # Moving the flat fallback under a directory of its own must rename
+      # nothing. The rejected alternative -- take the DEEPEST directory among an
+      # entry point's implementations -- passes every other check in this file
+      # and fails this one: `src/cpu/deep/ops.c` would put both entry points in
+      # `::deep`, so a refactor of a tree nobody consumes would rename what
+      # every consumer writes.
+      - name: reorganising a root that does not supply the shape renames nothing
+        working-directory: tests/island-interface
+        run: |
+          d=target/.build-mcpp/out/island
+          cp "$d/island_interface.kernels.cppm" /tmp/before-move.cppm
+          mkdir -p src/cpu/deep && mv src/cpu/ops.c src/cpu/deep/ops.c
+          rm -rf target
+          "$MCPP" build --no-accel > moved.log 2>&1 || {
+            echo "FAIL: the build broke when a fallback moved"; tail -20 moved.log
+            mv src/cpu/deep/ops.c src/cpu/ops.c; rmdir src/cpu/deep; exit 1; }
+          rc=0
+          diff /tmp/before-move.cppm "$d/island_interface.kernels.cppm" || rc=1
+          mv src/cpu/deep/ops.c src/cpu/ops.c; rmdir src/cpu/deep
+          [ "$rc" = 0 ] || { echo "FAIL: a non-layout root changed a consumer's names"; exit 1; }
+          rm -f moved.log
+          echo "ok: the layout root alone decides where an entry point lives"
+
+      # ADDING A FILE HAS TO RE-RUN THE GENERATOR.
+      #
+      # Declared inputs are hashed CONTENTS, so a new file changes none of them
+      # and a program that registered only the files it read would never see the
+      # new entry point -- the consumer's failure would be an unresolved name in
+      # a module that silently did not grow. The glob's fingerprint is the
+      # sorted set of matching paths, which is the question being asked.
+      - name: a new island file reaches the boundary with nothing else touched
+        working-directory: tests/island-interface
+        run: |
+          d=target/.build-mcpp/out/island
+          rm -rf target && "$MCPP" build > base.log 2>&1
+          before=$(grep -c '^using ::' "$d/island_interface.kernels.cppm")
+          mkdir -p src/kernels/audio
+          printf 'MCPP_EXPORT_C\nint island_fft(float* out, unsigned n) { (void)out; (void)n; return 0; }\n' \
+            > src/kernels/audio/fft.c
+          "$MCPP" build > added.log 2>&1 || {
+            echo "FAIL: the build broke after a file was added"; tail -20 added.log
+            rm -rf src/kernels/audio; exit 1; }
+          rc=0
+          grep -q '^export namespace island_interface::kernels::audio {' \
+            "$d/island_interface.kernels.cppm" || rc=1
+          after=$(grep -c '^using ::' "$d/island_interface.kernels.cppm")
+          rm -rf src/kernels/audio base.log added.log
+          [ "$rc" = 0 ] && [ "$after" = $((before + 1)) ] || {
+            echo "FAIL: adding a file left the boundary at $before entry points"; exit 1; }
+          echo "ok: the glob makes which files are here an input"
+
+      # ONE NAME TWICE IN ONE ROOT IS A COLLISION, NOT A SEAM.
+      #
+      # C language linkage does not mangle, so two entry points with one name
+      # are one symbol whatever namespace each appears in -- measured: two
+      # modules re-exporting one name into two namespaces give `&a::f == &b::f`.
+      # A namespace is a lookup alias over a flat symbol, and this refusal is
+      # what keeps it from promising an isolation the linker does not provide.
+      - name: two files in one root declaring one name are refused
+        working-directory: tests/island-interface
+        run: |
+          printf 'MCPP_EXPORT_C\nint island_saxpy(float a, const float* x, const float* y, float* out, unsigned n) {\n  (void)a; (void)x; (void)y; (void)out; (void)n; return 1;\n}\n' \
+            > src/kernels/dup.c
+          rm -rf target
+          set +e
+          "$MCPP" build > dup.log 2>&1
+          rc=$?
+          set -e
+          rm -f src/kernels/dup.c
+          [ "$rc" != 0 ] || { echo "FAIL: the collision was accepted"; tail -20 dup.log; exit 1; }
+          grep -q 'is declared twice in the root' dup.log || {
+            echo "FAIL: refused, but not for this reason"; tail -20 dup.log; exit 1; }
+          # Both file names, and the way out: a diagnostic that only says "no"
+          # leaves the reader to guess that two roots are how a seam is spelled.
+          grep -q 'src/kernels/dup.c' dup.log
+          grep -q 'src/kernels/saxpy.c' dup.log
+          grep -q 'in two roots' dup.log
+          rm -f dup.log
+          echo "ok: refused, naming both files and the arrangement that is not a collision"
+
+      # A SHORT NAME IS A SECOND SPELLING OF ONE ENTRY POINT, NOT A SHARED ONE.
+      #
+      # Stripping a prefix can land on a name that is already taken. The
+      # generated module would then declare one name twice, and the error would
+      # name a generated file rather than the two entry points that produced it.
+      - name: a short name that collides with an authored one is refused
+        working-directory: tests/island-interface
+        run: |
+          printf 'MCPP_EXPORT_C\nint saxpy(float a, float* out, unsigned n) { (void)a; (void)out; (void)n; return 1; }\n' \
+            > src/kernels/collide.c
+          rm -rf target
+          set +e
+          "$MCPP" build > collide.log 2>&1
+          rc=$?
+          set -e
+          rm -f src/kernels/collide.c
+          [ "$rc" != 0 ] || { echo "FAIL: the short-name collision was accepted"
+                              tail -20 collide.log; exit 1; }
+          grep -q 'both reach' collide.log || {
+            echo "FAIL: refused, but not for this reason"; tail -20 collide.log; exit 1; }
+          rm -f collide.log
+          echo "ok: refused, naming both entry points and the prefix"
+
+      # A ROOT THAT YIELDS NOTHING IS AN ERROR, NOT AN EMPTY MODULE.
+      #
+      # A misspelled root or a marker that never arrived would otherwise produce
+      # a module exporting nothing, and the failure would surface as an
+      # unresolved name in a consumer three files away.
+      - name: roots holding no marker are refused, naming the roots
+        working-directory: tests/island-interface
+        run: |
+          cp build.mcpp /tmp/build.mcpp.bak
+          sed -i 's|opt.produced_by = "the island-interface fixture";|&\n    opt.marker = "MCPP_NOT_THE_MARKER";|' build.mcpp
+          grep -q 'MCPP_NOT_THE_MARKER' build.mcpp || {
+            echo "FAIL: the fixture was not perturbed; this step would assert nothing"
+            cp /tmp/build.mcpp.bak build.mcpp; exit 1; }
+          rm -rf target
+          set +e
+          "$MCPP" build > empty.log 2>&1
+          rc=$?
+          set -e
+          cp /tmp/build.mcpp.bak build.mcpp
+          [ "$rc" != 0 ] || { echo "FAIL: an empty scan was accepted"; tail -20 empty.log; exit 1; }
+          grep -q 'no entry point marked' empty.log || {
+            echo "FAIL: refused, but not for this reason"; tail -20 empty.log; exit 1; }
+          grep -q 'src/kernels' empty.log
+          rm -f empty.log
+          echo "ok: refused, naming the marker and the roots"
+
+      # AND THE REVERSE LEG, WHICH IS THE POINT OF READING EVERY ROOT.
+      #
+      # C language linkage does not mangle and two implementations are never in
+      # one link, so two declarations of one name that disagree produce a clean
       # build and an artifact that reads its arguments by whichever signature it
       # happened to be compiled with. `scan` is the only place both texts exist
       # at once, so it is the only place that can refuse.
-      - name: two halves that disagree are refused where both texts exist
+      - name: two implementations that disagree are refused where both texts exist
         working-directory: tests/island-interface
         run: |
-          cp src/cpu/saxpy.c /tmp/cpu_saxpy.bak
-          sed -i 's/^int scale_device(float a, float\* out, unsigned n) {/int scale_device(float a, float* out, double n) {/' \
-            src/cpu/saxpy.c
-          grep -q 'double n' src/cpu/saxpy.c || {
+          cp src/cpu/ops.c /tmp/cpu_ops.bak
+          sed -i 's/^int island_scale(float a, float\* out, unsigned n) {/int island_scale(float a, float* out, double n) {/' \
+            src/cpu/ops.c
+          grep -q 'double n' src/cpu/ops.c || {
             echo "FAIL: the fixture was not perturbed; this step would assert nothing"
-            cp /tmp/cpu_saxpy.bak src/cpu/saxpy.c; exit 1; }
+            cp /tmp/cpu_ops.bak src/cpu/ops.c; exit 1; }
           rm -rf target
           set +e
           "$MCPP" build > neg.log 2>&1
           rc=$?
           set -e
-          cp /tmp/cpu_saxpy.bak src/cpu/saxpy.c
+          cp /tmp/cpu_ops.bak src/cpu/ops.c
           [ "$rc" != 0 ] || { echo "FAIL: the disagreement was accepted"; tail -20 neg.log; exit 1; }
           grep -q 'declare it differently' neg.log || {
             echo "FAIL: refused, but not for this reason"; tail -20 neg.log; exit 1; }
           # Both file names, because a diagnostic naming one leaves the reader
           # to find the other.
-          grep -q 'src/kernels/saxpy.c' neg.log
-          grep -q 'src/cpu/saxpy.c' neg.log
+          grep -q 'src/kernels/image/scale.c' neg.log
+          grep -q 'src/cpu/ops.c' neg.log
           echo "ok: refused, naming both definitions and both signatures"
           # And it builds again once they agree, so this step cannot leave a
           # fixture that refuses everything.

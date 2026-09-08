@@ -15,6 +15,9 @@
 #     `extern "C"` block and the `__cplusplus` dance are not written by hand;
 #   - the module the C++ side imports is generated too, and re-exports the entry
 #     points by name rather than restating their signatures;
+#   - the names arrive in the boundary module's own namespace, extended by the
+#     directories of the root that supplies the shape;
+#   - a root that does not supply the shape may be one flat file;
 #   - the consumer never includes the header.
 [package]
 name        = "island-interface"
@@ -42,10 +45,10 @@ accel   = "vulkan1.2"
 sources = ["src/*.cppm", "src/*.cpp"]
 
 [target.'cfg(accelerator = "vulkan")'.build]
-sources = ["src/kernels/*.c"]
+sources = ["src/kernels/**/*.c"]
 
 [target.'cfg(not(accelerator = "vulkan"))'.build]
-sources = ["src/cpu/*.c"]
+sources = ["src/cpu/**/*.c"]
 
 [targets.island-interface]
 kind = "bin"

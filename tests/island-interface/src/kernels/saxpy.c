@@ -1,4 +1,4 @@
-/* The island. No include, and no header in this project at all.
+/* The island, and the root that supplies the shape.
  *
  * The signatures live HERE, beside the definitions, and exist once. The marker
  * is what the generator finds them by, and the generated boundary header
@@ -8,21 +8,12 @@
  * That header still declares these functions, so a definition whose signature
  * drifted from its declaration fails here rather than at the link.
  *
- * `scale_device` deliberately wraps across lines: a signature that did not fit
- * on one is the shape a line-oriented scan gets wrong, and the generator
- * matches parentheses rather than reading lines. */
+ * This file sits directly under the layout root, so its entry point carries no
+ * namespace segment: `island_interface::kernels::island_saxpy`. */
 
 MCPP_EXPORT_C
-int saxpy_device(float a, const float* x, const float* y, float* out, unsigned n) {
+int island_saxpy(float a, const float* x, const float* y, float* out, unsigned n) {
     for (unsigned i = 0; i < n; ++i) out[i] = a * x[i] + y[i];
-    return 0;
-}
-
-MCPP_EXPORT_C
-int scale_device(float a,
-                 float* out,
-                 unsigned n) {
-    for (unsigned i = 0; i < n; ++i) out[i] = a * out[i];
     return 0;
 }
 

@@ -440,55 +440,12 @@ inline std::string symbol_of(std::string_view stem, std::string_view stage) {
     return symbol_of(std::span<const std::string>{}, stem, stage);
 }
 
-// THE BASE DIRECTORY IS DERIVED, NOT ASKED FOR.
-//
-// A shader's namespace comes from where it sits relative to the tree the
-// project globbed, so something has to say where that tree starts. Asking the
-// project would put a second spelling of the glob in the manifest, and the two
-// would disagree the first time a glob moved. The shallowest directory every
-// shader shares is the same answer without the second spelling: for
-// `shaders/*.comp` it is `shaders` and every namespace is empty; for
-// `shaders/a/x.comp` and `shaders/b/y.comp` it is still `shaders`, and the two
-// land in `::a` and `::b`.
-//
-// A single shader has no common prefix with anything, so its own directory is
-// the base and its namespace is empty -- which is the same answer the general
-// case gives once a second shader appears beside it.
-inline std::string common_base_dir(std::span<const std::string> shaders) {
-    std::vector<std::string> prefix;
-    bool first = true;
-    for (auto const& src : shaders) {
-        std::vector<std::string> segs;
-        for (auto const& part : std::filesystem::path(src).parent_path())
-            if (auto s = part.string(); !s.empty() && s != ".") segs.push_back(s);
-        if (first) { prefix = std::move(segs); first = false; continue; }
-        std::size_t keep = 0;
-        while (keep < prefix.size() && keep < segs.size() && prefix[keep] == segs[keep]) ++keep;
-        prefix.resize(keep);
-    }
-    std::string out;
-    for (auto const& s : prefix) { if (!out.empty()) out += '/'; out += s; }
-    return out;
-}
-
-// The namespace segments a shader sits in, below the group's own: the path from
-// the base directory to the shader, sanitised one segment at a time. `..` cannot
-// appear, because the base is a prefix of every shader by construction.
-inline std::vector<std::string> namespace_of(std::string_view src, std::string_view base) {
-    std::vector<std::string> out;
-    auto dir = std::filesystem::path(src).parent_path().string();
-    if (!base.empty() && dir.size() >= base.size() && dir.compare(0, base.size(), base) == 0)
-        dir.erase(0, base.size());
-    for (auto const& part : std::filesystem::path(dir)) {
-        auto s = part.string();
-        if (s.empty() || s == "." || s == "/") continue;
-        // Through the lib root, which is the one place that knows a segment
-        // may not be a keyword: `shaders/default/` is an ordinary directory
-        // name and `namespace default {` is not a namespace.
-        out.push_back(mcpp::plugins::surface::identifier(s, "dir"));
-    }
-    return out;
-}
+// The path-to-namespace derivations come from the lib root. They were written
+// here and again in the other rule that has a namespaced surface; one function
+// is what makes a directory named `default` get one answer rather than two that
+// agree by inspection.
+using mcpp::plugins::names::common_base_dir;
+using mcpp::plugins::names::namespace_of;
 
 // NEWLINE-SEPARATED, not `;`. A path may contain a semicolon and cannot
 // contain a newline, which is why the engine chose it — and why a splitter
