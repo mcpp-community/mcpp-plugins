@@ -86,6 +86,30 @@ jobs:
           fi
           echo "ok: one version, two files agreeing"
 
+      # ONE DERIVATION, AND THE CHECK THAT KEEPS IT ONE.
+      #
+      # `common_base_dir` and `namespace_of` were written in `rules/spirv.cppm`
+      # and written again in `rules/slang.cppm`, and `mcpp.tools.island` is the
+      # third caller. They live in the lib root now, which is what makes the
+      # island fixture's cross-platform run protect the SHADER lane too: the
+      # separator defect fixed in 0.5.2 was in this function, and the shader
+      # lane had it as well -- its Windows fixture keeps every payload in one
+      # directory, so a namespace segment was never derived there.
+      #
+      # A copy reintroduced in a rule would silently take that protection away,
+      # so the absence of a second definition is asserted rather than assumed.
+      - name: the path-to-namespace derivation exists once
+        run: |
+          n=$(grep -c '^inline std::vector<std::string> namespace_of' rules/*.cppm tools/*.cppm | awk -F: '{s+=$2} END {print s+0}')
+          m=$(grep -c '^inline std::string common_base_dir' rules/*.cppm tools/*.cppm | awk -F: '{s+=$2} END {print s+0}')
+          [ "$n" = 0 ] && [ "$m" = 0 ] || {
+            echo "FAIL: a rule or tool defines its own copy of the derivation"
+            grep -n '^inline std::vector<std::string> namespace_of\|^inline std::string common_base_dir' rules/*.cppm tools/*.cppm
+            exit 1; }
+          grep -q '^inline std::vector<std::string> namespace_of' src/plugins.cppm
+          grep -q '^inline std::string common_base_dir' src/plugins.cppm
+          echo "ok: one definition, in the lib root, for both lanes"
+
       - name: rules-spirv through a consumer
         working-directory: tests/spirv-consumer
         run: |
@@ -1324,6 +1348,38 @@ jobs:
       # come from the GRAPH, not from the fixture. Without it, a fixture that
       # quietly regained an `[xlings.workspace]` would keep this green while the
       # claim stopped being true.
+      # THE ISLAND BOUNDARY, ON THE TWO HOSTS WHERE ITS DERIVATION HAD NEVER RUN.
+      #
+      # `mcpp.tools.island` compiles on all three hosts -- the fixture above
+      # imports it -- but until 0.5.1 nothing EXERCISED it outside Linux, and
+      # what it does is path arithmetic: a namespace is the path from a root to
+      # a file, and a path separator is not the same character everywhere.
+      # `force_include_flags` also answers `/FI<path>` as one token for MSVC
+      # where every other driver takes `-include <path>` as two, and that branch
+      # had no runner either.
+      #
+      # The fixture needs no accelerator payload: its islands are ordinary C,
+      # and `accel` selects which of the two roots the manifest compiles.
+      - name: the island boundary, generated and namespaced on this host
+        working-directory: tests/island-interface
+        run: |
+          set -e
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' run.log
+          grep -q '^all ok' run.log
+          d=target/.build-mcpp/out/island
+          # The namespace is the path from the layout root to the file, so this
+          # is the assertion a separator mistake fails.
+          grep -q '^export namespace island_interface::kernels {' \
+            "$d/island_interface.kernels.cppm"
+          grep -q '^export namespace island_interface::kernels::image {' \
+            "$d/island_interface.kernels.cppm"
+          if grep -q 'namespace' "$d/island_interface.kernels.h"; then
+            echo "FAIL: the generated header carries a namespace"; exit 1
+          fi
+          echo "ok: the boundary is generated and namespaced on this host"
+
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
         run: |
