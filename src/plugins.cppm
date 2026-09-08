@@ -49,7 +49,7 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.5.1";
+inline constexpr std::string_view version = "0.5.2";
 
 } // namespace mcpp::plugins
 
@@ -172,16 +172,36 @@ inline std::string common_base_dir(std::span<const std::string> paths) {
 }
 
 // The namespace segments a file sits in, below the group's own: the path from
-// the base directory to the file, sanitised one segment at a time. `..` cannot
-// appear, because the base is a prefix of every path by construction.
+// the base directory to the file, sanitised one segment at a time.
+//
+// RELATIVE BY PATH ARITHMETIC, NOT BY STRING SURGERY, AND THAT IS A WINDOWS
+// FIX. This trimmed `base` off the front of the directory as a STRING and
+// iterated what was left. On Windows the two spellings differ even when the
+// two paths are the same: a caller states a root with forward slashes, and
+// `directory_iterator` appends with the preferred separator, so the leftover
+// was `\image` rather than `image`. Iterating that yields the ROOT DIRECTORY
+// as its first component, which sanitised to `_` -- and the payload landed in
+// `myapp::shaders::_::image`, a namespace no consumer writes. Measured: the
+// island fixture failed to compile on windows-2022 with `no member named
+// 'image' in namespace 'island_interface::kernels'`, while the same fixture
+// passed on Linux and macOS.
+//
+// `lexically_relative` compares COMPONENTS, so the separator a caller happened
+// to write is not part of the question. A base that is not a prefix yields a
+// path starting `..`, which is a caller error rather than a namespace; it
+// answers with no segments rather than with the whole absolute path, which is
+// what the string form produced.
 inline std::vector<std::string> namespace_of(std::string_view src, std::string_view base) {
     std::vector<std::string> out;
-    auto dir = std::filesystem::path(src).parent_path().string();
-    if (!base.empty() && dir.size() >= base.size() && dir.compare(0, base.size(), base) == 0)
-        dir.erase(0, base.size());
-    for (auto const& part : std::filesystem::path(dir)) {
+    const auto dir = std::filesystem::path(src).parent_path();
+    auto rel = dir;
+    if (!base.empty()) {
+        rel = dir.lexically_relative(std::filesystem::path(base));
+        if (rel.empty() || rel.begin()->string() == "..") return out;
+    }
+    for (auto const& part : rel) {
         auto s = part.string();
-        if (s.empty() || s == "." || s == "/") continue;
+        if (s.empty() || s == "." || s == ".." || s == "/" || s == "\\") continue;
         // `shaders/default/` is an ordinary directory name and
         // `namespace default {` is not a namespace.
         out.push_back(identifier(s, "dir"));
