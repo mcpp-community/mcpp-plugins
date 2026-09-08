@@ -399,6 +399,31 @@ inline std::optional<std::vector<entry>> scan(const options& opt) {
     }
     const auto exts = opt.extensions.empty() ? default_extensions() : opt.extensions;
 
+    // OVERLAPPING ROOTS ARE REFUSED. A file reachable from two of them has two
+    // namespace paths, and which one it got would depend on the order of the
+    // list. It would also be read twice and merged with itself, so the entry
+    // would look like two implementations agreeing -- a misconfiguration that
+    // produces a plausible result is worse than one that stops.
+    for (std::size_t i = 0; i < opt.roots.size(); ++i) {
+        std::error_code ec;
+        const auto a = std::filesystem::weakly_canonical(opt.roots[i], ec);
+        for (std::size_t j = i + 1; j < opt.roots.size(); ++j) {
+            const auto b = std::filesystem::weakly_canonical(opt.roots[j], ec);
+            const auto& outer = a.native().size() <= b.native().size() ? a : b;
+            const auto& inner = a.native().size() <= b.native().size() ? b : a;
+            const auto rel = inner.lexically_relative(outer);
+            const auto reltext = rel.generic_string();
+            if (reltext.empty() || reltext.starts_with("..")) continue;
+            std::cerr << std::format(
+                "mcpp.tools.island: the roots `{}` and `{}` overlap.\n"
+                "  A file reachable from both has two namespace paths, and which one "
+                "it got\n  would depend on the order of this list. Roots are separate "
+                "implementation trees.\n",
+                outer.string(), inner.string());
+            return std::nullopt;
+        }
+    }
+
     struct record {
         entry e;
         std::size_t root = 0;
@@ -481,12 +506,21 @@ inline std::optional<std::vector<entry>> scan(const options& opt) {
         // is the sorted set of matching paths, which is exactly the question
         // "which files are here". The pattern is relative to the manifest
         // directory, so a root outside it registers its files and nothing else.
-        const auto rel = std::filesystem::path(base).lexically_relative(
-                             std::filesystem::path(mcpp::manifest_dir()));
-        const auto reltext = rel.generic_string();
-        if (!reltext.empty() && !reltext.starts_with("..")) {
-            for (auto const& e : exts)
-                mcpp::rerun_if_changed_glob((reltext + "/**/*" + e).c_str());
+        //
+        // ONLY FOR A DIRECTORY ROOT. A single file is its own root, and its
+        // parent directory is not part of it: globbing that parent would make
+        // an unrelated file beside it an input to this program.
+        std::error_code dirEc;
+        if (std::filesystem::is_directory(std::filesystem::path(root), dirEc)) {
+            const auto rel = std::filesystem::path(base).lexically_relative(
+                                 std::filesystem::path(mcpp::manifest_dir()));
+            const auto reltext = rel.generic_string();
+            if (!reltext.empty() && !reltext.starts_with("..")) {
+                const std::string prefix = reltext == "." ? std::string()
+                                                          : reltext + "/";
+                for (auto const& e : exts)
+                    mcpp::rerun_if_changed_glob((prefix + "**/*" + e).c_str());
+            }
         }
     }
 

@@ -501,6 +501,35 @@ jobs:
           rm -f collide.log
           echo "ok: refused, naming both entry points and the prefix"
 
+      # OVERLAPPING ROOTS ARE REFUSED.
+      #
+      # A file reachable from two roots has two namespace paths, and which one
+      # it got would depend on the order of the list. It would also be read
+      # twice and merged with itself, so the entry would look like two
+      # implementations agreeing -- a misconfiguration that produces a
+      # plausible result rather than stopping.
+      - name: overlapping roots are refused
+        working-directory: tests/island-interface
+        run: |
+          cp build.mcpp /tmp/build.mcpp.overlap.bak
+          sed -i 's|opt.roots       = { root + "/src/kernels", root + "/src/cpu" };|opt.roots       = { root + "/src/kernels", root + "/src/cpu", root + "/src" };|' \
+            build.mcpp
+          grep -q 'root + "/src" };' build.mcpp || {
+            echo "FAIL: the fixture was not perturbed; this step would assert nothing"
+            cp /tmp/build.mcpp.overlap.bak build.mcpp; exit 1; }
+          rm -rf target
+          set +e
+          "$MCPP" build > overlap.log 2>&1
+          rc=$?
+          set -e
+          cp /tmp/build.mcpp.overlap.bak build.mcpp
+          [ "$rc" != 0 ] || { echo "FAIL: overlapping roots were accepted"
+                              tail -20 overlap.log; exit 1; }
+          grep -q 'overlap' overlap.log || {
+            echo "FAIL: refused, but not for this reason"; tail -20 overlap.log; exit 1; }
+          rm -f overlap.log
+          echo "ok: refused, naming both roots"
+
       # A ROOT THAT YIELDS NOTHING IS AN ERROR, NOT AN EMPTY MODULE.
       #
       # A misspelled root or a marker that never arrived would otherwise produce
