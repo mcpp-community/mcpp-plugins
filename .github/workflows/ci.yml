@@ -752,8 +752,25 @@ jobs:
           # `<name> = { ... }`. Reading keys out of the table BODY matched
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
-          feats=$(grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-                  | sed 's/^\[features\.//; s/\]$//' | sort)
+          # MEMBERS, NOT EVERY FEATURE. A feature that another feature
+          # IMPLIES is internal -- `surface` carries the build-program half of
+          # the generated surface and every member implies it, and a consumer
+          # never writes it. Subtracting the implied ones keeps this check
+          # meaning "the fixture names every member a consumer can activate";
+          # padding the fixture instead would make it mean less.
+          #
+          # The rule is read out of the manifest, not listed here, so a seventh
+          # MEMBER is still caught: nothing implies it.
+          # A TEMP FILE, NOT `<(...)`. This step also runs on windows-2022
+          # through Git Bash, where process substitution is emulated and not
+          # dependable -- and a check that behaves differently on one of the
+          # three hosts is the exact class of difference this job exists to
+          # catch, so it must not introduce one.
+          grep -oE '^implies[[:space:]]*=.*' mcpp.toml \
+            | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u > /tmp/implied.txt
+          grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
+            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/allfeats.txt
+          feats=$(comm -23 /tmp/allfeats.txt /tmp/implied.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
