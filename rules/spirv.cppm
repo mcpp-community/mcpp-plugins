@@ -62,6 +62,7 @@ import mcpp;
 // The lib root, which carries `mcpp::plugins::surface` -- the declarations a
 // consumer names, written once for every member that embeds a payload.
 import mcpp.plugins;
+import mcpp.plugins.declare;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -126,8 +127,12 @@ struct options {
 
     // The module a consumer imports, and the namespace the declarations sit in:
     // `myapp.shaders` gives `myapp::shaders::blur_comp()`. Empty derives it from
-    // the package directory, so a project that states nothing still gets a name
-    // no other package in the build can claim.
+    // the PACKAGE NAME -- `[package] name`, not the directory the package
+    // happens to sit in -- so a project that states nothing still gets a name
+    // no other package in the build can claim. The two are different questions
+    // whenever a package is laid out under a generic directory, and
+    // `mcpp::plugins::surface::module_root_for` records what it cost to answer
+    // the wrong one.
     std::string module_name;
 
     // The directory shader paths are made relative to when deriving namespaces.
@@ -643,7 +648,10 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     // named one, so two packages in one build cannot claim the same module.
     const std::string moduleName =
         opt.module_name.empty()
-            ? mcpp::plugins::surface::module_root_from_package() + ".shaders"
+            ? mcpp::plugins::surface::module_root_for(
+                  mcpp::package_name(),
+                  std::filesystem::path(mcpp::manifest_dir()).filename().string())
+              + ".shaders"
             : opt.module_name;
 
     // TWO SHADERS THAT DIFFER ONLY BY DIRECTORY PRODUCE ONE HEADER AND ONE
@@ -826,6 +834,23 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // compilers write the same thing: a bare SPIR-V module. The one place
         // the two flavours differed disappears with the storage that needed it.
         a.arg("-o"); a.arg(output.c_str());
+        // WHAT THE SHADER `#include`s, WHICH ONLY THE COMPILER CAN KNOW.
+        //
+        // `a.input()` below names the `.comp` and nothing else, and it is fixed
+        // when this program runs, before the compiler has read a line. A shader that includes a
+        // `.glsl` therefore had no edge to that file: editing it rebuilt
+        // nothing and the build stayed green over a stale SPIR-V module. Both
+        // compilers already compute the answer while parsing and will write it
+        // out; the field to receive it arrived in mcpp 2026.9.7.1.
+        //
+        // Two spellings of one idea, as everywhere else in this rule.
+        const std::string dep = output + ".d";
+        if (cc.kind == flavour::glslc) {
+            a.arg("-MD"); a.arg("-MF"); a.arg(dep.c_str());
+        } else {
+            a.arg("--depfile"); a.arg(dep.c_str());
+        }
+        a.depfile = dep.c_str();
         a.arg(input.c_str());
         a.input(input.c_str());
         a.output(output.c_str());
@@ -845,22 +870,31 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     so.module_name = moduleName;
     so.out_dir     = gen;
     so.produced_by = "mcpp.rules.spirv";
+    // Answered here, not read there: `mcpp.plugins.surface` compiles into a
+    // plain binary as well as into this build program, so it takes its inputs.
+    so.target_os          = mcpp::target_os();
+    so.has_gas_assembler  = std::string_view(mcpp::compiler()) != "msvc";
 
-    const auto out = mcpp::plugins::surface::emit(items, so);
-    if (!out) return false;
+    // Generated and declared by whichever route the storage requires: plan
+    // time for `header` and `sidecar`, an action for `object`. See
+    // `mcpp::plugins::surface_for` for why that is a property of the storage
+    // rather than a choice this rule makes.
+    const auto out = mcpp::plugins::surface_for(items, so);
+    if (!out.ok) return false;
 
-    // Both generated files are written above, so the ordinary source scan sees
-    // real content rather than a placeholder -- which is what lets a generated
-    // module interface be an ordinary node in the module graph with nothing
-    // declared about it.
-    mcpp::generated(out->interface_file.c_str());
-    mcpp::generated(out->impl_file.c_str());
-    // The `.S` under object storage. It is an ordinary source: mcpp assembles
-    // it, and `.incbin` reads the payload the action above produced, which by
-    // then exists because a `role = "source"` action is ordered before this
-    // package's compiles.
-    if (!out->assembly_file.empty()) mcpp::generated(out->assembly_file.c_str());
-    if (!out->include_dir.empty()) mcpp::include_dir(out->include_dir.c_str());
+    // THE DEGRADATION IS REPORTED HERE BECAUSE THE GENERATOR CANNOT REPORT IT.
+    //
+    // `mcpp::warning` is a build-program channel and `mcpp.plugins.surface`
+    // deliberately has none: it compiles into a plain binary as well. So the
+    // generator states the storage it actually used and the caller says so.
+    // Whoever sets `options::store` owns this: leaving it out would turn a
+    // stated fallback into a silent one, which is the shape this whole round
+    // is about.
+    if (out.files.store != so.store)
+        mcpp::warning("mcpp.rules.spirv: object storage needs a GAS assembler and this "
+                      "toolchain has none; the payload is compiled in as generated source "
+                      "instead. The declarations a consumer sees are unchanged.");
+
 
     // Which collection produced these actions. The version was `0.1.1` while
     // the package was `0.2.6` for as long as nothing read it; a fact is a

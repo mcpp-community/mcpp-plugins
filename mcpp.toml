@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.3.0"
+version     = "0.4.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -17,6 +17,26 @@ import_std = true
 # the source set; mcpp compiles every interface unit among the resolved
 # sources as a host module under the name the unit declares (2026.9.5.3+).
 [build]
+# THE LIB ROOT ALONE, AND `src/declare.cppm` BEHIND A FEATURE.
+#
+# The two units divide by what they may import:
+#
+#   src/plugins.cppm   `mcpp.plugins.surface`, importing only `std`, so the
+#                      same code compiles into `mcpp-embed` -- an ordinary
+#                      program, which is what lets the generation be an ACTION
+#                      and a payload be that action's declared input
+#   src/declare.cppm   the build-program half: `mcpp::action`, `mcpp::generated`
+#                      and the decision of how the generation reaches the graph
+#
+# The second one imports `mcpp`, which exists only inside a build program, so
+# listing it here would break the ORDINARY build of this package -- the build
+# that produces the tool. `[features.surface]` scopes it to the consumers that
+# have a build program, and every member implies it.
+#
+# It also needs mcpp 2026.9.8.1: before that release a package's host modules
+# were ordered by PATH, so `rules/spirv.cppm` was compiled before
+# `src/declare.cppm` and importing it failed with "failed to read compiled
+# module". They are ordered by their import graph now.
 sources = ["src/plugins.cppm"]
 
 # EACH RULE STATES WHAT IT COMPILES AND HOW TO REACH IT (mcpp 2026.9.7.1+).
@@ -46,23 +66,33 @@ sources = ["src/plugins.cppm"]
 [features]
 default = []
 
+# The build-program half of the surface. Not a member a consumer names: every
+# member that embeds a payload implies it, and a consumer that activates none
+# of them compiles neither this nor anything that imports `mcpp`.
+[features.surface]
+sources = ["src/declare.cppm"]
+
 [features.rules-ascendc]
 sources           = ["rules/ascendc.cppm"]
+implies           = ["surface"]
 rule_module       = "mcpp.rules.ascendc"
 device_extensions = [".asc", ".cce"]
 
 [features.rules-cuda]
 sources           = ["rules/cuda.cppm"]
+implies           = ["surface"]
 rule_module       = "mcpp.rules.cuda"
 device_extensions = [".cu"]
 
 [features.rules-hip]
 sources           = ["rules/hip.cppm"]
+implies           = ["surface"]
 rule_module       = "mcpp.rules.hip"
 device_extensions = [".hip"]
 
 [features.rules-slang]
 sources           = ["rules/slang.cppm"]
+implies           = ["surface"]
 rule_module       = "mcpp.rules.slang"
 device_extensions = [".slang"]
 
@@ -71,6 +101,7 @@ device_extensions = [".slang"]
 # message than the engine's "no rule compiles it".
 [features.rules-spirv]
 sources           = ["rules/spirv.cppm"]
+implies           = ["surface"]
 rule_module       = "mcpp.rules.spirv"
 device_extensions = [".comp", ".vert", ".frag", ".geom", ".tesc", ".tese",
                      ".mesh", ".task", ".rgen", ".rint", ".rahit", ".rchit",
@@ -78,6 +109,7 @@ device_extensions = [".comp", ".vert", ".frag", ".geom", ".tesc", ".tese",
 
 [features.rules-sycl]
 sources           = ["rules/sycl.cppm"]
+implies           = ["surface"]
 rule_module       = "mcpp.rules.sycl"
 device_extensions = [".sycl"]
 
@@ -86,9 +118,11 @@ device_extensions = [".sycl"]
 # `build.mcpp`.
 [features.tools-embed]
 sources = ["tools/embed.cppm"]
+implies           = ["surface"]
 
 [features.tools-island]
 sources = ["tools/island.cppm"]
+implies           = ["surface"]
 
 # ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
 #
@@ -257,3 +291,28 @@ sources = ["tools/island.cppm"]
 
 [targets.plugins]
 kind = "lib"
+
+# mcpp-embed -- the surface generator as a PROGRAM, so that the graph can invoke
+# it and the payloads it embeds can be declared inputs of that invocation.
+#
+# WHY THE TOOL IS BUILT FROM THIS PACKAGE RATHER THAN PUBLISHED SEPARATELY.
+# docs/05 section 2.14 states the reason, and it is not convenience: "The tool's
+# version IS the dependency's version, so a `protoc` that does not match its
+# runtime is not expressible. This is the problem with packaging the tool
+# separately, and it is the failure mode that bites at run time rather than
+# compile time." The generator and the declarations it writes are one decision;
+# a separately published payload would let them drift by one release.
+#
+# A consumer asks for it on the same edge that asks for the rules:
+#
+#   [build-dependencies.mcpp]
+#   plugins = { version = "0.4.0", features = ["rules-spirv"],
+#               host-module = true, tools = ["mcpp-embed"] }
+#
+# Only under `storage::object`. The default storage compiles the payload in as
+# generated source and needs no program, so nothing is built unless someone
+# asks -- and a rule that needs it and cannot find it refuses, naming the line
+# to add.
+[targets.mcpp-embed]
+kind = "bin"
+main = "tools/embed_main.cpp"

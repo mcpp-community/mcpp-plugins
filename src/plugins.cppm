@@ -23,7 +23,18 @@ module;
 export module mcpp.plugins;
 
 import std;
-import mcpp;
+
+// NO `import mcpp;`. That module exists only inside a build program, and this
+// unit has to compile into an ordinary binary too: `mcpp.tools.embed`'s
+// executable form is what lets a generated `.S` be an ACTION's output, which
+// is the only way the payload it embeds can be a declared input of the edge
+// that assembles it. Measured before this: an ordinary build of this package
+// failed with `mcpp: failed to read compiled module`.
+//
+// Everything this unit used to read from that module -- the target OS, whether
+// the toolchain has a GAS assembler, the package's name -- is now a parameter.
+// The members under rules/ still import it; they are feature-gated, so the
+// tool's own build never compiles them.
 
 export namespace mcpp::plugins {
 
@@ -38,7 +49,7 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.3.0";
+inline constexpr std::string_view version = "0.4.0";
 
 } // namespace mcpp::plugins
 
@@ -112,6 +123,19 @@ export namespace mcpp::plugins::surface {
 // any declaration's shape: the same struct, the same function names, the same
 // namespaces. Only the file a consumer reaches them through differs.
 enum class kind { module_, c_header };
+
+// WHICH HALF OF THE SURFACE A CALL WRITES.
+//
+// The two are separate because their INPUTS are. The interface is a function of
+// the item list: names, namespaces, the accessor declarations. The body is a
+// function of the item list AND, under `storage::object`, of the payloads
+// themselves -- the assembly names each one in `.incbin`, and the object it
+// produces is those bytes.
+//
+// Declaring them as one action would make a payload change rewrite the
+// interface too, and rebuild every BMI that imports it. Declaring them
+// separately states what is true and costs a consumer nothing.
+enum class half { interface_, body };
 
 // The element the accessor hands back. `word32` is what an API taking
 // `const uint32_t*` wants -- `vkCreateShaderModule` is the case this package
@@ -213,6 +237,34 @@ struct options {
     // A short phrase naming what produced the payloads, for the generated
     // files' first line: "mcpp.rules.spirv".
     std::string produced_by;
+
+    // ── What this generator is NOT allowed to find out for itself ───────────
+    //
+    // THE TWO FIELDS BELOW ARE WHY THIS MODULE IMPORTS ONLY `std`.
+    //
+    // They were `mcpp::target_os()` and `mcpp::compiler()`, read here. That
+    // made the generator unusable anywhere except inside a build program --
+    // which is the one place it must NOT be the only usable form, because a
+    // payload dependency can only enter the build graph if the generation is
+    // an ACTION, and an action's command is a binary. A binary cannot import
+    // the build-program module: measured, an ordinary build of this package
+    // fails with "mcpp: failed to read compiled module".
+    //
+    // So they are parameters. The caller has both answers already, and a
+    // generator that takes its inputs rather than reading its environment is
+    // the same code in a build program and in a tool.
+
+    // The target's operating system, as mcpp spells it -- what decides the
+    // assembly dialect: the section directive and whether a symbol carries a
+    // leading underscore. Required under `storage::object`; ignored otherwise.
+    std::string target_os;
+
+    // Whether a GAS-compatible assembler exists for this toolchain. False
+    // under MSVC, which has none, and where mcpp refuses `.S` outright. It is
+    // the CALLER's answer because the caller knows the compiler; this
+    // generator degrades `object` to `header` when it is false and reports
+    // that through `emitted::store` rather than by printing.
+    bool has_gas_assembler = true;
 };
 
 // What the caller hands back to mcpp.
@@ -487,19 +539,60 @@ inline std::string assembly_for(std::span<const item> items, const options& opt,
 
 // ---- the tool ---------------------------------------------------------------
 
-// Writes the interface and the implementation, and returns what the caller has
-// to tell mcpp about them. Nothing here reads a payload's bytes, so it runs at
-// plan time and works equally for a payload the graph has not produced yet.
-inline std::optional<emitted> emit(std::span<const item> items, const options& opt) {
-    if (items.empty()) return emitted{};
+// EVERY FILE THIS SURFACE WILL PRODUCE, WITHOUT PRODUCING ANY OF THEM.
+//
+// A rule declares these as an action's outputs, and mcpp requires an output to
+// be NAMED before the graph is built even though its content arrives later. So
+// the names cannot come from having written the files -- which is the coupling
+// that forced generation to happen at plan time, and with it the whole
+// staleness this round removes.
+//
+// Pure: no items, no filesystem, no environment. The one decision it makes is
+// the MSVC degradation, which is a property of the toolchain rather than of any
+// payload, and `emitted::store` is where the caller reads the verdict.
+inline emitted outputs(const options& opt) {
+    emitted out;
+    out.store = opt.store;
+    // MSVC HAS NO GAS, AND mcpp REFUSES `.S` UNDER IT. `src/build/prepare.cppm`
+    // says so outright: "GAS assembly sources (.S/.s) are not supported by the
+    // MSVC toolchain". Object storage degrades to header storage there rather
+    // than producing a file the build will refuse, and the SURFACE does not
+    // change -- the declarations are identical under both.
+    if (out.store == storage::object && !opt.has_gas_assembler)
+        out.store = storage::header;
+
+    const auto dir = std::filesystem::path(opt.out_dir);
+    out.interface_file = (dir / (opt.module_name
+                                 + (opt.surface == kind::module_ ? ".cppm" : ".h"))).string();
+    out.impl_file      = (dir / (opt.module_name + ".impl.cpp")).string();
+    // Named only under the storage that produces one, so a caller can test the
+    // string rather than having to test the storage a second time.
+    if (out.store == storage::object)
+        out.assembly_file = (dir / (opt.module_name + ".payload.S")).string();
+    if (opt.surface == kind::module_) out.module_name = opt.module_name;
+    else                              out.include_dir = dir.string();
+    return out;
+}
+
+
+// Writes ONE half of the surface. The names come from `outputs`, which the
+// caller has already asked; this produces the content.
+//
+// Nothing here reads a payload's BYTES. Under object storage the assembly names
+// each payload in `.incbin` and the assembler reads it later, which is why this
+// can be an action whose command runs before, after or independently of the
+// payload's own producer -- what matters is that the payload is a declared
+// INPUT of that action, and the graph then holds the edge.
+inline bool write(std::span<const item> items, const options& opt, half which) {
+    if (items.empty()) return true;
     if (opt.module_name.empty()) {
         std::cerr << "mcpp.plugins.surface: options::module_name is required; it names both "
                      "the module a consumer imports and the namespace the declarations sit in\n";
-        return std::nullopt;
+        return false;
     }
     if (opt.out_dir.empty()) {
         std::cerr << "mcpp.plugins.surface: options::out_dir is required\n";
-        return std::nullopt;
+        return false;
     }
 
     const auto segs = split_module_name(opt.module_name);
@@ -515,54 +608,44 @@ inline std::optional<emitted> emit(std::span<const item> items, const options& o
             "is not a C++ identifier.\n  Each segment becomes a namespace, so it has "
             "to be one; `{}` would work.\n",
             opt.module_name, segs[i], identifier(segs[i], "part"));
-        return std::nullopt;
+        return false;
     }
     const auto by   = opt.produced_by.empty() ? std::string("mcpp.plugins.surface")
                                               : opt.produced_by;
 
-    // MSVC HAS NO GAS, AND mcpp REFUSES `.S` UNDER IT.
-    //
-    // `src/build/prepare.cppm` states that outright: "GAS assembly sources
-    // (.S/.s) are not supported by the MSVC toolchain". So object storage
-    // degrades to header storage there rather than producing a file the build
-    // will refuse. The SURFACE does not change -- the declarations are the same
-    // under both -- so a consumer compiled either way is the same source.
-    emitted out;
-    out.store = opt.store;
-    if (out.store == storage::object
-        && std::string_view(mcpp::compiler()) == "msvc") {
-        out.store = storage::header;
-        mcpp::warning("mcpp.plugins.surface: object storage needs a GAS assembler and the "
-                      "MSVC toolchain has none; the payload is compiled in as generated "
-                      "source instead. The declarations a consumer sees are unchanged.");
-    }
-    const auto dir  = std::filesystem::path(opt.out_dir);
-    const auto body = declarations(items, opt);
+    // ONE derivation of the names, shared with the caller. Recomputing them
+    // here would be the second copy of a decision that this package has paid
+    // for before.
+    const emitted out  = outputs(opt);
+    const auto    dir  = std::filesystem::path(opt.out_dir);
+    const auto    body = declarations(items, opt);
 
     // ---- interface ----
-    std::string iface;
-    iface += std::format("// Generated by mcpp.plugins.surface for {}. Do not edit.\n", by);
-    if (opt.surface == kind::module_) iface += std::format("export module {};\n\n", opt.module_name);
-    else                              iface += "#pragma once\n\n";
-    iface += extern_c_declarations(items, opt);
-    iface += "\n";
-    // `export` on the opening namespace exports everything the block contains,
-    // including the nested namespaces a payload's directory produced.
-    if (opt.surface == kind::module_) iface += "export ";
-    iface += open_namespaces(segs);
-    iface += "\n" + body + "\n";
-    iface += close_namespaces(segs);
-
-    out.interface_file = (dir / (opt.module_name
-                                 + (opt.surface == kind::module_ ? ".cppm" : ".h"))).string();
-    if (!write_if_different(out.interface_file, iface)) {
-        std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n", out.interface_file);
-        return std::nullopt;
+    if (which == half::interface_) {
+        std::string iface;
+        iface += std::format("// Generated by mcpp.plugins.surface for {}. Do not edit.\n", by);
+        if (opt.surface == kind::module_)
+            iface += std::format("export module {};\n\n", opt.module_name);
+        else
+            iface += "#pragma once\n\n";
+        iface += extern_c_declarations(items, opt);
+        iface += "\n";
+        // `export` on the opening namespace exports everything the block
+        // contains, including the nested namespaces a payload's directory
+        // produced.
+        if (opt.surface == kind::module_) iface += "export ";
+        iface += open_namespaces(segs);
+        iface += "\n" + body + "\n";
+        iface += close_namespaces(segs);
+        if (!write_if_different(out.interface_file, iface)) {
+            std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n",
+                                     out.interface_file);
+            return false;
+        }
+        return true;
     }
-    if (opt.surface == kind::module_) out.module_name = opt.module_name;
-    else                              out.include_dir = dir.string();
 
-    // ---- implementation ----
+    // ---- implementation ---- (half::body from here down)
     //
     // The one translation unit that defines the accessors. A plain `.cpp` under
     // every surface and every storage, because the accessors have C language
@@ -673,22 +756,50 @@ blob& load(const char* path, blob& b) {{
         }
     }
 
-    out.impl_file = (dir / (opt.module_name + ".impl.cpp")).string();
     if (!write_if_different(out.impl_file, impl)) {
         std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n", out.impl_file);
-        return std::nullopt;
+        return false;
     }
 
     if (out.store == storage::object) {
-        out.assembly_file = (dir / (opt.module_name + ".payload.S")).string();
+        // A CALLER THAT ASKS FOR THIS STORAGE MUST HAVE SAID WHERE THE BYTES
+        // ARE, AND THE REFUSAL IS WHAT KEEPS THAT TRUE.
+        //
+        // `item::payload_path` is documented as required under `object`, and
+        // today only `mcpp.rules.spirv` reaches this storage and only it sets
+        // the field. That is a COINCIDENCE, not a guarantee: the first caller
+        // to give `rules-slang` or `tools-embed` a storage option would get an
+        // `.incbin ""` in a generated `.S`, and the declaration below would
+        // then name an empty dependency -- so the build would be wrong in
+        // exactly the silent way this whole change exists to remove.
+        //
+        // A constraint written only in a comment has nothing enforcing it,
+        // which is a shape this project has recorded before. This is the
+        // enforcement.
+        for (auto const& it : items) {
+            if (!it.payload_path.empty()) continue;
+            std::cerr << std::format(
+                "mcpp.plugins.surface: `{}` was given storage::object with no "
+                "payload_path.\n"
+                "  Under this storage the generated assembly names the payload "
+                "in `.incbin`, so\n"
+                "  the caller has to say where it is. Set `item::payload_path`, "
+                "or use storage::header.\n",
+                it.identifier);
+            return false;
+        }
         if (!write_if_different(out.assembly_file,
-                                assembly_for(items, opt, mcpp::target_os()))) {
+                                assembly_for(items, opt, opt.target_os))) {
             std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n",
                                      out.assembly_file);
-            return std::nullopt;
+            return false;
         }
     }
-    return out;
+    // `storage::sidecar` needs no counterpart, and that was checked rather than
+    // assumed. Its payload is never read by a compile: the accessor opens the
+    // file at RUN time, so a rebuilt payload is picked up by the next run with
+    // nothing in the build graph to keep current.
+    return true;
 }
 
 // The surface a project gets when it asks for nothing.
@@ -707,25 +818,29 @@ inline kind default_surface() {
 // `example:my-app` -> `my_app`. The module a rule names by default is this
 // followed by the group's own segment, so two packages in one build cannot
 // claim the same module.
-inline std::string module_root_from_package() {
-    // THE PACKAGE'S NAME. NOT ITS DIRECTORY'S.
-    //
-    // These are different questions and they give different answers whenever a
-    // project lays a package out under a generic directory. The first version
-    // of this function asked the only question mcpp could answer -- the leaf of
-    // MCPP_MANIFEST_DIR -- so a package named `vulkan-saxpy` laid out as
-    // `vulkan/app/` generated `app.shaders`, and every `<something>/app/` in a
-    // workspace claimed that same module. `mcpp::package_name()` was added to
-    // the build-program contract in mcpp 2026.9.7.1, which this package
-    // requires, so the right question is now askable.
-    //
-    // The directory leaf remains only as a value for the impossible case: a
-    // manifest without a `[package] name` does not load, so an empty answer
-    // here would mean the contract changed underneath. A rule that wants
-    // neither passes `options::module_name`, and this is not consulted.
-    std::string leaf{mcpp::package_name()};
-    if (leaf.empty())
-        leaf = std::filesystem::path(mcpp::manifest_dir()).filename().string();
+// The default module root for a package that named none: its PACKAGE NAME,
+// sanitised into an identifier.
+//
+// THE PACKAGE'S NAME. NOT ITS DIRECTORY'S. These are different questions and
+// they give different answers whenever a project lays a package out under a
+// generic directory. The first version asked the only question mcpp could
+// answer -- the leaf of MCPP_MANIFEST_DIR -- so a package named `vulkan-saxpy`
+// laid out as `vulkan/app/` generated `app.shaders`, and every
+// `<something>/app/` in a workspace claimed that same module.
+//
+// The name ARRIVES rather than being read, for the reason `options::target_os`
+// records: this module must compile into a plain binary as well as into a
+// build program, so it may not reach for `mcpp::package_name()` itself. The
+// caller passes what mcpp told it.
+//
+// `fallback` covers the impossible case -- a manifest without a `[package]
+// name` does not load, so an empty first argument would mean the contract
+// changed underneath. A rule that wants neither passes `options::module_name`,
+// and this is not consulted.
+inline std::string module_root_for(std::string_view package_name,
+                                   std::string_view fallback = {}) {
+    std::string leaf{package_name};
+    if (leaf.empty()) leaf = std::string(fallback);
     return identifier(leaf, "app");
 }
 

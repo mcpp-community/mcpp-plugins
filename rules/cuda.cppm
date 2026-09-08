@@ -498,6 +498,20 @@ inline std::optional<std::string> unreachable_stage(const toolkit& t, const std:
 struct edge {
     std::string id, description;
     std::vector<std::string> command, inputs, outputs;
+    // A depfile the COMMAND writes and ninja reads back. `inputs` is fixed
+    // when this program runs, before the compiler has seen the source, so a
+    // device unit that `#include`s a header had no edge to it: editing the
+    // header rebuilt nothing and the build stayed green over a stale object.
+    // The compiler already computes the answer while parsing.
+    //
+    // `-MMD` and not `-MD`, which is the choice mcpp makes for its own C and
+    // GAS units: user includes only. `-MD` was measured on BiSheng and pulled
+    // in fifty host headers under /usr/include -- correct, and useless, because
+    // it makes the object depend on absolute host paths that a shared build
+    // directory must not carry. A toolkit header is not missed by this: the
+    // toolkit's path carries its version, so a different toolkit is a different
+    // command line, which ninja already tracks.
+    std::string depfile;
 };
 
 // ON WINDOWS THE DEFAULT IS THE CLANG ROUTE WHATEVER THE PROJECT'S COMPILER IS.
@@ -740,6 +754,12 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             e.command.push_back("-I" + (std::filesystem::path(inc).is_absolute()
                                         ? inc : root + "/" + inc));
         for (auto const& f : opt.flags) e.command.push_back(f);
+        // Where the compiler reports what it read. `<object>.d`, so two
+        // architectures of one source do not share a file and overwrite each
+        // other's answer -- the object name already carries the arch for
+        // exactly that reason.
+        e.depfile = obj + ".d";
+        e.command.insert(e.command.end(), { "-MMD", "-MF", e.depfile });
         e.command.insert(e.command.end(), { "-c", root + "/" + src, "-o", obj });
         e.inputs  = { root + "/" + src };
         e.outputs = { obj };
@@ -757,6 +777,9 @@ inline bool submit(std::span<const edge> edges) {
         for (auto const& c : e.command) a.arg(c.c_str());
         for (auto const& i : e.inputs)  a.input(i.c_str());
         for (auto const& o : e.outputs) a.output(o.c_str());
+        // Empty for an edge that declares none, which serialises identically to
+        // an action from before the field existed -- see mcpp::action::depfile.
+        if (!e.depfile.empty()) a.depfile = e.depfile.c_str();
         a.submit();
     }
     return true;

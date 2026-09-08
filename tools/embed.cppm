@@ -36,6 +36,7 @@ import mcpp;
 // embedded by this tool and a set of shaders compiled by `mcpp.rules.spirv`
 // reach a consumer through the same shape.
 import mcpp.plugins;
+import mcpp.plugins.declare;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -288,13 +289,13 @@ inline bool group(std::span<const std::string> inputs,
     so.module_name = module_name;
     so.out_dir     = dir;
     so.produced_by = "mcpp.tools.embed";
+    // Answered here, not read there: `mcpp.plugins.surface` compiles into a
+    // plain binary as well as into this build program, so it takes its inputs.
+    so.target_os          = mcpp::target_os();
+    so.has_gas_assembler  = std::string_view(mcpp::compiler()) != "msvc";
 
-    const auto out = mcpp::plugins::surface::emit(items, so);
-    if (!out) return false;
-    mcpp::generated(out->interface_file.c_str());
-    mcpp::generated(out->impl_file.c_str());
-    if (!out->include_dir.empty()) mcpp::include_dir(out->include_dir.c_str());
-    return true;
+    const auto out = mcpp::plugins::surface_for(items, so);
+    return out.ok;
 }
 
 } // namespace mcpp::tools::embed
