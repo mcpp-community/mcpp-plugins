@@ -524,9 +524,10 @@ not mangle, so two copies that disagree are one symbol: the link is clean and
 each side reads the arguments by its own ABI, with no compile error and no link
 error. That is the copy this removes.
 
-**The module re-exports names, not signatures.** `export using ::saxpy_device;`
-needs the identifier and nothing else, so the generator has no C parser in it and
-the header stays the only place a signature is written. Measured on both
+**The module re-exports names, not signatures.** `using ::saxpy_device;` inside
+the module's namespace needs the identifier and nothing else, so the generator
+has no C parser in it and the header stays the only place a signature is
+written. Measured on both
 implementations this package supports: a consumer that imports the module and
 never includes the header calls the entry point and links against an
 implementation built by a different driver, under GCC 16.1 and clang 22.1.8.
