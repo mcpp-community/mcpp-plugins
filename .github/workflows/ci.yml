@@ -951,19 +951,41 @@ jobs:
           grep -q '^row 0: key=Standard.vert size=20' run.log
           grep -q '^row 1: key=Standard.frag size=22' run.log
           grep -q '^all ok' run.log
-          # The bytes are a numeric array and never a raw string literal: a
-          # raw literal cannot carry arbitrary binary, and its delimiter is
-          # terminable by the input. The CMake code this shape replaces used
-          # string concatenation and has exactly that defect.
-          h=$(find target/.build-mcpp/out -name '*.h' | head -1)
-          test -n "$h" || { echo "FAIL: no generated header"; exit 1; }
-          if grep -q 'R"' "$h"; then
-            echo "FAIL: the table emitted a raw string literal"; exit 1
-          fi
-          # Self-contained: the row type is declared beside the array, so the
-          # header compiles on its own with nothing else included.
-          grep -q 'struct embedded_file' "$h" \
-            || { echo "FAIL: the row type is not in the header"; head -30 "$h"; exit 1; }
+          # EVERY GENERATED HEADER, NOT WHICHEVER `find` LISTED FIRST. This
+          # fixture writes three -- the real table plus probes that exercise
+          # `key_kind::relative_path` and `element::word32` -- and `head -1`
+          # picked one by directory order, so the check was asserting about a
+          # file nothing chose.
+          mapfile -t headers < <(find target/.build-mcpp/out -name '*.h' | sort)
+          [ "${#headers[@]}" -gt 0 ] || { echo "FAIL: no generated header"; exit 1; }
+          echo "checking ${#headers[@]} generated header(s)"
+          for h in "${headers[@]}"; do
+            # The bytes are a numeric array and never a raw string literal: a
+            # raw literal cannot carry arbitrary binary, and its delimiter is
+            # terminable by the input. The CMake code this shape replaces used
+            # string concatenation and has exactly that defect.
+            if grep -q 'R"' "$h"; then
+              echo "FAIL: $h emitted a raw string literal"; exit 1
+            fi
+            # SELF-CONTAINED, ASSERTED AS A PROPERTY AND NOT AS A NAME. The
+            # row type is declared beside the array, so the header compiles on
+            # its own. The first version grepped for `struct embedded_file`,
+            # which is the DEFAULT `row_type` -- and this fixture sets
+            # `row_type = "shader_entry"` precisely because that option
+            # exists. So the assertion failed with the code correct, which is
+            # what a check tied to a spelling the fixture chooses will
+            # eventually always do.
+            #
+            # What is wanted: the header declares a struct, and the table's
+            # element type IS that struct. Both read out of the file.
+            row=$(sed -n 's/^struct \([A-Za-z_][A-Za-z0-9_]*\) {.*/\1/p' "$h" | head -1)
+            test -n "$row" \
+              || { echo "FAIL: $h declares no row struct"; head -30 "$h"; exit 1; }
+            grep -q "constexpr $row .*\[\] = {" "$h" \
+              || { echo "FAIL: $h's element type is not the struct it declares ($row)"
+                   head -40 "$h"; exit 1; }
+            echo "  ok: $(basename $h) declares '$row' and its table is an array of it"
+          done
           echo "ok: N inputs, one header, one table"
 
       # ── dist: what comes out of the LINK ────────────────────────────────
@@ -1499,7 +1521,33 @@ jobs:
           # ecosystem, which is why the member LOCATES it rather than declaring
           # a payload. Installing it here is the CI runner supplying what a
           # developer's machine would.
-          dotnet tool install --global wix >/dev/null 2>&1 || dotnet tool update --global wix >/dev/null 2>&1
+          # WiX 6, PINNED, AND THE PIN IS THE WHOLE POINT.
+          #
+          # An unpinned `dotnet tool install wix` gets v7, which REFUSES TO RUN
+          # AT ALL until a licence is accepted out of band. Measured on
+          # windows-2022:
+          #
+          #   wix.exe : error WIX7015: You must accept the Open Source
+          #   Maintenance Fee (OSMF) EULA to use WiX Toolset v7.
+          #
+          # That is a runtime gate, not a licence term about redistribution: 6's
+          # own EULA states that binaries may be redistributed and that the
+          # source remains freely distributable under the Microsoft Reciprocal
+          # License. So 6 is the version this ecosystem can actually drive, and
+          # it is also the version `xim:wix` should carry when that package
+          # lands -- a package pinning 7 would install a tool that cannot run.
+          #
+          # THE DISPATCH WAS ALREADY CORRECT WHEN THIS FAILED, which is worth
+          # recording because it is why the fix is a version pin and not a code
+          # change. The same run reported
+          #
+          #   Distributing msi-consumer v0.3.0 (--format msi)
+          #   wix.exe build -arch x64 -d Executable=bin/msi-consumer.exe -o ... MsiConsumer.wxs
+          #
+          # so the `.wxs` was rendered, the argv was assembled and the engine
+          # handed the request to the member. Only the tool declined.
+          dotnet tool install --global wix --version 6.0.2 >/dev/null 2>&1 \
+            || dotnet tool update --global wix --version 6.0.2 >/dev/null 2>&1
           export PATH="$PATH:$HOME/.dotnet/tools"
           wix --version
 
