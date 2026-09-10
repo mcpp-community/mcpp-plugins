@@ -1,0 +1,29 @@
+# Fixture: a program that ships as an AppImage.
+#
+# It proves the third family of the collection end to end. `rules-*` and
+# `tools-*` fixtures assert what reaches a COMPILE; this one asserts what comes
+# out of the LINK, which is a different pass of the engine: the build program
+# runs a second time, after `mcpp pack` has staged the closure, and submits an
+# artifact action whose input is a directory that did not exist during the
+# build.
+[package]
+name        = "appimage-consumer"
+version     = "0.3.0"
+description = "Fixture: packages a program as an AppImage"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# `[build-dependencies]`, for the reason every other fixture here gives: a
+# member's library must never reach the target while its member is wanted at
+# build time.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-appimage"], host-module = true }
+
+[targets.appimage-consumer]
+kind = "bin"
+main = "src/main.cpp"

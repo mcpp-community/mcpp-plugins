@@ -1,0 +1,69 @@
+import std;
+import mcpp;
+import mcpp.tools.embed;
+
+// `table()`: N inputs, ONE header, ONE array of rows, each carrying its
+// input's key beside its bytes. See `tools/embed.cppm` for the shape and why
+// a raw string literal is not how a row's bytes are written.
+int main() {
+    mcpp::rerun_if_changed_glob("data/*.vert");
+    mcpp::rerun_if_changed_glob("data/*.frag");
+
+    mcpp::tools::embed::table_options opt;
+    opt.name_space = "fixture";
+    opt.identifier = "shader_table";
+    opt.row_type   = "shader_entry";
+
+    const std::vector<std::string> inputs{ "data/Standard.vert", "data/Standard.frag" };
+    if (!mcpp::tools::embed::table(inputs, opt)) return 1;
+
+    // THE DUPLICATE-KEY REFUSAL, EXERCISED HERE SO A REGRESSION IS A BUILD
+    // FAILURE RATHER THAN A SILENT LAST-ROW-WINS.
+    //
+    // Two inputs share a file name in two directories -- the ordinary shape of
+    // a nested asset tree -- and `key_kind::file_name` is the default, so this
+    // is the collision `table()` exists to refuse: the failure this shape is
+    // most exposed to, because a table that silently kept the second row and
+    // dropped the first still links and runs with nothing to show for it.
+    // `identifier` and `out_dir` differ from the real table's above so a
+    // refused write is never confused with the one the program includes.
+    mcpp::tools::embed::table_options probeOpt;
+    probeOpt.identifier = "duplicate_probe";
+    probeOpt.out_dir    = std::string(mcpp::out_dir()) + "/embed-table-consumer-probe";
+    const std::vector<std::string> dupInputs{ "data/dup/a/clash.txt", "data/dup/b/clash.txt" };
+    if (mcpp::tools::embed::table(dupInputs, probeOpt)) {
+        std::cerr << "FAIL: table() accepted two inputs that produce one key\n";
+        return 1;
+    }
+
+    // THE SAME TWO INPUTS, RESOLVED BY NAMING THE DIRECTORY -- the case
+    // `key_kind::relative_path` exists for: a nested input set where two
+    // directories hold a file of the same name.
+    probeOpt.identifier = "relative_probe";
+    probeOpt.key        = mcpp::tools::embed::key_kind::relative_path;
+    if (!mcpp::tools::embed::table(dupInputs, probeOpt)) {
+        std::cerr << "FAIL: key_kind::relative_path did not resolve the same-name collision\n";
+        return 1;
+    }
+
+    // element::word32, AND ITS ALIGNMENT REFUSAL, BOTH HAVE TO STILL WORK:
+    // `table()` shares the element choice with `file()` and must not regress
+    // either half of it.
+    mcpp::tools::embed::table_options wordOpt;
+    wordOpt.identifier = "word_table";
+    wordOpt.out_dir    = std::string(mcpp::out_dir()) + "/embed-table-consumer-probe";
+    wordOpt.elem       = mcpp::tools::embed::element::word32;
+    const std::vector<std::string> alignedInputs{ "data/four.bin", "data/eight.bin" };
+    if (!mcpp::tools::embed::table(alignedInputs, wordOpt)) {
+        std::cerr << "FAIL: table() refused two four-byte-aligned inputs under element::word32\n";
+        return 1;
+    }
+    wordOpt.identifier = "misaligned_probe";
+    const std::vector<std::string> misalignedInputs{ "data/four.bin", "data/three.bin" };
+    if (mcpp::tools::embed::table(misalignedInputs, wordOpt)) {
+        std::cerr << "FAIL: table() accepted a non-multiple-of-4 input under element::word32\n";
+        return 1;
+    }
+
+    return 0;
+}

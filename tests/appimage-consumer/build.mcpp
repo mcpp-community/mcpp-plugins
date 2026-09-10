@@ -1,0 +1,17 @@
+import std;
+import mcpp;
+import mcpp.dist.appimage;
+
+int main() {
+    // ONE CALL DOES BOTH HALVES, and that is why a member exists rather than
+    // each project writing this. `generate()` declares the format
+    // unconditionally -- so `mcpp pack --format bogus` can name what is
+    // available -- and submits only when this pass asked for `appimage`.
+    mcpp::dist::appimage::options opt;
+    opt.target   = "appimage-consumer";
+    opt.app_name = "AppimageConsumer";
+    // Everything else comes from `[package]`: the version, the description and
+    // the licence are values mcpp has already parsed, and a copy here would
+    // drift from the manifest with nothing able to detect it.
+    return mcpp::dist::appimage::generate(opt) ? 0 : 1;
+}

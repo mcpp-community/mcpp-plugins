@@ -1,0 +1,25 @@
+# Fixture: a program that ships as a msi on Windows.
+#
+# It exists because a plan-level assertion is not a measurement. `plan_for()`
+# returning `applies == false` on Linux says the gate works; it says nothing
+# about whether the tool accepts what this member renders. That question is
+# only answerable on the platform the member serves, which is why this fixture
+# is built by the Windows runner and by no other.
+[package]
+name        = "msi-consumer"
+version     = "0.3.0"
+description = "Fixture: packages a program as a msi"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-wix"], host-module = true }
+
+[targets.msi-consumer]
+kind = "bin"
+main = "src/main.cpp"

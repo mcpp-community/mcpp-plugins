@@ -1,0 +1,25 @@
+# Fixture: a program that ships as a app on macOS.
+#
+# It exists because a plan-level assertion is not a measurement. `plan_for()`
+# returning `applies == false` on Linux says the gate works; it says nothing
+# about whether the tool accepts what this member renders. That question is
+# only answerable on the platform the member serves, which is why this fixture
+# is built by the macOS runner and by no other.
+[package]
+name        = "app-consumer"
+version     = "0.3.0"
+description = "Fixture: packages a program as a app"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-apple"], host-module = true }
+
+[targets.app-consumer]
+kind = "bin"
+main = "src/main.cpp"

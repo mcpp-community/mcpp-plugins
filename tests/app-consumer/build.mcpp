@@ -1,0 +1,13 @@
+import std;
+import mcpp;
+import mcpp.dist.apple;
+
+int main() {
+    mcpp::dist::apple::options opt;
+    opt.target   = "app-consumer";
+    opt.app_name = "AppConsumer";
+    // No `identity`: signing is off by default, because a member that signed
+    // unconditionally would fail every build on a machine with no identity in
+    // its keychain. The signing path is exercised separately in CI.
+    return mcpp::dist::apple::generate(opt) ? 0 : 1;
+}
