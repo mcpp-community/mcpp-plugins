@@ -1570,12 +1570,35 @@ jobs:
           exe=$(find target -name 'msi-consumer.exe' | head -1)
           test -n "$exe" || { echo "FAIL: no linked program to compare against"; exit 1; }
           exesize=$(stat -c %s "$exe" 2>/dev/null || stat -f %z "$exe")
-          # An installer carrying the program is at least as large as the
-          # program. A cabinet compresses, so this is a floor and not an
-          # equality -- but an empty installer is far below it.
-          [ "$size" -gt $((exesize / 2)) ] \
-            || { echo "FAIL: the MSI ($size) is implausibly small for a $exesize-byte program"; exit 1; }
-          echo "ok: one MSI, and it is not the empty one"
+
+          # ASK THE INSTALLER WHAT IT CONTAINS. A SIZE RATIO IS A GUESS.
+          #
+          # This was `size > exesize / 2`, with the reasoning "a cabinet
+          # compresses, so this is a floor and not an equality". The ratio was
+          # invented, and the first real WiX 6 run refused a correct MSI: 32768
+          # bytes for a 114688-byte program, which is what a stripped
+          # hello-world looks like once a cab has had it -- mostly padding and
+          # highly compressible. The same mistake was already made once in this
+          # ecosystem, on the AppImage floor, where a 16 KB bound refused a
+          # 14999-byte correct bundle.
+          #
+          # An administrative install writes the payload out uncompressed, so
+          # the question "is the program in there" has an exact answer and this
+          # asserts EQUALITY against the linked binary. It also proves the
+          # package installs, which a size never did.
+          admin="$PWD/msi-admin-image"
+          rm -rf "$admin"; mkdir -p "$admin"
+          msiexec //a "$(cygpath -w "$msi")" //qn TARGETDIR="$(cygpath -w "$admin")" \
+            || { echo "FAIL: the MSI would not produce an administrative image"; exit 1; }
+          inside=$(find "$admin" -name 'msi-consumer.exe' | head -1)
+          test -n "$inside" || {
+            echo "FAIL: the MSI installs no msi-consumer.exe -- it is the empty installer"
+            find "$admin" -type f | head -20; exit 1; }
+          insidesize=$(stat -c %s "$inside" 2>/dev/null || stat -f %z "$inside")
+          [ "$insidesize" -eq "$exesize" ] || {
+            echo "FAIL: the installed program is $insidesize bytes, the linked one $exesize"
+            exit 1; }
+          echo "ok: the MSI installs msi-consumer.exe, $insidesize bytes, byte-for-byte the linked program"
 
       - name: dist-apple produces a bundle that launches
         if: runner.os == 'macOS'
