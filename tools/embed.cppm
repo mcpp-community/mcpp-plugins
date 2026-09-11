@@ -88,6 +88,58 @@ struct options {
     unsigned    width = 16;
 };
 
+// How a `table()` row's key is derived from its input path. `table()` refuses
+// two inputs that derive one key -- see `table()` below -- so this also
+// decides which inputs may sit in one table together.
+enum class key_kind {
+    // "Standard.vert". The default, because it is what tells `Standard.vert`
+    // from `Standard.frag` apart and the bare stem below cannot.
+    file_name,
+    // "Standard" -- the file name with its extension removed. Collides with
+    // `file_name` whenever two inputs differ only by extension, which is the
+    // ordinary shape of a shader set, so this is an opt-in for a caller who
+    // has made the stem unique some other way rather than a safer default.
+    stem,
+    // The input's path relative to `mcpp::manifest_dir()`, e.g.
+    // "shaders/ui/panel.vert". For a nested input set where two directories
+    // hold a file of the same name -- where `file_name` collides -- this is
+    // the way out.
+    relative_path,
+};
+
+// `table()`'s options. A separate type from `options` rather than a second
+// meaning for its fields: `options::identifier` names one symbol, so
+// `files()` refuses a caller who sets it for several inputs rather than
+// silently applying it to the first -- see `files()`. A table writes exactly
+// one array and one struct regardless of how many inputs feed it, so there is
+// always exactly one name to give, and `table_options::identifier` defaults
+// to one instead of being refused or left for the caller to discover is
+// required.
+struct table_options {
+    // Means what it means in `options`.
+    std::string out_dir;
+    // The one symbol this call writes: it names the array and the header's
+    // file name (`<identifier>.h`), the same way `identifier_for` names
+    // `file()`'s. Defaulted rather than derived, because there is no single
+    // input this call can derive a name from the way `file()` derives one
+    // from each input's own file name.
+    std::string identifier = "embedded_table";
+    // The generated row struct's name. Two `table()` calls sharing a
+    // namespace need this and `identifier` to differ, the same way two
+    // `file()` calls sharing a namespace need different `options::identifier`s:
+    // the type is as much a symbol as the array is, and this generator does
+    // not check that it is unique any more than `file()` checks `identifier`.
+    std::string row_type = "embedded_file";
+    // Means what it means in `options`.
+    std::string name_space;
+    // Means what it means in `options`, including `word32`'s "not a multiple
+    // of 4" refusal -- checked here per input, since a table has several.
+    element     elem = element::byte_;
+    // Means what it means in `options`.
+    unsigned    width = 16;
+    key_kind    key = key_kind::file_name;
+};
+
 // ---- internals -------------------------------------------------------------
 
 // The accessor's own name, so a file called `default.bin` must not produce
@@ -115,6 +167,16 @@ inline std::string header_path(const std::filesystem::path& input, const options
     return (std::filesystem::path(dir) / (identifier_for(input, opt) + ".h")).string();
 }
 
+// The header `table()` will produce, without producing it. Mirrors
+// `header_path()`: a consumer that wants to `#include` it by an explicit path
+// rather than by name asks here. Takes no input path, unlike `header_path()`,
+// because a table's file name comes from `table_options::identifier` rather
+// than from any one of its inputs.
+inline std::string table_header_path(const table_options& opt = {}) {
+    const auto dir = opt.out_dir.empty() ? default_dir() : opt.out_dir;
+    return (std::filesystem::path(dir) / (opt.identifier + ".h")).string();
+}
+
 inline bool write_if_different(const std::filesystem::path& path, std::string_view text) {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -126,6 +188,101 @@ inline bool write_if_different(const std::filesystem::path& path, std::string_vi
     if (!out) return false;
     out.write(text.data(), static_cast<std::streamsize>(text.size()));
     return static_cast<bool>(out);
+}
+
+// The key `table()` puts in a row, from an input already resolved to an
+// absolute path. `root` is `mcpp::manifest_dir()`, threaded through rather
+// than read here so this stays a function of its arguments alone -- the same
+// reason `identifier_for` above takes `input` rather than resolving it itself.
+inline std::string table_key_for(const std::filesystem::path& absolute,
+                                 const std::string& root, key_kind kind) {
+    switch (kind) {
+        case key_kind::stem:
+            return absolute.stem().string();
+        case key_kind::relative_path:
+            // `generic_string()`, not `string()`: the key is compared and then
+            // written into a generated file, and `lexically_relative` on
+            // Windows appends the PREFERRED separator -- `\` -- which would
+            // make one input's key differ by host for no reason a caller
+            // wrote. `mcpp::plugins::names::namespace_of` documents the same
+            // fix for the same reason: it was measured on windows-2022, where
+            // the equivalent path arithmetic produced a namespace segment no
+            // Linux or macOS run of the same fixture ever saw.
+            return absolute.lexically_relative(root).generic_string();
+        case key_kind::file_name:
+        default:
+            return absolute.filename().string();
+    }
+}
+
+// A row's key becomes a C string literal in the generated header, and two
+// characters cannot appear in one unescaped: an unescaped quote would close
+// the literal early, and an unescaped backslash would fold the character
+// after it into an escape sequence instead of leaving it as itself. Both are
+// ordinary characters in a POSIX file name, so this is not a hypothetical the
+// way it would be for an identifier.
+inline std::string quote_for_literal(std::string_view s) {
+    std::string out = "\"";
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    out += '"';
+    return out;
+}
+
+// The numeric array `file()` writes, factored out because `table()` writes
+// one such array per row instead of one per call. Takes no `null_terminate`:
+// `table_options` has no such field -- a row's `size` is exact by
+// construction, one member on one row, rather than a shared option applied
+// across a whole file -- and `file()` keeps its own copy of this loop rather
+// than being rewritten to call through a helper it has no use for, so its
+// already-measured output does not change.
+inline std::string element_array(std::string_view name, std::string_view bytes,
+                                 element elem, unsigned width) {
+    const bool word = elem == element::word32;
+    const auto count = word ? bytes.size() / 4 : bytes.size();
+    std::string text = word ? "inline constexpr std::uint32_t " : "inline constexpr unsigned char ";
+    text += name;
+    text += "[] = {";
+    const unsigned per_line = width == 0 ? 16 : width;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i % per_line == 0) text += "\n    ";
+        if (word) {
+            const auto b = reinterpret_cast<const unsigned char*>(bytes.data()) + i * 4;
+            text += std::format("0x{:08x}u,", static_cast<std::uint32_t>(b[0])
+                                            | (static_cast<std::uint32_t>(b[1]) << 8)
+                                            | (static_cast<std::uint32_t>(b[2]) << 16)
+                                            | (static_cast<std::uint32_t>(b[3]) << 24));
+        } else {
+            text += std::format("0x{:02x},", static_cast<unsigned>(
+                static_cast<unsigned char>(bytes[i])));
+        }
+        if (i + 1 < count) text += ' ';
+    }
+    text += "\n};\n";
+    return text;
+}
+
+// What `table()`'s duplicate-key refusal tells a caller to do about it, which
+// depends on which derivation produced the collision: the fix for one is
+// switching away from it, and the fix for another is that switching to it is
+// what was already tried.
+inline std::string_view key_collision_hint(key_kind kind) {
+    switch (kind) {
+        case key_kind::file_name:
+            return "Two inputs with the same name in different directories collide "
+                   "under the default; table_options::key = key_kind::relative_path "
+                   "tells them apart by directory.";
+        case key_kind::stem:
+            return "key_kind::stem drops the extension, so two inputs differing only "
+                   "by it collide; key_kind::file_name, the default, keeps it.";
+        case key_kind::relative_path:
+        default:
+            return "key_kind::relative_path is already the input's path below the "
+                   "manifest directory, so this is the same input named twice.";
+    }
 }
 
 // ---- the tool ---------------------------------------------------------------
@@ -296,6 +453,162 @@ inline bool group(std::span<const std::string> inputs,
 
     const auto out = mcpp::plugins::surface_for(items, so);
     return out.ok;
+}
+
+// N inputs, ONE header, ONE table: every row carries its input's key beside
+// its bytes, and the consumer iterates the array or looks a row up by key.
+// `files()` writes N headers for N inputs and leaves each included by name;
+// this is the shape for a set the consumer wants to walk rather than name
+// member by member -- a shader set is the motivating case, where a renderer
+// wants "every shader the project has" rather than one accessor per shader.
+//
+// THE ROW STRUCT IS GENERATED HERE, BESIDE THE ARRAY, FOR THE REASON 0.2.6
+// FIXED FOR `mcpp.rules.spirv`'s HEADER: a generated header has to be
+// includable on its own. Leaving the row type for the consumer to declare by
+// hand would make it a second copy of a decision -- the field order and the
+// element type both have to match this generator exactly -- and the failure
+// mode of a mismatch is a device API reading a struct through the wrong
+// layout, not a compile error.
+//
+// EACH ROW'S BYTES ARE A NUMERIC ARRAY, NEVER A RAW STRING LITERAL. A raw
+// string literal delimits on a fixed marker -- `)"` closes `R"(...)"` -- and no
+// byte sequence in an arbitrary payload is excluded strongly enough to promise
+// it never contains that marker: shader source can carry it by accident, and a
+// binary payload can carry it by construction. The motivating case for this
+// entry point built its shader table by concatenating each file's text into
+// one string in the build script, which is this exact bug -- any shader
+// containing that four-character sequence truncates the string at that point,
+// and every shader concatenated after it goes missing, with nothing but an
+// unrelated compiler error to show for it. A numeric array has no delimiter
+// for a payload to contain.
+inline bool table(std::span<const std::string> inputs, table_options opt = {}) {
+    if (inputs.empty()) return true;
+    if (opt.identifier.empty()) {
+        std::cerr << "mcpp.tools.embed: table() needs `table_options::identifier`; "
+                     "it names the one array and header this call writes\n";
+        return false;
+    }
+    if (opt.row_type.empty()) {
+        std::cerr << "mcpp.tools.embed: table() needs `table_options::row_type`; "
+                     "it names the struct each row is an instance of\n";
+        return false;
+    }
+
+    const std::string root = mcpp::manifest_dir();
+
+    struct resolved {
+        std::filesystem::path absolute;
+        std::string           original;   // as the caller wrote it, for diagnostics
+        std::string           key;
+    };
+    std::vector<resolved> rows;
+    rows.reserve(inputs.size());
+    for (auto const& one : inputs) {
+        const std::filesystem::path p(one);
+        const auto absolute = p.is_absolute() ? p : std::filesystem::path(root) / p;
+        rows.push_back({ absolute, one, table_key_for(absolute, root, opt.key) });
+    }
+
+    // TWO INPUTS PRODUCING ONE KEY ARE REFUSED HERE, BEFORE EITHER IS READ.
+    //
+    // A row is looked up by key, so letting this through would mean whichever
+    // row is kept depends on iteration order and the other is lost with no
+    // message at all -- the failure this shape is most exposed to, because a
+    // build that silently dropped a row still links and runs. `mcpp.rules.spirv`
+    // refuses the equivalent collision (two shaders producing one output) the
+    // same way: naming both inputs rather than only the one seen second.
+    {
+        std::map<std::string, std::string> seen;   // key -> first input
+        for (auto const& r : rows) {
+            auto [it, fresh] = seen.try_emplace(r.key, r.original);
+            if (!fresh) {
+                std::cerr << std::format(
+                    "mcpp.tools.embed: table() found two inputs that produce one key.\n"
+                    "    {}\n"
+                    "    {}\n"
+                    "  both produce the key `{}`. A row is looked up by key, so keeping\n"
+                    "  both would mean the second silently replaces the first rather\n"
+                    "  than joining it. {}",
+                    it->second, r.original, r.key, key_collision_hint(opt.key)) << '\n';
+                return false;
+            }
+        }
+    }
+
+    const bool word = opt.elem == element::word32;
+    std::vector<std::string> bytes(rows.size());
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        std::ifstream in(rows[i].absolute, std::ios::binary);
+        if (!in) {
+            std::cerr << std::format("mcpp.tools.embed: cannot read {}",
+                                     rows[i].absolute.string()) << '\n';
+            return false;
+        }
+        bytes[i].assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        if (word && bytes[i].size() % 4 != 0) {
+            std::cerr << std::format("mcpp.tools.embed: {} is {} bytes, which is not a "
+                "multiple of 4, and element::word32 was asked for",
+                rows[i].absolute.string(), bytes[i].size()) << '\n';
+            return false;
+        }
+    }
+
+    const auto id  = opt.identifier;
+    const auto dir = opt.out_dir.empty() ? default_dir() : opt.out_dir;
+    const auto out = std::filesystem::path(dir) / (id + ".h");
+
+    std::string text;
+    text += std::format("// Generated by mcpp.tools.embed::table() from {} inputs. Do "
+                        "not edit.\n", rows.size());
+    text += "#pragma once\n\n#include <cstddef>\n#include <cstdint>\n\n";
+
+    if (!opt.name_space.empty()) text += "namespace " + opt.name_space + " {\n\n";
+
+    text += std::format(
+        "// One row per input: its key, a pointer to its bytes, and how many\n"
+        "// elements `data` points to -- words under element::word32, bytes\n"
+        "// otherwise, so a byte count is size * sizeof(*data). Declared here,\n"
+        "// beside the array below, so this header is includable on its own\n"
+        "// with nothing else.\n"
+        "struct {} {{\n"
+        "    const char* key;\n"
+        "    const {}* data;\n"
+        "    std::size_t size;\n"
+        "}};\n\n", opt.row_type, word ? "std::uint32_t" : "unsigned char");
+
+    // EACH ROW'S BYTES ARE THEIR OWN ARRAY, NAMED BY INDEX RATHER THAN BY A
+    // SANITISED KEY. The key itself is checked for collisions above; a
+    // sanitised form of it is not, and two keys that sanitise to one
+    // identifier -- "a.b" and "a_b" both become "a_b" -- would collide here if
+    // this used it. That would be a second collision check guarding a name
+    // nothing outside this function ever reads. The index cannot collide.
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const auto rowName = std::format("{}_{}", id, i);
+        text += element_array(rowName, bytes[i], opt.elem, opt.width);
+    }
+
+    text += std::format("\ninline constexpr {} {}[] = {{\n", opt.row_type, id);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const auto count = word ? bytes[i].size() / 4 : bytes[i].size();
+        text += std::format("    {{ {}, {}_{}, {} }},\n",
+                            quote_for_literal(rows[i].key), id, i, count);
+    }
+    text += "};\n\n";
+    text += std::format("inline constexpr std::size_t {}_size = {};\n", id, rows.size());
+
+    if (!opt.name_space.empty()) text += "\n} // namespace " + opt.name_space + "\n";
+
+    if (!write_if_different(out, text)) {
+        std::cerr << std::format("mcpp.tools.embed: cannot write {}", out.string()) << '\n';
+        return false;
+    }
+
+    // Same reason `file()` states it: the build program is cached on its
+    // inputs, so a file it reads has to be declared, and this holds for every
+    // one of the N inputs here rather than the one input `file()` has.
+    for (auto const& r : rows) mcpp::rerun_if_changed(r.absolute.string().c_str());
+    if (opt.out_dir.empty()) mcpp::include_dir(dir.c_str());
+    return true;
 }
 
 } // namespace mcpp::tools::embed

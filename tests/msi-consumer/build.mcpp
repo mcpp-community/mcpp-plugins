@@ -1,0 +1,13 @@
+import std;
+import mcpp;
+import mcpp.dist.wix;
+
+int main() {
+    mcpp::dist::wix::options opt;
+    opt.target       = "msi-consumer";
+    opt.product_name = "MsiConsumer";
+    // The version, the manufacturer and the upgrade code all come from
+    // `[package]`: an installer that restated them would carry a copy that
+    // drifts from the manifest with nothing able to detect it.
+    return mcpp::dist::wix::generate(opt) ? 0 : 1;
+}

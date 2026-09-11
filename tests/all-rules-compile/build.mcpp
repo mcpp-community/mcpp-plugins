@@ -13,6 +13,9 @@ import mcpp.rules.spirv;
 import mcpp.rules.sycl;
 import mcpp.tools.embed;
 import mcpp.tools.island;
+import mcpp.dist.appimage;
+import mcpp.dist.wix;
+import mcpp.dist.apple;
 
 int main() {
     // No accelerator is named, so each of these returns true without looking
@@ -29,9 +32,30 @@ int main() {
     // called, because a fixture whose point is a compilation should not also
     // produce output.
     ok = ok && !mcpp::tools::embed::header_path("probe.bin").empty();
+    // Same question of `table()`, added beside `file()`'s: it is a second
+    // entry point in one module, not a second module, and this fixture's
+    // whole point is that everything this package exports compiles for the
+    // host running the build.
+    ok = ok && !mcpp::tools::embed::table_header_path().empty();
     // Same question of the island generator: the one call that writes
     // nothing. `entry_name` is where its only parsing lives.
     ok = ok && mcpp::tools::island::entry_name("int f(int a)") == "f";
-    std::println("all-rules-compile: every rule module compiled for this host");
+
+    // `dist-wix` and `dist-apple` are neither rules nor tools, but the same
+    // property is worth asserting on every platform for the same reason: a
+    // plan on a build that is not `mcpp pack --format <name>` must return
+    // `applies == false` and print nothing, on every host, including the two
+    // whose format this is not. `pack_format()` is empty here exactly as
+    // `accel()` is empty above, so both refusals are silent -- neither
+    // module's Windows-only or macOS-only diagnostic fires, because neither
+    // reaches the check that would print it.
+    auto appimagePlan = mcpp::dist::appimage::plan_for();
+    ok = ok && !appimagePlan.applies;
+    auto wixPlan = mcpp::dist::wix::plan_for();
+    ok = ok && !wixPlan.applies;
+    auto applePlan = mcpp::dist::apple::plan_for();
+    ok = ok && !applePlan.applies;
+
+    std::println("all-rules-compile: every rule and dist module compiled for this host");
     return ok ? 0 : 1;
 }

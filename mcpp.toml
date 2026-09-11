@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.5.2"
+version     = "0.6.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -116,6 +116,52 @@ device_extensions = [".sycl"]
 # NOT device rules: these embed or declare things a project already has, so they
 # claim no extension and name no rule module. A consumer calls them from its own
 # `build.mcpp`.
+# ── dist: what comes out of the link, and in what form a user installs it ──
+#
+# A THIRD CATEGORY, AND THE PREFIX IS THE POINT. `rules-*` says how a
+# translation unit is compiled; `tools-*` says what the build program does
+# itself; `dist-*` says what comes out of the link. A `dist-` member compiles no
+# translation unit and does no work while the build program runs: it consumes
+# link outputs through a `role = "artifact"` action and produces something a
+# user installs, reached with `mcpp pack --format <name>` (mcpp 2026.9.11.1+).
+#
+# THE ENGINE HOLDS THE DISPATCH AND NOT THE FORMAT. dpkg's control fields,
+# AppImage's runtime, WiX's schema and Apple's notarisation each couple a
+# release to a release mcpp does not control, so none of them is in mcpp. The
+# argument is the one this project already made for languages: Slang is
+# supported without being named in the engine, and a distribution format has
+# less claim to a name there than a language does.
+#
+# EACH MEMBER IS ONE PLATFORM'S ANSWER and says so in its own module. A member
+# whose target OS does not match refuses by name rather than skipping silently:
+# the engine has already accepted the `--format` value because this graph
+# declared it, so a silent skip would report a successful pack that produced
+# nothing.
+
+# NO `rule_module`, AND THE ENGINE IS RIGHT TO REQUIRE THAT.
+#
+# `rule_module` names the module a consumer's build program imports TO REACH A
+# RULE, and the engine refuses it without `device_extensions` -- "a build rule
+# states both: `device_extensions` is what it compiles, `rule_module` is how a
+# consumer reaches it". A dist member compiles nothing, so it claims no
+# extension and has no business with that key.
+#
+# It therefore takes the `tools-*` shape: the feature adds the unit, and the
+# consumer writes `host-module = true` on the dependency edge and imports the
+# module by name. One line more for a consumer than a rule needs, and it says
+# something true -- this member is not a rule.
+[features.dist-appimage]
+sources = ["dist/appimage.cppm"]
+implies = ["surface"]
+
+[features.dist-wix]
+sources = ["dist/wix.cppm"]
+implies = ["surface"]
+
+[features.dist-apple]
+sources = ["dist/apple.cppm"]
+implies = ["surface"]
+
 [features.tools-embed]
 sources = ["tools/embed.cppm"]
 implies           = ["surface"]
@@ -288,6 +334,36 @@ implies           = ["surface"]
 # rule drives, and they are present from that version onward.
 [target.'cfg(accelerator = "ascend")'.feature-xlings.rules-ascendc]
 "xim:cann-toolkit" = ">=8.5.0"
+
+# ── The environment `dist-appimage` needs ──────────────────────────────────
+#
+# ONE PAYLOAD, AND IT CARRIES TWO FILES. `appimagetool` builds the image, and
+# the type-2 runtime stub is what the image starts with. Measured on
+# appimagetool 1.9.1: without `--runtime-file` the tool DOWNLOADS that stub from
+# a GitHub release on every invocation, and with the address unreachable the
+# build fails inside the tool. A build must not reach the network -- one that
+# does is neither reproducible nor usable offline -- so the recipe installs both
+# and the rule passes the stub explicitly.
+#
+# THE GATE IS THE FEATURE AND THE OS, AND THERE IS DELIBERATELY NO THIRD ONE.
+# The rules gate their multi-gigabyte vendor toolkits on `cfg(accelerator =
+# ...)` as well, because a CPU-only build of a project that depends on them must
+# download nothing. No equivalent exists here and none should: provisioning runs
+# BEFORE the build program, so `--format` -- which only the build program
+# learns -- cannot be a layer key. The cost of that is bounded and small: a
+# Linux consumer that names this feature installs 15 MB whether or not it packs.
+#
+# A FLOOR RATHER THAN AN EXACT VERSION. appimagetool's version is coupled to
+# nothing this rule cannot see; 1.9.1 is where the runtime stub ships beside the
+# tool, which is what makes an offline build expressible.
+[target.'cfg(linux)'.feature-xlings.dist-appimage]
+"xim:appimagetool" = ">=1.9.1"
+
+# `dist-wix` and `dist-apple` declare no payload, and that is a licence fact
+# rather than an omission. WiX is a .NET tool distributed through NuGet and
+# `codesign` is part of Xcode; neither is redistributable, so each member
+# locates what the machine has and says where it looked when the lookup returns
+# empty -- the `msvc@system` shape, which mcpp already has.
 
 [targets.plugins]
 kind = "lib"

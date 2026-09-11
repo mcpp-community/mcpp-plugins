@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.5.2", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.6.0", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -36,7 +36,24 @@ int main() {
 |---|---|---|
 | rules | `mcpp.rules.<x>` | how one kind of translation unit is compiled by a compiler mcpp does not drive: the spelling of its flags, the probe of its toolkit, the actions it submits |
 | tools | `mcpp.tools.<x>` | a build-time utility independent of any compiler; see `tools/README.md` |
+| dist | `mcpp.dist.<x>` | what comes out of the link, and in what form a user installs it: an `.msi`, an AppImage, a signed `.app` |
 | identity | `mcpp.plugins` | the lib root, compiled before every member; it states the collection's version |
+
+The three families answer three different questions, and the prefix is which
+one a member answers:
+
+```
+rules-*   how is this translation unit compiled
+tools-*   what does the build program need to do itself
+dist-*    what comes out of the link, and in what form a user installs it
+```
+
+A `dist-*` member fits neither of the first two definitions: it does not
+compile a translation unit and it does not do its work while the build program
+runs. It consumes **link outputs** through a `role = "artifact"` action, reached
+with `mcpp pack --format <name>` (mcpp 2026.9.11.1+). The prefix matters because
+the taxonomy is load-bearing -- a consumer reading `rules-wix` would expect a
+compiler it does not drive and a translation unit, and there is neither.
 
 The `mcpp.` prefix is reserved for this package: mcpp warns when a module under
 it is declared by a package outside the `mcpp` namespace. `mcpp.build.*` is the
@@ -54,6 +71,9 @@ engine's own module family and is not used here.
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.6 | `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1 |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
 | `tools-island` | `mcpp.tools.island` | 2026.9.7.1 | nothing beyond mcpp: it reads marked entry points out of an island's own source and writes the `extern "C"` boundary header its compiler reads and the module the C++ side imports. Not a device rule -- it claims no extension, and a project calls it from its own `build.mcpp` |
+| `dist-appimage` | `mcpp.dist.appimage` | 2026.9.11.1 | `xim:appimagetool`, which this feature declares on the `cfg(linux)` axis. Linux only. Turns the tree `mcpp pack` staged into one AppImage: the staged bundle is already an AppDir bar three files, so the member writes an `AppRun`, a `.desktop` entry and an icon into it and invokes one tool -- it never copies or re-lays-out a tree that can be hundreds of megabytes |
+| `dist-wix` | `mcpp.dist.wix` | 2026.9.11.1 | the WiX 6 CLI on `PATH` or in `MCPP_WIX`, which is not redistributable through this ecosystem and is therefore located rather than installed -- the `msvc@system` shape. Windows only. Renders a `.wxs` and passes the program in as a preprocessor variable, because a bind path that resolves to nothing is silent |
+| `dist-apple` | `mcpp.dist.apple` | 2026.9.11.2 | the base macOS install (`ditto`, and `codesign` only when an identity is given). macOS now; iOS when the target row is wired, which is a payload rather than a redesign. **The floor is one release higher than its siblings** and the reason is not this member: under 2026.9.11.1 `mcpp pack` staged before dispatching and let a staging failure fail the command, so on a Mach-O program -- which the built-in closure walk refuses, because it uses `LD_TRACE_LOADED_OBJECTS` and dyld answers that by running the program -- every dispatched format was unreachable, including one that reads no staged tree. 2026.9.11.2 makes staging a service to the provider |
 
 ### Each rule brings its own environment
 
@@ -61,7 +81,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.5.2", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.6.0", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -329,6 +349,74 @@ before this every translation unit that included one carried its own copy.
 Exactly one translation unit -- the generated implementation -- includes them
 now, and every consumer reaches the same array through the accessor.
 
+## `tools-embed`'s four entry points
+
+| entry point | inputs | outputs | shape |
+|---|---|---|---|
+| `file()` | one | one header | one array, one `_size`, included by name |
+| `files()` | N | N headers | one `file()` call per input; `options::identifier` is refused, because it names one symbol and there are several |
+| `group()` | N | N headers + one generated interface | the same N headers, handed to `mcpp::plugins::surface` so a consumer writes one `import` and names no generated file -- see "What a consumer names" above |
+| `table()` | N | one header | one array of rows, each carrying its input's key beside its bytes; the consumer iterates or looks a row up by key |
+
+`table()` is for a set the consumer wants to walk rather than name member by
+member, where `files()`'s one accessor per input and `group()`'s one function
+per input are both the wrong shape. The motivating case is a shader set:
+
+```cpp
+mcpp::tools::embed::table_options opt;
+opt.name_space = "myapp";
+opt.identifier = "shaders";
+opt.row_type   = "shader_entry";
+mcpp::tools::embed::table({ "shaders/Standard.vert", "shaders/Standard.frag" }, opt);
+```
+
+which produces, in one header, a struct and an array of it:
+
+```cpp
+struct shader_entry { const char* key; const unsigned char* data; std::size_t size; };
+inline constexpr shader_entry shaders[] = {
+    { "Standard.vert", /* ... */, /* ... */ },
+    { "Standard.frag", /* ... */, /* ... */ },
+};
+```
+
+**The row struct is generated beside the array it describes, for the reason
+0.2.6 fixed for `mcpp.rules.spirv`'s header:** a generated header has to be
+includable on its own with nothing else. A consumer never declares the row
+type by hand, so it cannot declare one that has drifted from what the array
+actually holds.
+
+**Each row's bytes are a numeric array, never a raw string literal.** A raw
+string literal delimits on a fixed marker (`)"` closes `R"(...)"`), and no byte
+sequence in an arbitrary payload is excluded strongly enough to promise it
+never contains that marker: shader source can carry it by accident, and a
+binary payload can carry it by construction. The motivating case for this
+entry point built its shader table by concatenating file contents into one
+string in a build script -- exactly this bug: a shader containing that
+four-character sequence truncates the string at that point, and every shader
+concatenated after it goes missing, with nothing but an unrelated compiler
+error to show for it.
+
+**A row's key is a choice, not a convention.** `table_options::key` selects
+between the file name with its extension (`Standard.vert`, the default,
+because a bare stem would collide with `Standard.frag`), the bare stem, and the
+path relative to the manifest directory -- for a nested input set where two
+directories hold a file of the same name, which the file name alone cannot
+tell apart. Two inputs that derive one key are refused, naming both: the same
+shape `mcpp.rules.spirv` refuses two shaders sharing one output name, because
+the alternative is a table that silently keeps the last row sharing a key and
+drops the rest, and a build that did that would still link and run.
+
+**`table_options` is its own type rather than a second meaning for `options`'s
+fields.** `options::identifier` names one symbol, so `files()` refuses a caller
+who sets it for several inputs rather than silently applying it to the first.
+A table writes exactly one array regardless of how many inputs feed it, so
+there is always exactly one name to give: `table_options::identifier` (default
+`embedded_table`) and `table_options::row_type` (default `embedded_file`) name
+the array and the struct. `out_dir`, `name_space`, `elem` and `width` mean what
+they mean in `options`, `element::word32`'s "not a multiple of 4" refusal
+included -- checked per input, since a table has several.
+
 ## `tools-island`: an island's boundary
 
 `mcpp::plugins::surface` generates the whole interface for a **data** payload,
@@ -576,6 +664,7 @@ src/plugins.cppm   export module mcpp.plugins;  the lib root: the version, and
                    payload uses to write the declarations a consumer names
 rules/<x>.cppm     export module mcpp.rules.<x>;
 tools/<x>.cppm     export module mcpp.tools.<x>;
+dist/<x>.cppm      export module mcpp.dist.<x>;
 tests/<consumer>/  one project per member, built by CI with the pinned mcpp
 ```
 
@@ -595,7 +684,8 @@ own include search list, and only on a machine that has those directories.
 
 ## Adding a member
 
-1. One file, `rules/<x>.cppm` or `tools/<x>.cppm`, declaring its module name.
+1. One file, `rules/<x>.cppm`, `tools/<x>.cppm` or `dist/<x>.cppm`, declaring
+   its module name.
    The engine owns the graph — the accelerator axis, the constrained globs,
    the action edges, the fingerprint — and the member owns the spelling: which
    tool, which flags, what is generated. A member does not read `/usr`; a tool

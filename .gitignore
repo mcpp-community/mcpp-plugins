@@ -3,3 +3,4 @@ compile_commands.json
 mcpp.lock
 .mcpp/
 *.log
+.worktrees/

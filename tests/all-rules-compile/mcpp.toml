@@ -1,5 +1,5 @@
-# The fixture that compiles every rule in this collection, on whatever host is
-# running the build.
+# The fixture that compiles every rule and dist member in this collection, on
+# whatever host is running the build.
 #
 # WHY A FIXTURE WHOSE ONLY PRODUCT IS A COMPILATION.
 #
@@ -14,35 +14,53 @@
 # directory named `lib/x64`, a listing command. None of it is compiled by a
 # Linux build, so a Windows branch can be syntactically wrong for as long as
 # nobody builds on Windows -- and the first person to do so gets a compile
-# error out of a package they only wanted to use.
+# error out of a package they only wanted to use. A dist member's host-
+# dependent code is the same shape -- `dist-wix`'s tool discovery carries its
+# own `#if defined(_WIN32)` -- so it belongs in this fixture for the same
+# reason a rule does.
 #
-# This fixture names no accelerator. Every rule's `compile()` returns
-# immediately in that state, so no payload is installed and no second compiler
-# is needed; what happens is that all six modules are compiled as host modules
-# for this host, which is the assertion. It is cheap enough to run on every
-# platform in the matrix.
+# This fixture names no accelerator and packages nothing (`mcpp build`, never
+# `mcpp pack`). Every rule's `compile()` and every dist member's `plan_for()`
+# returns immediately in that state, so no payload is installed and no second
+# compiler is needed; what happens is that all eight modules are compiled as
+# host modules for this host, which is the assertion. It is cheap enough to
+# run on every platform in the matrix.
 [package]
 name        = "all-rules-compile"
 namespace   = "example"
 version     = "0.1.0"
-description = "Compiles every rule module in this collection for the host running the build"
+description = "Compiles every rule and dist module in this collection for the host running the build"
 
 [language]
 standard   = "c++23"
 modules    = true
 import_std = true
 
-# Every feature this package publishes. A rule left out of this list is a rule
-# whose host-dependent code is compiled on one platform only.
+# Every feature this package publishes. A rule or dist member left out of this
+# list is one whose host-dependent code is compiled on one platform only.
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = [
   "rules-ascendc", "rules-cuda", "rules-hip", "rules-slang", "rules-spirv",
   "rules-sycl",
   "tools-embed", "tools-island",
+  "dist-appimage", "dist-wix", "dist-apple",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns
-# before it looks for a payload, so this fixture downloads nothing on any host.
+# before it looks for a payload, so no RULE downloads anything on any host.
+#
+# `dist-appimage` IS THE ONE MEMBER THAT CAN DOWNLOAD HERE, and it is listed
+# anyway. Its payload is gated on `cfg(linux)` and its feature rather than on an
+# accelerator -- provisioning runs before the build program, so `--format`,
+# which only the build program learns, cannot be a layer key. On macOS and
+# Windows that predicate is closed and this fixture still downloads nothing; on
+# Linux it installs 15 MB, which the `appimage-consumer` step in the same job
+# installs regardless.
+#
+# Omitting it was the alternative and is worse: this fixture exists so that
+# every member's module is COMPILED on every host, and a member left out is a
+# member whose macOS and Windows compile is never attempted -- which is exactly
+# the failure the two platform-specific members are here to catch.
 
 [build]
 sources = ["src/*.cpp"]

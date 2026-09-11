@@ -1,0 +1,29 @@
+# The consumer that tests `mcpp.tools.embed::table()`.
+#
+# `embed-consumer` covers `file()` (one input, one header, one array) and
+# `embed-module-consumer` covers `group()` (N inputs, one `import`, one
+# accessor per input). This covers the third shape: N inputs, ONE header, ONE
+# array of rows the consumer iterates or looks up by key.
+#
+# It exists as a separate fixture rather than as more assertions on either of
+# those, for the reason `embed-module-consumer`'s own manifest gives: the
+# three entry points have different contracts, and a fixture that exercised
+# more than one would not say which one broke.
+[package]
+name        = "embed-table-consumer"
+version     = "0.1.0"
+description = "A shader-name table embedded through mcpp.tools.embed::table()"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# `[build-dependencies]`, not `[dependencies]`: see the other embed fixtures
+# and docs/05 section 2.6.1.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["tools-embed"], host-module = true }
+
+[targets.embed-table-consumer]
+kind = "bin"
+main = "src/main.cpp"

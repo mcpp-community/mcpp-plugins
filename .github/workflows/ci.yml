@@ -9,7 +9,27 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  MCPP_VERSION: 2026.9.8.1
+  # 2026.9.11.1 is what `dist-*` needs at the API level:
+  # `mcpp::provides_pack_format`, `mcpp::pack_format`, `${mcpp.stage_dir}` and
+  # `mcpp::package_version` all arrived in it. Raising this is what admits a
+  # member relying on a newer engine; the README states each member's floor,
+  # and the index descriptor's own `min_mcpp` is a different question -- it
+  # bounds the DESCRIPTOR's syntax, and raising it would brick every older
+  # client's whole index.
+  #
+  # 2026.9.11.2 IS WHAT `dist-apple` NEEDS TO BE REACHABLE AT ALL, and the red
+  # lane was the dependency rather than a convention. Under 2026.9.11.1 the
+  # macOS job failed with
+  #
+  #   error: cannot package the Mach-O program 'app-consumer' yet.
+  #
+  # because `mcpp pack` staged unconditionally before dispatching and let a
+  # staging failure fail the command -- and its built-in closure walk uses
+  # `LD_TRACE_LOADED_OBJECTS`, which dyld answers by RUNNING the program. So
+  # every dispatched format was unreachable on macOS, including one that never
+  # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
+  # and `dist-apple` has been unreachable, not broken, since it was written.
+  MCPP_VERSION: 2026.9.11.2
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -925,6 +945,118 @@ jobs:
           fi
           echo "ok: two payloads, one import, sizes exact"
 
+      # N INPUTS, ONE HEADER, ONE TABLE -- the shape `file()` and `files()`
+      # cannot express, taken from a shader set whose consumer iterates rather
+      # than naming each entry.
+      #
+      # The fixture's own build program runs three more `table()` calls than
+      # the consumer needs, and the build only reaches "Finished" because all
+      # of them behave: a duplicate key is refused naming BOTH inputs, the
+      # same collision is resolved by `key_kind::relative_path`, and a
+      # non-multiple-of-4 input under `element::word32` is refused naming the
+      # file. Each was checked by fault injection while it was written -- the
+      # refusal was disabled and the probe caught it -- so these are not
+      # assertions that pass by never running.
+      - name: tools-embed table() through a consumer
+        working-directory: tests/embed-table-consumer
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^row 0: key=Standard.vert size=20' run.log
+          grep -q '^row 1: key=Standard.frag size=22' run.log
+          grep -q '^all ok' run.log
+          # EVERY GENERATED HEADER, NOT WHICHEVER `find` LISTED FIRST. This
+          # fixture writes three -- the real table plus probes that exercise
+          # `key_kind::relative_path` and `element::word32` -- and `head -1`
+          # picked one by directory order, so the check was asserting about a
+          # file nothing chose.
+          mapfile -t headers < <(find target/.build-mcpp/out -name '*.h' | sort)
+          [ "${#headers[@]}" -gt 0 ] || { echo "FAIL: no generated header"; exit 1; }
+          echo "checking ${#headers[@]} generated header(s)"
+          for h in "${headers[@]}"; do
+            # The bytes are a numeric array and never a raw string literal: a
+            # raw literal cannot carry arbitrary binary, and its delimiter is
+            # terminable by the input. The CMake code this shape replaces used
+            # string concatenation and has exactly that defect.
+            if grep -q 'R"' "$h"; then
+              echo "FAIL: $h emitted a raw string literal"; exit 1
+            fi
+            # SELF-CONTAINED, ASSERTED AS A PROPERTY AND NOT AS A NAME. The
+            # row type is declared beside the array, so the header compiles on
+            # its own. The first version grepped for `struct embedded_file`,
+            # which is the DEFAULT `row_type` -- and this fixture sets
+            # `row_type = "shader_entry"` precisely because that option
+            # exists. So the assertion failed with the code correct, which is
+            # what a check tied to a spelling the fixture chooses will
+            # eventually always do.
+            #
+            # What is wanted: the header declares a struct, and the table's
+            # element type IS that struct. Both read out of the file.
+            row=$(sed -n 's/^struct \([A-Za-z_][A-Za-z0-9_]*\) {.*/\1/p' "$h" | head -1)
+            test -n "$row" \
+              || { echo "FAIL: $h declares no row struct"; head -30 "$h"; exit 1; }
+            grep -q "constexpr $row .*\[\] = {" "$h" \
+              || { echo "FAIL: $h's element type is not the struct it declares ($row)"
+                   head -40 "$h"; exit 1; }
+            echo "  ok: $(basename $h) declares '$row' and its table is an array of it"
+          done
+          echo "ok: N inputs, one header, one table"
+
+      # ── dist: what comes out of the LINK ────────────────────────────────
+      #
+      # Every step above asserts what reaches a COMPILE. These assert what
+      # comes out of the link, which is a different pass of the engine: the
+      # build program runs a SECOND time, after `mcpp pack` has staged the
+      # closure, and submits an artifact action whose input is a directory that
+      # did not exist during the build.
+      - name: dist-appimage produces an AppImage, and it runs
+        working-directory: tests/appimage-consumer
+        run: |
+          # A PLAIN BUILD HAS NO DISTRIBUTION EDGE. The member declares the
+          # format unconditionally and submits only when asked, so this build
+          # must produce no AppImage at all -- the half of the contract a
+          # member author is most likely to get wrong, and the half that still
+          # works for whoever wrote it.
+          "$MCPP" build
+          if find target -name '*.AppImage' | grep -q .; then
+            echo "FAIL: a plain build produced a distributable"; exit 1
+          fi
+          # AND YET THE FORMAT IS KNOWN, which is what the unconditional
+          # declaration buys: the engine can name what is available on a build
+          # that asked for nothing.
+          set +e
+          so=$("$MCPP" pack --format bogus 2>/dev/null); rc=$?
+          se=$("$MCPP" pack --format bogus 2>&1 >/dev/null)
+          set -e
+          [ "$rc" = 2 ] || { echo "FAIL: --format bogus exited $rc, expected 2"; exit 1; }
+          [ -z "$so" ] || { echo "FAIL: the refusal wrote to stdout"; exit 1; }
+          grep -q 'available in this build: tar, dir, appimage' <<<"$se" \
+            || { echo "FAIL: the refusal does not name appimage"; echo "$se"; exit 1; }
+
+          "$MCPP" pack --format appimage | tee pack.log
+          img=$(find target -name '*.AppImage' | head -1)
+          test -n "$img" || { cat pack.log; echo "FAIL: no AppImage"; exit 1; }
+          # THE CRITERION IS THAT IT RUNS AND PRINTS, not that a file exists.
+          # A packaging step that succeeds while carrying nothing is the
+          # measured failure this whole category exists to prevent, and a valid
+          # empty image satisfies every check that stops at the file.
+          #
+          # `--appimage-extract-and-run` because a runner has no FUSE: measured
+          # with `fusermount` off the PATH, the plain invocation exits 127 with
+          # "No suitable fusermount binary found on the $PATH".
+          chmod +x "$img"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$img" | tee run.log
+          grep -q '^appimage-consumer ok' run.log \
+            || { echo "FAIL: the AppImage did not run the program"; exit 1; }
+          # No network was reached to build it. appimagetool downloads its
+          # type-2 runtime stub on every invocation unless `--runtime-file`
+          # names a local copy, and `xim:appimagetool` carves one out of
+          # itself for exactly this reason.
+          if grep -qi 'downloading runtime' pack.log; then
+            echo "FAIL: the build fetched a runtime stub over the network"; exit 1
+          fi
+          echo "ok: one AppImage, and it printed the program's output"
+
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
       # device, so the run is of the CPU variant, which the same seam serves.
@@ -1379,6 +1511,146 @@ jobs:
             echo "FAIL: the generated header carries a namespace"; exit 1
           fi
           echo "ok: the boundary is generated and namespaced on this host"
+
+      # ── dist, on the platform each member serves ────────────────────────
+      #
+      # A PLAN-LEVEL ASSERTION IS NOT A MEASUREMENT. `plan_for()` returning
+      # `applies == false` on the wrong OS says the gate works; it says nothing
+      # about whether the tool accepts what the member renders. These two steps
+      # exist because that question is only answerable here, and because the
+      # members were written on a Linux host where neither tool can run.
+      #
+      # THE FIRST THING EITHER ONE SETTLES IS A SPELLING. `dist-wix` writes
+      # `$(Executable)` in its generated `.wxs`, taken from a working
+      # implementation rather than from WiX's documentation, which spells a
+      # `-d` define as `$(var.Executable)`. Only a real `wix build` can say
+      # which one this schema accepts.
+      - name: dist-wix produces an MSI that carries the program
+        if: runner.os == 'Windows'
+        working-directory: tests/msi-consumer
+        shell: bash
+        run: |
+          set -e
+          # WiX ships through NuGet and is not redistributable through this
+          # ecosystem, which is why the member LOCATES it rather than declaring
+          # a payload. Installing it here is the CI runner supplying what a
+          # developer's machine would.
+          # WiX 6, PINNED, AND THE PIN IS THE WHOLE POINT.
+          #
+          # An unpinned `dotnet tool install wix` gets v7, which REFUSES TO RUN
+          # AT ALL until a licence is accepted out of band. Measured on
+          # windows-2022:
+          #
+          #   wix.exe : error WIX7015: You must accept the Open Source
+          #   Maintenance Fee (OSMF) EULA to use WiX Toolset v7.
+          #
+          # That is a runtime gate, not a licence term about redistribution: 6's
+          # own EULA states that binaries may be redistributed and that the
+          # source remains freely distributable under the Microsoft Reciprocal
+          # License. So 6 is the version this ecosystem can actually drive, and
+          # it is also the version `xim:wix` should carry when that package
+          # lands -- a package pinning 7 would install a tool that cannot run.
+          #
+          # THE DISPATCH WAS ALREADY CORRECT WHEN THIS FAILED, which is worth
+          # recording because it is why the fix is a version pin and not a code
+          # change. The same run reported
+          #
+          #   Distributing msi-consumer v0.3.0 (--format msi)
+          #   wix.exe build -arch x64 -d Executable=bin/msi-consumer.exe -o ... MsiConsumer.wxs
+          #
+          # so the `.wxs` was rendered, the argv was assembled and the engine
+          # handed the request to the member. Only the tool declined.
+          dotnet tool install --global wix --version 6.0.2 >/dev/null 2>&1 \
+            || dotnet tool update --global wix --version 6.0.2 >/dev/null 2>&1
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          wix --version
+
+          # A plain build must have no distribution edge.
+          "$MCPP" build
+          if find target -name '*.msi' | grep -q .; then
+            echo "FAIL: a plain build produced an installer"; exit 1
+          fi
+          "$MCPP" pack --format msi | tee pack.log
+          msi=$(find target -name '*.msi' | head -1)
+          test -n "$msi" || { cat pack.log; echo "FAIL: no MSI"; exit 1; }
+
+          # THE CRITERION IS THE `File` TABLE, NOT THE FILE'S EXISTENCE. The
+          # measured failure this member is shaped around is a VALID, EMPTY,
+          # 52 KB installer with no diagnostic, produced when a harvested bind
+          # path resolved to nothing. An assertion that stops at "an .msi
+          # exists" passes on exactly that artifact.
+          size=$(stat -c %s "$msi" 2>/dev/null || stat -f %z "$msi")
+          echo "msi: $msi ($size bytes)"
+          exe=$(find target -name 'msi-consumer.exe' | head -1)
+          test -n "$exe" || { echo "FAIL: no linked program to compare against"; exit 1; }
+          exesize=$(stat -c %s "$exe" 2>/dev/null || stat -f %z "$exe")
+
+          # ASK THE INSTALLER WHAT IT CONTAINS. A SIZE RATIO IS A GUESS.
+          #
+          # This was `size > exesize / 2`, with the reasoning "a cabinet
+          # compresses, so this is a floor and not an equality". The ratio was
+          # invented, and the first real WiX 6 run refused a correct MSI: 32768
+          # bytes for a 114688-byte program, which is what a stripped
+          # hello-world looks like once a cab has had it -- mostly padding and
+          # highly compressible. The same mistake was already made once in this
+          # ecosystem, on the AppImage floor, where a 16 KB bound refused a
+          # 14999-byte correct bundle.
+          #
+          # An administrative install writes the payload out uncompressed, so
+          # the question "is the program in there" has an exact answer and this
+          # asserts EQUALITY against the linked binary. It also proves the
+          # package installs, which a size never did.
+          admin="$PWD/msi-admin-image"
+          rm -rf "$admin"; mkdir -p "$admin"
+          msiexec //a "$(cygpath -w "$msi")" //qn TARGETDIR="$(cygpath -w "$admin")" \
+            || { echo "FAIL: the MSI would not produce an administrative image"; exit 1; }
+          inside=$(find "$admin" -name 'msi-consumer.exe' | head -1)
+          test -n "$inside" || {
+            echo "FAIL: the MSI installs no msi-consumer.exe -- it is the empty installer"
+            find "$admin" -type f | head -20; exit 1; }
+          insidesize=$(stat -c %s "$inside" 2>/dev/null || stat -f %z "$inside")
+          [ "$insidesize" -eq "$exesize" ] || {
+            echo "FAIL: the installed program is $insidesize bytes, the linked one $exesize"
+            exit 1; }
+          echo "ok: the MSI installs msi-consumer.exe, $insidesize bytes, byte-for-byte the linked program"
+
+      - name: dist-apple produces a bundle that launches
+        if: runner.os == 'macOS'
+        working-directory: tests/app-consumer
+        shell: bash
+        run: |
+          set -e
+          "$MCPP" build
+          if find target -name '*.app' | grep -q .; then
+            echo "FAIL: a plain build produced a bundle"; exit 1
+          fi
+          "$MCPP" pack --format app | tee pack.log
+          app=$(find target -name '*.app' -type d | head -1)
+          test -n "$app" || { cat pack.log; echo "FAIL: no .app bundle"; exit 1; }
+
+          # The three files a bundle is, and the one that decides whether it
+          # launches at all.
+          test -f "$app/Contents/Info.plist" || { echo "FAIL: no Info.plist"; exit 1; }
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          test -n "$exe" || { echo "FAIL: Info.plist names no executable"; exit 1; }
+          # `CFBundleExecutable` must be a BARE NAME, never a path: Apple's
+          # loader resolves it against Contents/MacOS/ and a path there is not
+          # a launchable bundle. This is the assumption the member documents.
+          case "$exe" in */*) echo "FAIL: CFBundleExecutable is a path: $exe"; exit 1 ;; esac
+          test -x "$app/Contents/MacOS/$exe" \
+            || { echo "FAIL: $app/Contents/MacOS/$exe is missing or not executable"
+                 ls -la "$app/Contents/MacOS"; exit 1; }
+          # THE CRITERION IS THAT IT RUNS THROUGH THE BUNDLE, not that the
+          # binary runs: a bundle whose Info.plist names the wrong executable
+          # still contains a working program.
+          "$app/Contents/MacOS/$exe" | tee run.log
+          grep -q '^app-consumer ok' run.log \
+            || { echo "FAIL: the bundled program did not run"; exit 1; }
+          # `plutil -lint` is Apple's own parser: a plist this member wrote by
+          # hand and got subtly wrong would otherwise fail at launch time on a
+          # user's machine and nowhere here.
+          plutil -lint "$app/Contents/Info.plist"
+          echo "ok: one bundle, a valid plist, and it launches"
 
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer

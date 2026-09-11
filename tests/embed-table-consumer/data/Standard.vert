@@ -1,0 +1,1 @@
+vertex stage source
