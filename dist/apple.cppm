@@ -374,13 +374,29 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
+    // THE STAGED TREE IS OPTIONAL, AND THAT IS THE WHOLE FINDING.
+    //
+    // This required it, and on macOS it cannot exist: `mcpp pack`'s built-in
+    // closure walk refuses a Mach-O program, because it uses
+    // `LD_TRACE_LOADED_OBJECTS` and dyld answers that by RUNNING the program.
+    // mcpp 2026.9.11.2 made staging a service rather than a precondition, so
+    // the dispatch now reaches this member -- and the member then refused for
+    // the same underlying reason, one layer up, with
+    //
+    //   error: no action claimed --format 'app'
+    //
+    // from the engine, because a member's stderr on a successful build is
+    // discarded. A refusal nobody can read.
+    //
+    // A `.app` needs ONE program, not a tree. `${mcpp.target_file:<name>}` is
+    // what names it -- the same placeholder `dist/wix.cppm` uses for exactly
+    // this reason, and what section 6 of the design record recommends for a
+    // member that packages a named target. The staged tree is still preferred
+    // when it exists, because a `--mode vendored` tree carries the program's
+    // dependencies beside it and a bundle should keep them; without one the
+    // bundle carries the program alone, which is correct for a self-contained
+    // Mach-O and is what the platform's own default produces.
     const std::string stage = mcpp::pack_stage_dir();
-    if (stage.empty()) {
-        std::cerr << "mcpp.dist.apple: mcpp reported no staged tree. This "
-                     "member needs mcpp 2026.9.11.1 or newer.\n";
-        p.reason = "no staged tree";
-        return p;
-    }
 
     const std::string target = target_for(opt);
     if (target.empty()) {
@@ -390,7 +406,9 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
-    const std::string launcher = launcher_in(stage, target);
+    const std::string launcher = stage.empty()
+        ? std::format("${{mcpp.target_file:{}}}", target)
+        : launcher_in(stage, target);
     if (launcher.empty()) {
         std::cerr << std::format(
             "mcpp.dist.apple: the staged tree at {0} carries no launcher for "
@@ -400,7 +418,12 @@ inline plan plan_for(options opt = {}) {
         p.reason = "no launcher in the staged tree";
         return p;
     }
-    const std::string executableName = bundle_executable_name(launcher);
+    // CFBundleExecutable is a bare filename (see the note above). With no
+    // staged tree the launcher is a PLACEHOLDER the engine expands later, so
+    // its basename cannot be taken from the string -- the target's own name is
+    // what the expansion will produce.
+    const std::string executableName = stage.empty()
+        ? target : bundle_executable_name(launcher);
 
     if (!opt.icon.empty() && !is_file(opt.icon)) {
         std::cerr << std::format("mcpp.dist.apple: the icon {} was not found", opt.icon) << '\n';
@@ -470,7 +493,20 @@ inline plan plan_for(options opt = {}) {
     // this action the engine's automatic dependency on the staged tree's
     // manifest (`docs/30-build-mcpp.md`, "An action that names
     // `${mcpp.stage_dir}` gains a dependency on the tree's manifest").
-    layout.argv         = { "ditto", "${mcpp.stage_dir}", contents + "/MacOS" };
+    //
+    // WITH NO STAGED TREE IT COPIES THE ONE PROGRAM. `${mcpp.stage_dir}`
+    // REFUSES when there is no tree -- that is the engine's contract, and a
+    // member that names it unconditionally cannot run on a target whose
+    // built-in staging is refused. So the source is the tree when there is
+    // one and the program when there is not, and the `inputs` entry is the
+    // same either way: the program is what this bundle is FOR, and naming it
+    // is what orders this action after the link.
+    layout.argv         = stage.empty()
+        ? std::vector<std::string>{ "ditto",
+              std::format("${{mcpp.target_file:{}}}", target),
+              contents + "/MacOS/" + executableName }
+        : std::vector<std::string>{ "ditto", "${mcpp.stage_dir}",
+              contents + "/MacOS" };
     layout.inputs       = { std::format("${{mcpp.target_file:{}}}", target) };
     layout.output       = contents + "/MacOS/" + executableName;
     p.steps.push_back(layout);
