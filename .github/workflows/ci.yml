@@ -9,13 +9,27 @@ on:
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
   # member that relies on a newer engine; the README states each member's floor.
-  # 2026.9.11.1 is what `dist-*` needs: `mcpp::provides_pack_format`,
-  # `mcpp::pack_format`, `${mcpp.stage_dir}` and `mcpp::package_version` all
-  # arrived in it. Raising this is what admits a member relying on a newer
-  # engine; the README states each member's floor, and the index descriptor's
-  # own `min_mcpp` is a different question -- it bounds the DESCRIPTOR's
-  # syntax, and raising it would brick every older client's whole index.
-  MCPP_VERSION: 2026.9.11.1
+  # 2026.9.11.1 is what `dist-*` needs at the API level:
+  # `mcpp::provides_pack_format`, `mcpp::pack_format`, `${mcpp.stage_dir}` and
+  # `mcpp::package_version` all arrived in it. Raising this is what admits a
+  # member relying on a newer engine; the README states each member's floor,
+  # and the index descriptor's own `min_mcpp` is a different question -- it
+  # bounds the DESCRIPTOR's syntax, and raising it would brick every older
+  # client's whole index.
+  #
+  # 2026.9.11.2 IS WHAT `dist-apple` NEEDS TO BE REACHABLE AT ALL, and the red
+  # lane was the dependency rather than a convention. Under 2026.9.11.1 the
+  # macOS job failed with
+  #
+  #   error: cannot package the Mach-O program 'app-consumer' yet.
+  #
+  # because `mcpp pack` staged unconditionally before dispatching and let a
+  # staging failure fail the command -- and its built-in closure walk uses
+  # `LD_TRACE_LOADED_OBJECTS`, which dyld answers by RUNNING the program. So
+  # every dispatched format was unreachable on macOS, including one that never
+  # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
+  # and `dist-apple` has been unreachable, not broken, since it was written.
+  MCPP_VERSION: 2026.9.11.2
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
