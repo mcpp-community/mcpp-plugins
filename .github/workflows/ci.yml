@@ -1057,6 +1057,32 @@ jobs:
           fi
           echo "ok: one AppImage, and it printed the program's output"
 
+      # THE iOS ROW OF `dist-apple`, AT THE PLAN LEVEL (#622 B1). No runner
+      # in this workflow has an Apple SDK, so `--target aarch64-ios-sim`
+      # refuses before `build.mcpp` even runs -- see
+      # `tests/ios-app-consumer/mcpp.toml`'s own header for the measured
+      # refusal and the reasoning. What this step CAN check on this runner:
+      # the compiled build program's actual behaviour under the exact
+      # environment contract `--target aarch64-ios-sim --format app` and the
+      # device row would set, run directly rather than through mcpp.
+      - name: dist-apple's iOS row, checked at the plan level
+        working-directory: tests/ios-app-consumer
+        run: MCPP="$MCPP" ./check-ios-plan.sh
+
+      # dist-web (#622 B3), end to end, worked around one engine defect --
+      # see `tests/web-consumer/check-web-plan.sh`'s own header for the
+      # measured cause (every `build.mcpp` fails to compile under `--target
+      # wasm32-emscripten` on this engine floor) and exactly what is real
+      # versus simulated in what follows. `mcpp toolchain install` first,
+      # because this job's `~/.mcpp` cache does not carry the emsdk payload
+      # the way the local sandbox this member was developed against does.
+      - name: Install the emsdk payload for dist-web
+        run: "$MCPP" toolchain install emsdk 6.0.9
+
+      - name: dist-web produces a static directory, and node runs it
+        working-directory: tests/web-consumer
+        run: MCPP="$MCPP" ./check-web-plan.sh
+
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
       # device, so the run is of the CPU variant, which the same seam serves.
