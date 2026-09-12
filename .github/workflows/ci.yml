@@ -1189,8 +1189,10 @@ jobs:
           "$AAPT2" dump badging "$apk" 2>/dev/null | tee badging.log
           grep -q "^package: name='" badging.log \
             || { echo "FAIL: aapt2 could not read the package name"; exit 1; }
-          grep -q "sdkVersion:'24'" badging.log \
-            || { echo "FAIL: minSdkVersion is not 24 (this fixture's own min_api_level)"; exit 1; }
+          # aapt2 spells the attribute `minSdkVersion:'24'`; the file is shown
+          # byte-for-byte on a miss so that a quoting difference is visible.
+          tr -d '\r' < badging.log | grep -Eq "^(min)?[sS]dkVersion:'24'" \
+            || { echo "FAIL: minSdkVersion is not 24 (this fixture's own min_api_level)"; cat -A badging.log | head -12; exit 1; }
           echo "ok: dist-apk level 0 -- a signed, aapt2-readable APK carrying the native library, the deployed asset and the run sidecar"
 
       # Compiles the device unit on a machine with no GPU: the clang route
@@ -1855,8 +1857,11 @@ jobs:
           printf '%s\n' "$out" | tail -20
           [ "$rc" -eq 0 ] \
             || { echo "FAIL: mcpp run --target aarch64-ios-sim --format app exited $rc"; exit 1; }
-          grep -qx '1-2-3' <<<"$out" \
-            || { echo "FAIL: the program's output line '1-2-3' is absent"; exit 1; }
+          # `simctl launch --console-pty` returns the program's output through
+          # a pty, so a line may end in a carriage return; the marker is asserted
+          # as a line after that is stripped.
+          tr -d '\r' <<<"$out" | grep -Eq '^[[:space:]]*1-2-3[[:space:]]*$' \
+            || { echo "FAIL: the program's output line '1-2-3' is absent"; printf '%s\n' "$out" | cat -A | tail -8; exit 1; }
           echo "ok: a flat iOS Simulator bundle, MinimumOSVersion 17.0, and the simulator ran it"
 
       - name: the rule declared its own compiler
