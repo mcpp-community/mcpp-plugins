@@ -11,5 +11,16 @@ int main() {
     // and against an engine that does not report it this fixture would silently
     // get the header surface, still build, and test nothing it exists for.
     opt.surface = mcpp::plugins::surface::kind::module_;
+
+    // AN ARGUMENT THE RULE HAS NO FIELD FOR, passed through verbatim. It changes
+    // the entry point's name in the module, which is what `main.cpp` reads.
+    opt.extra_args = { "-fvk-use-entrypoint-name" };
+
+    // AN ARGUMENT FOR ONE SHADER AND NOT THE OTHER. The key is the path as the
+    // constrained glob names it. `scale.slang` switches its entry to `wrongMain`
+    // if this macro ever reaches it, so the fixture can tell "per file" from
+    // "for everything".
+    opt.per_file["shaders/offset.slang"].extra_args = { "-DOFFSET_ENTRY" };
+
     return mcpp::rules::slang::compile(opt) ? 0 : 1;
 }

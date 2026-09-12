@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.6.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.7.0", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -66,7 +66,7 @@ engine's own module family and is not used here.
 | `rules-ascendc` | `mcpp.rules.ascendc` | 2026.9.6.6 | `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. Its own engine needs are `.asc` in the device-source table and `mcpp::link_flag` for the `-rpath-link` the toolkit's shared libraries require, both 2026.9.6.5 |
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.6.6 | `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-hip` | `mcpp.rules.hip` | 2026.9.6.6 | `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
-| `rules-slang` | `mcpp.rules.slang` | 2026.9.7.1 | `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. `.slang` is **not** in the engine's device-source table: this feature declares `device_extensions = [".slang"]` and `rule_module = "mcpp.rules.slang"`, and the engine routes it from there. That is the criterion for the whole arrangement -- a new device language costs no engine release |
+| `rules-slang` | `mcpp.rules.slang` | 2026.9.7.1 | `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. `.slang` is **not** in the engine's device-source table: this feature declares `device_extensions = [".slang"]` and `rule_module = "mcpp.rules.slang"`, and the engine routes it from there. That is the criterion for the whole arrangement -- a new device language costs no engine release. Since 0.7.0 it has the same `options::storage` axis as `rules-spirv` (header / object / sidecar), `options::extra_args` for the arguments the rule has no field for, and `options::per_file` for what one shader gets that the others do not -- a project with a `-fvk-use-gl-layout` and one shader needing `-emit-spirv-via-glsl` writes both without leaving one `compile()` call |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; compiles each shader through a `role = "source"` action and states which of the two compilers produced it |
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.9.6.6 | `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1 |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | nothing beyond mcpp: it reads a file and writes a header while the build program runs. The floor is the release whose fast path compares a declared file input, without which an edit to the data does not reach the binary |
@@ -81,7 +81,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.6.0", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.7.0", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -322,8 +322,8 @@ consumer compiled either way is the same source.
 relative to the working directory, so the program finds its payloads when run
 from the package root and does not when run from elsewhere -- which is why it is
 not the default, and why `mcpp pack` of such a program has something further to
-collect. `tests/spirv-sidecar` asserts both halves: found from the root, and
-reported missing from `/tmp`.
+collect. `tests/spirv-sidecar` and `tests/slang-sidecar` assert both halves: found
+from the root, and reported missing from `/tmp`.
 
 **The default follows the project.** `[language] modules = true` gives the
 module surface, `false` gives a header with the same declarations. mcpp reports
