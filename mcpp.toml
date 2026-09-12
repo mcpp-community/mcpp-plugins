@@ -162,6 +162,10 @@ implies = ["surface"]
 sources = ["dist/apple.cppm"]
 implies = ["surface"]
 
+[features.dist-web]
+sources = ["dist/web.cppm"]
+implies = ["surface"]
+
 [features.tools-embed]
 sources = ["tools/embed.cppm"]
 implies           = ["surface"]
@@ -366,8 +370,22 @@ implies           = ["surface"]
 # for a Windows program and the tool is a Windows .NET executable. The .NET
 # runtime it needs is a Windows component and is not declared: no package can
 # honestly own it.
+#
+# A PLAIN VERSION, NOT A PER-HOST TABLE. `[target.windows...]` already says
+# which targets this applies to; a `{ windows = "5.0.2" }` value under a
+# section already predicated on `windows` states the same condition twice,
+# and a build carrying the fresh engine (past mcpp 2026.9.12.2) refuses that
+# as a shape that could disagree with itself:
+#
+#   error: [target.windows.feature-xlings.dist-wix] xim:wix: the value
+#   carries platform keys (windows), but [target.windows] already says
+#   which targets this applies to.
+#
+# The per-host table stays the right shape only at the top level, where
+# platform keys select the HOST rather than restating a predicate the
+# section has already applied.
 [target.windows.feature-xlings.dist-wix]
-"xim:wix" = { windows = "5.0.2" }
+"xim:wix" = "5.0.2"
 
 # `dist-apple` declares no payload for `codesign`: it is part of Xcode, which is
 # not redistributable, so the member locates it and says where it looked. The

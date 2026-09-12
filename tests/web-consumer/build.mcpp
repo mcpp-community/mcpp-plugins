@@ -1,0 +1,22 @@
+import std;
+import mcpp;
+import mcpp.dist.web;
+
+int main() {
+    // A file this build program itself produces, deployed beside the
+    // launcher (#622 A4) so the fixture's own listing check has something
+    // past the stem family to find. `mcpp::deploy`'s `to` is
+    // executable-relative on every format; on this one that is `bin/`, and
+    // `mcpp.dist.web` maps it to the same relative path at the web
+    // directory's root (see dist/web.cppm's header comment).
+    std::string generated = std::string(mcpp::out_dir()) + "/greeting.txt";
+    if (std::ofstream out(generated); out) out << "hello from build.mcpp\n";
+    mcpp::deploy(generated.c_str(), "assets/greeting.txt");
+
+    mcpp::dist::web::options opt;
+    opt.target = "web-consumer";
+    // Everything else comes from `[package]`: the title defaults to the
+    // package name, and a project that wants its own page supplies
+    // `options::template_file` instead of restating one here.
+    return mcpp::dist::web::generate(opt) ? 0 : 1;
+}
