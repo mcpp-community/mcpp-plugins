@@ -164,6 +164,8 @@ implies = ["surface"]
 
 [features.dist-web]
 sources = ["dist/web.cppm"]
+implies = ["surface"]
+
 [features.dist-apk]
 sources = ["dist/apk.cppm"]
 implies = ["surface"]
