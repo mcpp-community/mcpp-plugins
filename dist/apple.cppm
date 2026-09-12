@@ -547,19 +547,47 @@ inline plan plan_for(options opt = {}) {
     const std::string executableName = stage.empty()
         ? target : bundle_executable_name(launcher);
 
+    // `options::icon` IS RESOLVED AGAINST THE MANIFEST DIRECTORY HERE, ONCE,
+    // BEFORE ANY VALIDATION OR ACTION ARGV USES IT -- ON BOTH ROWS.
+    //
+    // This program's own cwd is the manifest directory when mcpp runs it (the
+    // usual case a project author sees, and why a bare relative path like
+    // `"ios-icons"` validates below without complaint). But the ACTIONS this
+    // member declares -- the `ditto` calls in the layout and icon steps -- are
+    // graph edges ninja runs later, with the BUILD directory as their cwd, not
+    // the manifest directory. A relative `options::icon` therefore reached
+    // `ditto` as a path that does not exist from where `ditto` was standing:
+    //
+    //   ditto ios-icons .../IosAppConsumer.app
+    //   ditto: Cannot get the real path for source 'ios-icons'
+    //
+    // failing inside the graph, on a host with no way to run this member
+    // again to explain why. Resolving here, against `mcpp::manifest_dir()`,
+    // makes every later use -- the validation immediately below and the
+    // `icon.argv` this function builds further down -- see the same absolute
+    // path regardless of which directory the thing reading it is standing in.
+    // An already-absolute `options::icon` is left alone.
+    if (!opt.icon.empty()) {
+        std::filesystem::path iconPath(opt.icon);
+        if (!iconPath.is_absolute())
+            opt.icon = (std::filesystem::path(mcpp::manifest_dir()) / iconPath).string();
+    }
+
     // macOS: `options::icon` is a FILE. iOS: it is a DIRECTORY of flat PNGs
     // (see the `options::icon` comment and the header's icon paragraph) --
     // two different validations of the same field, because the two
     // platforms' icon conventions are not the same shape and this member
-    // does not invent a third field to hold the distinction.
+    // does not invent a third field to hold the distinction. Both refusals
+    // name `options::icon` and the (now-resolved) path, so a project sees
+    // exactly what this member read rather than a bare relative name it typed.
     std::vector<std::string> iosIconStems;
     if (!opt.icon.empty()) {
         if (isIos) {
             std::error_code ec;
             if (!std::filesystem::is_directory(opt.icon, ec)) {
                 std::cerr << std::format(
-                    "mcpp.dist.apple: the iOS icon {} is not a directory. "
-                    "Set `options::icon` to a directory of flat PNGs "
+                    "mcpp.dist.apple: `options::icon` ({}) is not a "
+                    "directory. Set it to a directory of flat PNGs "
                     "(one per size Apple's Home Screen and Settings need); "
                     "this member lists their stems under `CFBundleIcons` "
                     "and does not generate sizes itself.", opt.icon) << '\n';
@@ -574,13 +602,15 @@ inline plan plan_for(options opt = {}) {
             std::sort(iosIconStems.begin(), iosIconStems.end());
             if (iosIconStems.empty()) {
                 std::cerr << std::format(
-                    "mcpp.dist.apple: the icon directory {} carries no "
+                    "mcpp.dist.apple: `options::icon` ({}) carries no "
                     "*.png files.", opt.icon) << '\n';
                 p.reason = "icon directory carries no PNGs";
                 return p;
             }
         } else if (!is_file(opt.icon)) {
-            std::cerr << std::format("mcpp.dist.apple: the icon {} was not found", opt.icon) << '\n';
+            std::cerr << std::format(
+                "mcpp.dist.apple: `options::icon` ({}) was not found",
+                opt.icon) << '\n';
             p.reason = "icon not found";
             return p;
         }
@@ -763,7 +793,8 @@ inline bool submit(const plan& p) {
         a.submit();
     }
 
-    // A FLOOR ON THIS MEMBER'S OWN OUTPUT, ON THE SUCCESS PATH.
+    // A FLOOR ON THIS MEMBER'S OWN OUTPUT, ON THE SUCCESS PATH -- AND ONLY
+    // WHEN A STAGED TREE IS THE THING BEING MEASURED.
     //
     // The assembled bundle does not exist when this program runs -- ditto and
     // codesign have not been invoked yet, only declared -- so what this
@@ -774,24 +805,38 @@ inline bool submit(const plan& p) {
     // verify, or the bare-filename assumption `bundle_executable_name`
     // documents not holding for a non-default staging layout -- all of those
     // happen after this program has already exited.
-    std::error_code ec;
-    std::uintmax_t bytes = 0;
-    for (auto const& e : std::filesystem::recursive_directory_iterator(p.appdir, ec)) {
-        if (ec) break;
-        if (e.is_regular_file(ec)) bytes += std::filesystem::file_size(e.path(), ec);
-    }
-    // Loose on purpose, matching `dist/appimage.cppm`'s own bound: this
-    // exists to catch "nothing was staged", not to police a size budget.
-    // Unlike that member, nothing is written INTO the staged tree here --
-    // `Info.plist` and the icon live outside it until the layout and install
-    // steps run -- so even a low bound is already suspicious.
-    if (bytes < 4u * 1024u) {
-        static char msg[512];
-        std::snprintf(msg, sizeof msg,
-            "mcpp.dist.apple: the staged tree at %s holds only %llu bytes, "
-            "which is not a program; the .app will not launch anything",
-            p.appdir.c_str(), static_cast<unsigned long long>(bytes));
-        mcpp::warning(msg);
+    //
+    // `p.appdir` IS `pack_stage_dir()`, WHICH THE HEADER COMMENT ALREADY
+    // DOCUMENTS AS OPTIONAL. When it is empty -- the common iOS case, since
+    // the host running mcpp cannot always execute an iOS Mach-O to walk its
+    // closure -- there is no tree to measure at all: the layout step above
+    // already took the single-binary path (`${mcpp.target_file:<target>}`),
+    // and `recursive_directory_iterator` on an empty path opens nothing,
+    // leaving `bytes` at zero. Running the check anyway turned that "no tree
+    // was ever asked for" into "the staged tree at  holds only 0 bytes",
+    // naming a path that is blank because none exists -- a warning about a
+    // defect that was never present. So this floor applies only when a
+    // staged tree exists to be measured.
+    if (!p.appdir.empty()) {
+        std::error_code ec;
+        std::uintmax_t bytes = 0;
+        for (auto const& e : std::filesystem::recursive_directory_iterator(p.appdir, ec)) {
+            if (ec) break;
+            if (e.is_regular_file(ec)) bytes += std::filesystem::file_size(e.path(), ec);
+        }
+        // Loose on purpose, matching `dist/appimage.cppm`'s own bound: this
+        // exists to catch "nothing was staged", not to police a size budget.
+        // Unlike that member, nothing is written INTO the staged tree here --
+        // `Info.plist` and the icon live outside it until the layout and
+        // install steps run -- so even a low bound is already suspicious.
+        if (bytes < 4u * 1024u) {
+            static char msg[512];
+            std::snprintf(msg, sizeof msg,
+                "mcpp.dist.apple: the staged tree at %s holds only %llu bytes, "
+                "which is not a program; the .app will not launch anything",
+                p.appdir.c_str(), static_cast<unsigned long long>(bytes));
+            mcpp::warning(msg);
+        }
     }
     return true;
 }
