@@ -210,24 +210,38 @@ inline bool is_dir(const std::string& p) {
     return !p.empty() && fs::is_directory(p, ec);
 }
 
-// Is `root` under the package root, `mcpp::manifest_dir()`? A project root is
-// declared with `rerun_if_changed_glob` below (a file appearing there re-runs
-// the build program); a dependency root is not -- its file set changes only
-// with the dependency's version, already in the build's fingerprint, and the
-// glob's own walk does not reach outside the package root regardless
-// (design record §3.3). Same shape as `mcpp.tools.island`'s overlap check:
+// Is `root` under the package root, `mcpp::manifest_dir()`, and if so, what
+// is its manifest-relative form? A project root is declared with
+// `rerun_if_changed_glob` below (a file appearing there re-runs the build
+// program); a dependency root is not -- its file set changes only with the
+// dependency's version, already in the build's fingerprint, and the glob's
+// own walk does not reach outside the package root regardless (design
+// record §3.3). Same shape as `mcpp.tools.island`'s overlap check:
 // `weakly_canonical` plus `lexically_relative`, never the iterator that
 // poisons an importer under GCC 16 / MSVC (`mcpp::plugins::names::
 // relative_to`'s own header) -- safe here because this member is its own
 // module and imports no sibling that would inherit the instantiation.
-inline bool root_in_project(const std::string& root) {
+//
+// THE RETURNED PATH IS MANIFEST-RELATIVE, NOT ABSOLUTE, BECAUSE THE GLOB
+// PATTERN MUST BE. The engine matches a glob by comparing the CANDIDATE made
+// relative to the package root against the pattern
+// (`modules/manifest/src/glob.cppm`, `path_matches_glob`); an absolute
+// pattern is compared against a relative candidate and never matches
+// anything, so the fingerprint is always the empty set and a `.java` file
+// appearing never changes it -- the criterion's "no" reading as silence
+// (design record, rule 8). `opt.java_sources`'s own roots are absolute
+// (`mcpp::manifest_dir()` composed with a subdirectory), so declaring the
+// glob with `root` itself, not this function's return value, was exactly
+// that defect.
+inline std::optional<std::string> root_in_project(const std::string& root) {
     std::error_code ec;
     const auto a = fs::weakly_canonical(root, ec);
-    if (ec) return false;
+    if (ec) return std::nullopt;
     const auto b = fs::weakly_canonical(mcpp::manifest_dir(), ec);
-    if (ec) return false;
+    if (ec) return std::nullopt;
     const auto rel = a.lexically_relative(b).generic_string();
-    return !rel.empty() && !rel.starts_with("..");
+    if (rel.empty() || rel.starts_with("..")) return std::nullopt;
+    return rel;
 }
 
 inline bool write_if_different(const fs::path& path, std::string_view bytes) {
@@ -1029,8 +1043,15 @@ inline plan plan_for(options opt = {}) {
             // changes only with the dependency's version, already in the
             // build's fingerprint, and each of its files is already an
             // input of the `javac` action below.
-            if (root_in_project(root))
-                mcpp::rerun_if_changed_glob((root + "/**/*.java").c_str());
+            //
+            // THE PATTERN IS MANIFEST-RELATIVE (`root_in_project`'s return
+            // value), NOT `root` ITSELF, which is absolute: the engine's
+            // glob fingerprint compares each candidate file made relative to
+            // the package root against the pattern, so an absolute pattern
+            // is compared against a relative candidate and never matches --
+            // see `root_in_project`'s own header for the measurement.
+            if (auto rel = root_in_project(root))
+                mcpp::rerun_if_changed_glob((*rel + "/**/*.java").c_str());
         }
 
         const std::string classesDir = (outDir / "classes").string();

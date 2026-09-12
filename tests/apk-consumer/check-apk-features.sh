@@ -123,7 +123,73 @@ grep -q "org.mcpp.apkconsumer.MainActivity;" dexdump-e.log \
 grep -q "org.mcpp.apkconsumer.ExternalHelper;" dexdump-e.log \
     || fail "classes.dex does not contain ExternalHelper (the external root)" dexdump-e.log
 echo "ok: one classes.dex, carrying classes from both the project root and the external root"
+
+# ── (f) the re-run direction, both ways (§3.3's third bullet) ──────────────
+#
+# THE EVIDENCE IS THE CACHE'S OWN RECORDED GLOB FINGERPRINT, NOT DEX CONTENT
+# ALONE. Measured on this engine: `mcpp pack` re-runs build.mcpp on this
+# fixture on every invocation regardless of any cache -- true before this
+# fix and after it, and unrelated to the glob -- so a dex-content check by
+# itself cannot tell "the fingerprint tracks the real file set" apart from
+# "build.mcpp always reran anyway"; both give the same dex either way. What
+# DOES distinguish them is the hash `build.mcpp.cache` records for the
+# `java/**/*.java` pattern: with the pattern absolute (this defect, fixed by
+# this same commit), the recorded hash is the empty set's and does not
+# change when a `.java` file is added or removed, because
+# `path_matches_glob` (`modules/manifest/src/glob.cppm`) compares the
+# pattern against each candidate made relative to the package root, and an
+# absolute pattern matches no relative candidate. With the pattern
+# manifest-relative, the hash changes with the real file set. Both readings
+# were taken locally against the pre-fix code and are recorded in this
+# pull request's own body.
+echo "== (f) the re-run direction: project root vs external root =="
+CACHE=target/.build-mcpp/build.mcpp.cache
+[ -f "$CACHE" ] || fail "no build.mcpp.cache after (e)'s pack" pack-e.log
+glob_hash() { grep -m1 -E "java/\*\*/\*\.java$" "$CACHE" | grep -v external | awk '{print $2}'; }
+before=$(glob_hash)
+[ -n "$before" ] || fail "no relative java/**/*.java glob recorded in the cache" "$CACHE"
+grep -E "^glob " "$CACHE" | grep -q "apk-consumer-external-java" && \
+    fail "a glob was recorded for the external root, which this design never declares one for" "$CACHE"
+echo "ok: no glob is recorded for the external root"
+
+cat > java/org/mcpp/apkconsumer/AddedLater.java <<'JAVA'
+package org.mcpp.apkconsumer;
+public class AddedLater { public static int marker() { return 1; } }
+JAVA
+"$MCPP" pack --format apk --target "$TARGET" > pack-f1.log 2>&1 \
+    || fail "pack failed after adding a project-root .java file" pack-f1.log
+after=$(glob_hash)
+[ "$before" != "$after" ] \
+    || fail "the project root's glob fingerprint did not change when a .java file was added" "$CACHE"
+echo "ok: the project root's glob fingerprint changed ($before -> $after)"
+DEX=$(find target -name 'classes.dex' | head -1)
+"$DEXDUMP" -l plain "$DEX" > dexdump-f1.log 2>&1 || fail "dexdump failed" dexdump-f1.log
+grep -q "org.mcpp.apkconsumer.AddedLater;" dexdump-f1.log \
+    || fail "classes.dex does not contain AddedLater after it was added under the project root" dexdump-f1.log
+echo "ok: classes.dex contains AddedLater once it is added under the project root"
+rm -f java/org/mcpp/apkconsumer/AddedLater.java
+
+# The external root: added here only to show the positive side of §3.3's
+# reading (the file is compiled once a rebuild happens, exactly as any
+# other input the javac action already declares) -- NOT to claim this
+# specific `pack` skipped a rebuild, which the header above explains this
+# engine does not do for this fixture regardless of the glob.
+cat > ../apk-consumer-external-java/org/mcpp/apkconsumer/AddedExternally.java <<'JAVA'
+package org.mcpp.apkconsumer;
+public class AddedExternally { public static int marker() { return 2; } }
+JAVA
+"$MCPP" pack --format apk --target "$TARGET" > pack-f2.log 2>&1 \
+    || fail "pack failed after adding an external-root .java file" pack-f2.log
+grep -E "^glob " "$CACHE" | grep -q "apk-consumer-external-java" && \
+    fail "a glob was recorded for the external root after adding a file to it" "$CACHE"
+DEX=$(find target -name 'classes.dex' | head -1)
+"$DEXDUMP" -l plain "$DEX" > dexdump-f2.log 2>&1 || fail "dexdump failed" dexdump-f2.log
+grep -q "org.mcpp.apkconsumer.AddedExternally;" dexdump-f2.log \
+    || fail "classes.dex does not contain AddedExternally" dexdump-f2.log
+echo "ok: still no glob recorded for the external root, after adding a file to it"
+rm -f ../apk-consumer-external-java/org/mcpp/apkconsumer/AddedExternally.java
+
 unset APK_CONSUMER_LEVEL1
 
 rm -f build-*.log pack-*.log xmltree-*.log refusal-*.log dexdump-*.log mcpp-env.txt
-echo "PASS: dist-apk's manifest template and Java-array criteria (a) to (e)"
+echo "PASS: dist-apk's manifest template and Java-array criteria (a) to (f)"
