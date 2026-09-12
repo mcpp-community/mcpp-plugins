@@ -54,51 +54,29 @@
 // executes. Two passes, chained: the engine resolves the argv token before
 // the command runs, and wix resolves its own token while it runs.
 //
-// WHY PATH DISCOVERY IS ACCEPTABLE HERE AND IS NOT IN `dist/appimage.cppm`.
-// appimagetool EMBEDS an asset it owns -- the type-2 runtime stub -- into the
-// image it produces, so which build of the tool ran is part of the AppImage's
-// own content, and `dist/appimage.cppm` declares that payload rather than
-// trust whatever is on PATH. wix has no equivalent: an MSI's content is
-// entirely decided by the `.wxs` and the files it names, and a newer or older
-// wix compiling the same definition produces the same table rows. What varies
-// between wix releases is the SCHEMA it accepts (v4/v5/v6 share the one this
-// member targets) and its own diagnostics, neither of which the produced MSI
-// carries away. So a host `wix` is a fine default here in a way a host
-// `appimagetool` is not.
+// WHERE THE TOOL COMES FROM. A member locates its tool through a declared
+// payload and nothing else, so the installer a build produces depends on a
+// declaration in a manifest rather than on what a machine happens to hold.
+// `dist-appimage` has always done this; an earlier revision of this member
+// searched `MCPP_WIX` and `PATH` instead, on the belief that WiX could not be
+// redistributed. That belief was wrong, measured 2026-09-11 against
+// `https://api.nuget.org/v3-flatcontainer/wix/6.0.2/wix.6.0.2.nupkg`: the
+// package is anonymously fetchable and immutable, the software is under the
+// Microsoft Reciprocal License, and its `OSMFEULA.txt` states that "the
+// Software's source code is licensed to User under the OSI License and
+// remains freely distributable". `xim:wix` (5.0.2) is in the index and is
+// what this member declares under `[target.windows.feature-xlings.dist-wix]`.
 //
-// WHY THERE IS NO PAYLOAD YET, AND WHY THAT IS A GAP RATHER THAN A DECISION.
+// The payload is `tool/tools/net6.0/any/wix.exe`, a framework-dependent .NET 6
+// executable. The .NET runtime is a Windows component with its own installer;
+// the recipe deliberately does not pretend to own it, and neither does this
+// member: `wix --version` names the missing runtime itself. That is the one
+// host dependency left on this path, and it is of the kind the design admits,
+// a proprietary runtime that exists only where it is installed.
 //
-// This member locates `wix` and refuses clearly when nothing is there, naming
-// where it looked -- the `msvc@system` shape mcpp already has for the
-// platform's own compiler. An earlier revision of this comment justified that
-// by saying WiX is "not a redistributable archive this ecosystem can vendor",
-// and THAT IS FALSE. Measured 2026-09-11:
-//
-//   https://api.nuget.org/v3-flatcontainer/wix/6.0.2/wix.6.0.2.nupkg
-//     HTTP/2 200, application/octet-stream, 5851349 bytes
-//
-// anonymously fetchable and immutable, as every NuGet package is. And its own
-// licence file, `OSMFEULA.txt` inside that package, says in as many words that
-// redistribution is permitted:
-//
-//   2. "...this does not restrict the User from obtaining or redistributing
-//       binaries from other sources or self-compiling them."
-//   3. "The Fee is not a license fee. The Software's source code is licensed
-//       to User under the OSI License and remains freely distributable..."
-//
-// The software is under the Microsoft Reciprocal License; the fee is a
-// MAINTENANCE fee that applies to revenue-generating use, and section 4
-// resolves any conflict in favour of the OSI licence. So `xim:wix` is
-// legitimate, and this member should declare it the way `dist-appimage`
-// declares `xim:appimagetool` -- with no PATH fallback at all, so the produced
-// installer depends on a declaration rather than on a machine.
-//
-// TWO THINGS ARE NEEDED FOR THAT AND NEITHER IS WRITTEN YET: the package, and
-// a `xim:dotnet` dependency, because the payload is `tools/net6.0/any/wix.dll`
-// and not a self-contained executable -- it is invoked as `dotnet wix.dll`.
-// `pkgs/d/dotnet.lua` already exists in the index, so the dependency edge is
-// available. Until the package lands, the lookup below is what there is, and
-// the paragraph above records that it is a gap and not the answer.
+// A host lookup therefore exists only where nothing can be shipped, and WiX is
+// no longer such a case. `options::tool` remains for a project that builds the
+// tool itself.
 
 module;
 #include <cstdio>
@@ -169,8 +147,8 @@ struct options {
     // a measurement behind it is the one shipped.
     std::string wxs;
 
-    // An explicit `wix` wins over discovery. Set it to pin a build other than
-    // the one on PATH.
+    // An explicit `wix` wins over the declared payload. Set it to pin a build
+    // other than `xim:wix`, for instance one the project compiled itself.
     std::string tool;
 
     // Where the produced file lands. Empty means
@@ -415,39 +393,20 @@ inline std::string xml_escape(std::string_view s) {
     return out;
 }
 
-// Discovery, in the order `rules/spirv.cppm` establishes: what the project
-// named, what the environment named, then PATH. There is no payload tier
-// between them -- see the header comment for why a host `wix` is an
-// acceptable default here in a way a host shader compiler or a host
-// `appimagetool` is not.
+// Discovery: what the project named, else the declared payload. There is no
+// environment tier and no PATH tier -- see the header comment.
+inline std::string wix_payload_exe() {
+    const std::string dir = mcpp::xpkg_dir("xim", "wix");
+    if (dir.empty()) return {};
+    // The recipe registers `wix` with this directory as its bindir: wix.exe
+    // loads `runtimes/win-x64/native` and `x64/burn.exe` from beside itself.
+    const auto exe = std::filesystem::path(dir) / "tool" / "tools" / "net6.0" / "any" / "wix.exe";
+    return is_file(exe.string()) ? exe.string() : std::string();
+}
+
 inline std::string discover_tool(const options& opt) {
     if (!opt.tool.empty()) return opt.tool;
-    if (const char* e = std::getenv("MCPP_WIX"); e && *e) return e;
-#if defined(_WIN32)
-    const char* exe = "wix.exe";
-#else
-    // wix is a .NET tool and therefore Windows-only in practice; this branch
-    // exists only so the search compiles and returns nothing on every other
-    // host, which is what `tests/all-rules-compile` exercises.
-    const char* exe = "wix";
-#endif
-    const char* path = std::getenv("PATH");
-    if (!path || !*path) return {};
-#if defined(_WIN32)
-    constexpr char kSep = ';';
-#else
-    constexpr char kSep = ':';
-#endif
-    std::string_view sv(path);
-    for (std::size_t i = 0; i <= sv.size();) {
-        auto sep = sv.find(kSep, i);
-        auto dir = sv.substr(i, sep == std::string_view::npos ? sv.size() - i : sep - i);
-        i = sep == std::string_view::npos ? sv.size() + 1 : sep + 1;
-        if (dir.empty()) continue;
-        auto candidate = (std::filesystem::path(dir) / exe).string();
-        if (is_file(candidate)) return candidate;
-    }
-    return {};
+    return wix_payload_exe();
 }
 
 // A minimal WiX v4/v5/v6 definition: one `Package`, one `Component` carrying
@@ -533,11 +492,14 @@ inline plan plan_for(options opt = {}) {
     if (tool.empty()) {
         std::cerr << std::format(
             "mcpp.dist.wix: the wix CLI was not found.\n"
-            "  looked for: options::tool, then $MCPP_WIX, then `wix` on PATH.\n"
-            "  WiX is a .NET tool this ecosystem does not redistribute; "
-            "install it with:\n"
-            "    dotnet tool install --global wix\n"
-            "  or set `options::tool` to name one explicitly.") << '\n';
+            "  xpkg_dir(\"xim\", \"wix\") answered \"{}\"; the payload's tool is "
+            "tool/tools/net6.0/any/wix.exe beneath it.\n"
+            "  `xim:wix` is declared by this feature under "
+            "[target.windows.feature-xlings.dist-wix], so an empty answer means "
+            "the payload is not installed for this build (mcpp provisions it "
+            "when the feature is active on a Windows target)\n"
+            "  or set `options::tool` to name one explicitly.",
+            mcpp::xpkg_dir("xim", "wix")) << '\n';
         p.reason = "wix not found";
         return p;
     }

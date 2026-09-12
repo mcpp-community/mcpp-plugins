@@ -1,0 +1,31 @@
+import std;
+import mcpp;
+import mcpp.dist.web;
+
+int main() {
+    // A file this build program itself produces, deployed beside the
+    // launcher (#622 A4) so the fixture's own listing check has something
+    // past the stem family to find. `mcpp::deploy`'s `to` NAMES A
+    // DIRECTORY, executable-relative -- the same rule `[[runtime.deploy]]`
+    // enforces (`types.cppm`'s own `DeployEntry` comment: "a file placed in
+    // a directory relative to the executable"), and the design record's own
+    // criterion for this directive: `to = "myapp.resources/huxerui"` with
+    // `from = ".../resources.bin"` lands at
+    // `bin/myapp.resources/huxerui/resources.bin`, keeping `from`'s own
+    // basename rather than being renamed to `to`'s last component. So `to`
+    // here is `"assets"`, not `"assets/greeting.txt"` -- the latter would
+    // deploy the file INTO a directory literally named `greeting.txt`,
+    // landing it at `bin/assets/greeting.txt/greeting.txt`, which is what an
+    // earlier revision of this fixture did and what first exposed the
+    // shape of this rule.
+    std::string generated = std::string(mcpp::out_dir()) + "/greeting.txt";
+    if (std::ofstream out(generated); out) out << "hello from build.mcpp\n";
+    mcpp::deploy(generated.c_str(), "assets");
+
+    mcpp::dist::web::options opt;
+    opt.target = "web-consumer";
+    // Everything else comes from `[package]`: the title defaults to the
+    // package name, and a project that wants its own page supplies
+    // `options::template_file` instead of restating one here.
+    return mcpp::dist::web::generate(opt) ? 0 : 1;
+}

@@ -22,7 +22,7 @@
 # This fixture names no accelerator and packages nothing (`mcpp build`, never
 # `mcpp pack`). Every rule's `compile()` and every dist member's `plan_for()`
 # returns immediately in that state, so no payload is installed and no second
-# compiler is needed; what happens is that all eight modules are compiled as
+# compiler is needed; what happens is that all nine modules are compiled as
 # host modules for this host, which is the assertion. It is cheap enough to
 # run on every platform in the matrix.
 [package]
@@ -43,7 +43,7 @@ plugins = { path = "../..", features = [
   "rules-ascendc", "rules-cuda", "rules-hip", "rules-slang", "rules-spirv",
   "rules-sycl",
   "tools-embed", "tools-island",
-  "dist-appimage", "dist-wix", "dist-apple",
+  "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns

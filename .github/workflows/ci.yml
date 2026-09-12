@@ -29,7 +29,7 @@ env:
   # every dispatched format was unreachable on macOS, including one that never
   # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
   # and `dist-apple` has been unreachable, not broken, since it was written.
-  MCPP_VERSION: 2026.9.11.2
+  MCPP_VERSION: 2026.9.12.3
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1111,6 +1111,90 @@ jobs:
           fi
           echo "ok: one AppImage, and it printed the program's output"
 
+      # THE iOS ROW OF `dist-apple`, AT THE PLAN LEVEL (#622 B1). No runner
+      # in this workflow has an Apple SDK, so `--target aarch64-ios-sim`
+      # refuses before `build.mcpp` even runs -- see
+      # `tests/ios-app-consumer/mcpp.toml`'s own header for the measured
+      # refusal and the reasoning. What this step CAN check on this runner:
+      # the compiled build program's actual behaviour under the exact
+      # environment contract `--target aarch64-ios-sim --format app` and the
+      # device row would set, run directly rather than through mcpp.
+      - name: dist-apple's iOS row, checked at the plan level
+        working-directory: tests/ios-app-consumer
+        run: MCPP="$MCPP" ./check-ios-plan.sh
+
+      # dist-web (#622 B3), end to end, the real `mcpp pack --format web
+      # --target wasm32-emscripten` -- see `tests/web-consumer/
+      # check-web-plan.sh`'s own header for the host-toolchain defect this
+      # needed fixed first (mcpp commit 23974c5e, #622 e2e 657) and the
+      # MCPP_VERSION this step therefore needs at least. `mcpp toolchain
+      # install` first, because this job's `~/.mcpp` cache does not carry
+      # the emsdk payload the way the local sandbox this member was
+      # developed against does.
+      - name: Install the emsdk payload for dist-web
+        run: '"$MCPP" toolchain install emsdk 6.0.9'
+
+      - name: dist-web produces a static directory, and node runs it
+        working-directory: tests/web-consumer
+        run: MCPP="$MCPP" ./check-web-plan.sh
+      # `kind = "app"` on `*-linux-android` links a shared object (#622 A3),
+      # so this fixture's own toolchain resolution provisions `xim:android-
+      # ndk` for `--target x86_64-linux-android` exactly as mcpp's own CI
+      # does; `dist-apk` provisions the four payloads on its own
+      # `feature-xlings.dist-apk` table (`xim:android-build-tools`, `xim:
+      # android-platform`, `xim:jdk-temurin`, `xim:android-debug-keystore`).
+      # NOT YET GREEN under this job's pinned `MCPP_VERSION`: `kind = "app"`
+      # and `mcpp::min_platform_version()` are #622 engine additions, and
+      # this step needs the release that carries them (see this repository's
+      # README, `dist-apk`'s own row) -- raising the pin is P5's own change,
+      # together with the rest of this collection's release.
+      #
+      # THIS STEP ASSERTS PACKAGING ONLY, DELIBERATELY, NOT `mcpp run
+      # --format apk`. This fixture's own `main.cpp` and `mcpp.toml` DO wire
+      # up a real device row (`ANativeActivity_onCreate`, `runner =
+      # ["adb-run"]`) and it was run end to end (2026-09-12) against both a
+      # KVM-accelerated x86_64 emulator (`xim:android-emulator` +
+      # `xim:android-system-image`) and a physical arm64-v8a phone over adb,
+      # both exiting 0 with `1-2-3` in the logcat output -- but this GitHub-
+      # hosted runner has neither an emulator image nor a device attached,
+      # so a `run` step here would only ever report "no device/emulator
+      # found" and never `1-2-3`. That measurement stays a local/self-hosted
+      # concern until a runner class with a real device or a KVM-capable
+      # emulator is wired into this workflow.
+      - name: dist-apk produces a signed APK, level 0 and level 1
+        working-directory: tests/apk-consumer
+        run: |
+          "$MCPP" build --target x86_64-linux-android
+          "$MCPP" pack --format apk --target x86_64-linux-android | tee pack.log
+          apk=$(find target -name 'apk-consumer.apk' | head -1)
+          test -n "$apk" || { cat pack.log; echo "FAIL: no apk-consumer.apk"; exit 1; }
+
+          BT=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-android-build-tools" -mindepth 1 -maxdepth 1 -type d | head -1)
+          JDK=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-jdk-temurin" -mindepth 1 -maxdepth 1 -type d | head -1)
+          AAPT2="$BT/aapt2"
+          APKSIGNER="$BT/bin/apksigner"
+          JAR="$JDK/bin/jar"
+
+          "$APKSIGNER" verify --print-certs "$apk" 2>/dev/null | tee verify.log
+          grep -q 'CN=Android Debug' verify.log \
+            || { echo "FAIL: not signed with the debug key"; exit 1; }
+
+          "$JAR" tf "$apk" | tee listing.log
+          for f in "lib/x86_64/libapk-consumer.so" "assets/mcpp-run.json" \
+                   "AndroidManifest.xml" "assets/generated/res.bin"; do
+            grep -qxF "$f" listing.log \
+              || { echo "FAIL: the apk does not list $f"; exit 1; }
+          done
+
+          "$AAPT2" dump badging "$apk" 2>/dev/null | tee badging.log
+          grep -q "^package: name='" badging.log \
+            || { echo "FAIL: aapt2 could not read the package name"; exit 1; }
+          # aapt2 spells the attribute `minSdkVersion:'24'`; the file is shown
+          # byte-for-byte on a miss so that a quoting difference is visible.
+          tr -d '\r' < badging.log | grep -Eq "^(min)?[sS]dkVersion:'24'" \
+            || { echo "FAIL: minSdkVersion is not 24 (this fixture's own min_api_level)"; cat -A badging.log | head -12; exit 1; }
+          echo "ok: dist-apk level 0 -- a signed, aapt2-readable APK carrying the native library, the deployed asset and the run sidecar"
+
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
       # device, so the run is of the CPU variant, which the same seam serves.
@@ -1585,39 +1669,17 @@ jobs:
         shell: bash
         run: |
           set -e
-          # WiX ships through NuGet and is not redistributable through this
-          # ecosystem, which is why the member LOCATES it rather than declaring
-          # a payload. Installing it here is the CI runner supplying what a
-          # developer's machine would.
-          # WiX 6, PINNED, AND THE PIN IS THE WHOLE POINT.
-          #
-          # An unpinned `dotnet tool install wix` gets v7, which REFUSES TO RUN
-          # AT ALL until a licence is accepted out of band. Measured on
-          # windows-2022:
-          #
-          #   wix.exe : error WIX7015: You must accept the Open Source
-          #   Maintenance Fee (OSMF) EULA to use WiX Toolset v7.
-          #
-          # That is a runtime gate, not a licence term about redistribution: 6's
-          # own EULA states that binaries may be redistributed and that the
-          # source remains freely distributable under the Microsoft Reciprocal
-          # License. So 6 is the version this ecosystem can actually drive, and
-          # it is also the version `xim:wix` should carry when that package
-          # lands -- a package pinning 7 would install a tool that cannot run.
-          #
-          # THE DISPATCH WAS ALREADY CORRECT WHEN THIS FAILED, which is worth
-          # recording because it is why the fix is a version pin and not a code
-          # change. The same run reported
-          #
-          #   Distributing msi-consumer v0.3.0 (--format msi)
-          #   wix.exe build -arch x64 -d Executable=bin/msi-consumer.exe -o ... MsiConsumer.wxs
-          #
-          # so the `.wxs` was rendered, the argv was assembled and the engine
-          # handed the request to the member. Only the tool declined.
-          dotnet tool install --global wix --version 6.0.2 >/dev/null 2>&1 \
-            || dotnet tool update --global wix --version 6.0.2 >/dev/null 2>&1
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          wix --version
+          # THE TOOL COMES FROM THE PAYLOAD, NOT FROM THIS STEP. `dist-wix`
+          # declares `xim:wix` under `[target.windows.feature-xlings.dist-wix]`,
+          # so mcpp provisions it when the fixture activates the feature on a
+          # Windows target, and the member locates it through `xpkg_dir`. An
+          # earlier revision of this step installed WiX 6 with `dotnet tool`
+          # and the member searched PATH; the criterion below on the argv is
+          # what distinguishes the two, and a run that found a host `wix.exe`
+          # would fail it. WiX 7 is not an option for the payload either: it
+          # refuses to run until an OSMF licence is accepted out of band
+          # (`error WIX7015`, measured on windows-2022), while 5.0.2 and 6.0.2
+          # are under the Microsoft Reciprocal License and run as installed.
 
           # A plain build must have no distribution edge.
           "$MCPP" build
@@ -1627,6 +1689,17 @@ jobs:
           "$MCPP" pack --format msi | tee pack.log
           msi=$(find target -name '*.msi' | head -1)
           test -n "$msi" || { cat pack.log; echo "FAIL: no MSI"; exit 1; }
+          # THE TOOL CAME FROM THE PAYLOAD BY CONSTRUCTION, and the criterion
+          # is the absence of any other: this step installs no WiX, the member
+          # has no PATH tier, and the runner image ships WiX 3 (candle/light)
+          # but no `wix.exe`. An MSI therefore exists only if the payload's
+          # `wix.exe` produced it. The engine prints the argv with the tool's
+          # basename, so the log line cannot carry the store path -- an earlier
+          # revision asserted on that and failed on a correct run.
+          if command -v wix.exe >/dev/null 2>&1 || command -v wix >/dev/null 2>&1; then
+            echo "FAIL: a host wix is on PATH; this step cannot tell the payload's tool from it"
+            command -v wix.exe wix; exit 1
+          fi
 
           # THE CRITERION IS THE `File` TABLE, NOT THE FILE'S EXISTENCE. The
           # measured failure this member is shaped around is a VALID, EMPTY,
@@ -1705,6 +1778,91 @@ jobs:
           # user's machine and nowhere here.
           plutil -lint "$app/Contents/Info.plist"
           echo "ok: one bundle, a valid plist, and it launches"
+
+      # THE iOS ROW, FOR REAL (#622 B1's other half). `tests/ios-app-consumer`
+      # is the same fixture the Linux `consumers` job checks at the plan
+      # level (see that fixture's own header); here it is built, packed and
+      # run against the real target, because this runner -- unlike every
+      # other host this workflow uses -- carries the Xcode SDKs and a
+      # bootable simulator that make `--target aarch64-ios-sim` reachable at
+      # all.
+      #
+      # GATED ON THE SAME PRECONDITION mcpp's OWN iOS LANE GATES ON
+      # (mcpp's `ci-macos-ios.yml`, `ios-host-surface`): the iPhoneSimulator
+      # SDK ships inside Xcode as a separate component, not the Command Line
+      # Tools alone, so its absence is a fact about the runner image and not
+      # a regression in this collection. Skipped rather than failed, and
+      # skipped before anything is provisioned -- the same order `dist-apple`
+      # itself refuses in, and the reason `docs/20-toolchains.md` (mcpp)
+      # gives: "a machine without Xcode should not download a compiler before
+      # being told the compiler is not what is missing."
+      - name: dist-apple's iOS row produces a bundle the simulator launches
+        if: runner.os == 'macOS'
+        working-directory: tests/ios-app-consumer
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+            echo "SKIP: no iphonesimulator SDK on this runner"
+            echo "      (xcrun --sdk iphonesimulator --show-sdk-path failed) -- see"
+            echo "      mcpp's docs/20-toolchains.md, 'The Apple SDKs Are Located, Not Installed'"
+            exit 0
+          fi
+          set -e
+
+          rm -rf target
+          "$MCPP" build --target aarch64-ios-sim
+          if find target -name '*.app' | grep -q .; then
+            echo "FAIL: a plain build produced a bundle"; exit 1
+          fi
+          "$MCPP" pack --target aarch64-ios-sim --format app | tee pack.log
+          app=$(find target -name '*.app' -type d | head -1)
+          test -n "$app" || { cat pack.log; echo "FAIL: no .app bundle"; exit 1; }
+
+          # FLAT, NOT Contents/-SHAPED -- the one difference from the macOS
+          # bundle above, and the whole reason iOS needed its own branch in
+          # `dist/apple.cppm`.
+          if [ -d "$app/Contents" ]; then
+            echo "FAIL: the simulator bundle carries Contents/ -- not a flat iOS layout"
+            exit 1
+          fi
+          plist="$app/Info.plist"
+          test -f "$plist" || { echo "FAIL: no Info.plist at the bundle root"; exit 1; }
+          plutil -lint "$plist"
+
+          # `MinimumOSVersion` MUST CARRY THIS FIXTURE'S OWN `[build]
+          # ios_deployment_target`, not a default the engine invented.
+          minos=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$plist")
+          [ "$minos" = "17.0" ] || {
+            echo "FAIL: MinimumOSVersion is '$minos', expected 17.0 (this fixture's ios_deployment_target)"
+            exit 1; }
+          plat=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$plist")
+          [ "$plat" = "iPhoneSimulator" ] || {
+            echo "FAIL: CFBundleSupportedPlatforms is '$plat', expected iPhoneSimulator"
+            exit 1; }
+
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
+          test -x "$app/$exe" \
+            || { echo "FAIL: $app/$exe is missing or not executable"; ls -la "$app"; exit 1; }
+
+          # THE SIMULATOR, THROUGH THE DECLARED RUNNER. `mcpp run --format
+          # app` hands the packaged bundle to `runner = ["simctl-run"]`
+          # (`xim:apple-simulator-tools` 0.2.0, declared on this target row),
+          # which installs and launches it rather than spawning a bare
+          # executable -- the branch that package's 0.2.0 header records as
+          # needed for an installed bundle. This is the same path a
+          # consumer's own `mcpp run --target aarch64-ios-sim --format app`
+          # takes, not a bare `simctl spawn` this step could call directly.
+          out=$("$MCPP" run --target aarch64-ios-sim --format app 2>&1) && rc=0 || rc=$?
+          printf '%s\n' "$out" | tail -20
+          [ "$rc" -eq 0 ] \
+            || { echo "FAIL: mcpp run --target aarch64-ios-sim --format app exited $rc"; exit 1; }
+          # `simctl launch --console-pty` returns the program's output through
+          # a pty, so a line may end in a carriage return; the marker is asserted
+          # as a line after that is stripped.
+          tr -d '\r' <<<"$out" | grep -Eq '^[[:space:]]*1-2-3[[:space:]]*$' \
+            || { echo "FAIL: the program's output line '1-2-3' is absent"; printf '%s\n' "$out" | cat -A | tail -8; exit 1; }
+          echo "ok: a flat iOS Simulator bundle, MinimumOSVersion 17.0, and the simulator ran it"
 
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer

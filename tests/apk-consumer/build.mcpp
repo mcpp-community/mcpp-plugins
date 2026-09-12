@@ -1,0 +1,28 @@
+// #622 A4 + B2: a build program generates a file, deploys it (`mcpp::
+// deploy`, beside the linked object in the ordinary build's `bin/`), and
+// `dist-apk` picks it up from there and stages it into the APK's `assets/`
+// -- see dist/apk.cppm's header for why that source is the ordinary build
+// tree and not the pack pipeline's own staged tree on this row.
+import std;
+import mcpp;
+import mcpp.dist.apk;
+
+int main() {
+    const std::string root = mcpp::manifest_dir();
+    const std::string src  = root + "/res.txt";
+    const std::string out  = std::string(mcpp::out_dir()) + "/gen/res.bin";
+
+    mcpp::action a;
+    a.id   = "gen-res";
+    a.role = "source";
+    a.arg((root + "/gen.sh").c_str()).arg(src.c_str()).arg(out.c_str())
+     .input(src.c_str())
+     .output(out.c_str())
+     .submit();
+
+    mcpp::deploy(out.c_str(), "generated");
+
+    mcpp::dist::apk::options opt;
+    opt.target = "apk-consumer";
+    return mcpp::dist::apk::generate(opt) ? 0 : 1;
+}

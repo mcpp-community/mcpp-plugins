@@ -16,6 +16,8 @@ import mcpp.tools.island;
 import mcpp.dist.appimage;
 import mcpp.dist.wix;
 import mcpp.dist.apple;
+import mcpp.dist.web;
+import mcpp.dist.apk;
 
 int main() {
     // No accelerator is named, so each of these returns true without looking
@@ -41,7 +43,7 @@ int main() {
     // nothing. `entry_name` is where its only parsing lives.
     ok = ok && mcpp::tools::island::entry_name("int f(int a)") == "f";
 
-    // `dist-wix` and `dist-apple` are neither rules nor tools, but the same
+    // `dist-wix`, `dist-apple` and `dist-web` are neither rules nor tools, but the same
     // property is worth asserting on every platform for the same reason: a
     // plan on a build that is not `mcpp pack --format <name>` must return
     // `applies == false` and print nothing, on every host, including the two
@@ -55,6 +57,15 @@ int main() {
     ok = ok && !wixPlan.applies;
     auto applePlan = mcpp::dist::apple::plan_for();
     ok = ok && !applePlan.applies;
+    auto webPlan = mcpp::dist::web::plan_for();
+    ok = ok && !webPlan.applies;
+    // `dist-apk`'s own gate is the target ENVIRONMENT (`cfg(env = "android")`
+    // on its payload table, `mcpp::target_env() != "android"` in
+    // `plan_for` itself), not `pack_format()` alone -- this fixture's host
+    // build satisfies neither, so no payload was ever declared for this run
+    // and this call reaches no `xpkg_dir` lookup at all.
+    auto apkPlan = mcpp::dist::apk::plan_for();
+    ok = ok && !apkPlan.applies;
 
     std::println("all-rules-compile: every rule and dist module compiled for this host");
     return ok ? 0 : 1;

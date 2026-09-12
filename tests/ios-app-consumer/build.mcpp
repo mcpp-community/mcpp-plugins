@@ -1,0 +1,25 @@
+import std;
+import mcpp;
+import mcpp.dist.apple;
+
+int main() {
+    mcpp::dist::apple::options opt;
+    opt.target   = "ios-app-consumer";
+    opt.app_name = "IosAppConsumer";
+    // ONE build.mcpp, RUN SEVERAL TIMES WITH DIFFERENT ENVIRONMENTS (see
+    // check-ios-plan.sh). `options` is fixed at compile time, so the one
+    // branch this program itself is allowed to take on `target_os()` picks
+    // an icon shape that fits the row: a directory of PNGs on iOS, nothing
+    // on macOS -- `app-consumer`'s own fixture already covers the
+    // no-icon macOS path, so this fixture does not repeat it.
+    if (std::string(mcpp::target_os()) == "ios") {
+        opt.icon = "ios-icons";
+    }
+    // A signing identity, set UNCONDITIONALLY, so one build program can
+    // exercise both the simulator row's "ignored, with a warning" branch
+    // and the device row's ordinary codesign step. This fixture is never
+    // packed through a real `mcpp pack` on a host that could actually
+    // invoke `codesign`, so no CI lane signs anything with this string.
+    opt.identity = "Apple Development: Test (ABCDE12345)";
+    return mcpp::dist::apple::generate(opt) ? 0 : 1;
+}

@@ -1,0 +1,30 @@
+# Fixture: a program that ships as a static web directory.
+#
+# It proves the fourth family member end to end, the way `appimage-consumer`
+# proves the third: the build program runs a second time, after `mcpp pack`
+# has staged the wasm32-emscripten stem family, and submits an artifact
+# action per file plus a rendered `index.html`.
+#
+# ONLY `wasm32-emscripten` REACHES THIS MEMBER. `[targets.web-consumer]`
+# carries no target row of its own; `--target wasm32-emscripten` on the
+# command line is what selects it, the same way every other cross-target
+# fixture in this ecosystem is built.
+[package]
+name        = "web-consumer"
+namespace   = "example"
+version     = "0.1.0"
+description = "Fixture: packages a wasm32-emscripten program as a static web directory"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-web"], host-module = true }
+
+[targets.web-consumer]
+kind = "bin"
+main = "src/main.cpp"
