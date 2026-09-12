@@ -29,7 +29,7 @@ env:
   # every dispatched format was unreachable on macOS, including one that never
   # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
   # and `dist-apple` has been unreachable, not broken, since it was written.
-  MCPP_VERSION: 2026.9.11.2
+  MCPP_VERSION: 2026.9.12.3
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
