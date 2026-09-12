@@ -43,22 +43,34 @@
 // and no `options::tool` the way `wix` does in `dist/wix.cppm` -- there is
 // exactly one `ditto`, at a fixed path, on every Mac this can run on.
 //
-// HOW MANY ACTIONS, AND WHY EACH IS SEPARATE. Up to four:
+// HOW MANY ACTIONS, AND WHY EACH IS SEPARATE. Up to five:
 //
 //   1. install `Info.plist`         (always)
 //   2. lay out the staged tree      (always)
 //   3. install the icon             (only when `options::icon` is set)
 //   4. codesign the bundle          (only when `options::identity` is set)
+//   5. the bundle itself            (always, last)
 //
 // 1 and 3 are separate from 2 because they have different INPUTS: `Info.plist`
 // is regenerated whenever package metadata changes, the icon only when the
 // project's icon file changes, and the staged tree only when the program or
 // its closure changes. One action for all three would make every one of those
-// changes re-run the multi-hundred-megabyte copy. 4 is last and depends on
-// the OUTPUTS of whichever of 1 to 3 actually ran, because a code signature
-// covers the bundle's content at signing time -- signing before the content
-// is in place is either a failure (an incomplete bundle) or a signature that
-// the next file added invalidates.
+// changes re-run the multi-hundred-megabyte copy. 4 is last of the CONTENT
+// steps and depends on the OUTPUTS of whichever of 1 to 3 actually ran,
+// because a code signature covers the bundle's content at signing time --
+// signing before the content is in place is either a failure (an incomplete
+// bundle) or a signature that the next file added invalidates.
+//
+// 5 EXISTS BECAUSE 1 THROUGH 4 ARE PARALLEL, AND `mcpp run` NEEDS ONE
+// OPERAND. Each of them writes a file inside the bundle and consumes none of
+// the others' outputs, so a request that submits only this plan has as many
+// terminal artifacts (outputs nothing else consumes) as steps actually ran --
+// up to four, never one. `mcpp run --format app` resolves to THE terminal
+// artifact, so a plan with more than one has none it can hand the runner.
+// Step 5's output is the bundle DIRECTORY -- the actual distributable of this
+// format -- and its inputs are every other step's output, so it is always
+// the plan's sole terminal, in both the `Contents/`-shaped and flat-iOS
+// layouts.
 //
 // `Info.plist` IS WRITTEN AT PLAN TIME, BUT NOT DIRECTLY TO ITS FINAL PATH,
 // AND THE DIFFERENCE MATTERS. It is configuration, so `write_if_different`
@@ -772,7 +784,38 @@ inline plan plan_for(options opt = {}) {
         // something measured here -- codesign does not run on Linux.
         sign.outputs = { (isIos ? bundlePath : bundlePath + "/Contents") + "/_CodeSignature/CodeResources" };
         p.steps.push_back(sign);
+        assembled.push_back(sign.outputs.front());
     }
+
+    // THE BUNDLE DIRECTORY IS THIS PLAN'S OWN TERMINAL ARTIFACT.
+    //
+    // `mcpp run --format <fmt>` hands the runner the request's TERMINAL
+    // ARTIFACT -- the output of an introduced action no other introduced
+    // action consumes. Every step above writes a file INSIDE the bundle
+    // (`Info.plist`, the executable, an icon, codesign's own stamp), and
+    // none of those files is an input of any of the others in a chain that
+    // ends in one: `info`, `layout`, `icon` and `sign` are four parallel
+    // steps, so without this one the plan has four terminals and `mcpp run`
+    // has no single operand to pass on -- exactly the failure `dist-apple`'s
+    // iOS row hit (#622: "produced 4 distributables ... needs exactly one").
+    //
+    // The distributable of `--format app` is the BUNDLE, not any one file in
+    // it, so this step's own output is the bundle directory itself, and its
+    // inputs are every other step's output declared so far -- codesign's
+    // stamp included, when it ran, so the bundle is not the terminal until
+    // signing (the last thing that can still fail) has happened. A directory
+    // is an acceptable action output (the engine verifies `is_regular_file
+    // || is_directory`); `touch` has nothing to write, only a mtime to
+    // refresh, and refreshing it is what makes ninja record the edge as run
+    // rather than replay a stale one.
+    step bundle;
+    bundle.id          = "mcpp.dist.apple.bundle";
+    bundle.role        = "artifact";
+    bundle.description = "APP BUNDLE";
+    bundle.argv         = { "/usr/bin/touch", bundlePath };
+    bundle.inputs        = assembled;
+    bundle.outputs       = { bundlePath };
+    p.steps.push_back(bundle);
 
     p.applies = true;
     return p;

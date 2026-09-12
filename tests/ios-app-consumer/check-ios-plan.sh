@@ -18,6 +18,67 @@ set -e
 MCPP="${MCPP:-mcpp}"
 fail() { echo "FAIL: $1"; shift; for f in "$@"; do echo "--- $f ---"; cat "$f" 2>/dev/null; done; exit 1; }
 
+# THE BUNDLE STEP IS THE PLAN'S SOLE TERMINAL ARTIFACT (#622: "mcpp run
+# --format app produced 4 distributables ... needs exactly one"). `info`,
+# `layout`, `icon` and `codesign` are parallel -- none consumes another's
+# output -- so without a step naming the bundle directory itself as ITS
+# output, `mcpp run --format app` has as many terminal artifacts as steps ran
+# and no single operand to hand the runner. This checks the property, not
+# just the id's presence: every OTHER planned step's own output must be named
+# among `bundle`'s own inputs, and `bundle`'s own output (the `.app`
+# directory) must be named in no step's inputs anywhere in the plan -- the
+# one thing left that nothing consumes.
+# Both restricted to the named FIELD, never the whole JSON line: `command`
+# (ditto's own argv) legitimately names the bundle directory as a
+# destination on every row, and matching against the whole line would read
+# that as "consumes", which it is not -- only `inputs` decides the graph's
+# edges.
+quoted_outputs() { # $1 = one action's JSON line
+    echo "$1" | grep -oP '(?<="outputs":\[)[^]]*' | grep -oP '"[^"]*"'
+}
+quoted_inputs() { # $1 = one action's JSON line
+    echo "$1" | grep -oP '(?<="inputs":\[)[^]]*' | grep -oP '"[^"]*"'
+}
+check_terminal_bundle() {
+    local log="$1" bundle_line bundle_out other_id other_line q found_any=0
+    bundle_line=$(grep -o '"id":"mcpp\.dist\.apple\.bundle"[^}]*}' "$log") \
+        || fail "no bundle step planned" "$log"
+    [ -n "$bundle_line" ] || fail "no bundle step planned" "$log"
+    bundle_out=$(quoted_outputs "$bundle_line")
+    [ "$(echo "$bundle_out" | wc -l)" -eq 1 ] \
+        || fail "the bundle step does not declare exactly one output" "$log"
+    echo "$bundle_out" | grep -q '\.app"$' \
+        || fail "the bundle step's own output is not the .app directory" "$log"
+    local bundle_inputs
+    bundle_inputs=$(quoted_inputs "$bundle_line")
+    for other_id in mcpp.dist.apple.info-plist mcpp.dist.apple.layout \
+                    mcpp.dist.apple.icon mcpp.dist.apple.codesign; do
+        other_line=$(grep -o "\"id\":\"$other_id\"[^}]*}" "$log") || true
+        [ -n "$other_line" ] || continue
+        found_any=1
+        while IFS= read -r q; do
+            [ -n "$q" ] || continue
+            grep -qF "$q" <<<"$bundle_inputs" \
+                || fail "the bundle step does not depend on $other_id's own output ($q)" "$log"
+        done <<<"$(quoted_outputs "$other_line")"
+        # And the reverse: no OTHER step may already name the bundle
+        # directory among its OWN inputs -- that would make it, not
+        # `bundle`, the one this plan's earlier steps are ordered against.
+        grep -qF "$bundle_out" <<<"$(quoted_inputs "$other_line")" \
+            && fail "$other_id names the bundle directory among its own inputs" "$log"
+    done
+    [ "$found_any" -eq 1 ] || fail "no content step (info/layout/icon/codesign) was planned to check against" "$log"
+    # Nothing anywhere in the plan consumes the bundle step's own output (as
+    # an INPUT, never as an argv destination) -- the property that makes it
+    # the sole terminal artifact.
+    while IFS= read -r other_line; do
+        [ -n "$other_line" ] || continue
+        grep -qF "$bundle_out" <<<"$(quoted_inputs "$other_line")" \
+            && fail "something in the plan still consumes the bundle directory as an input; it is not the sole terminal" "$log"
+    done <<<"$(grep -o '"id":"mcpp\.dist\.apple\.[a-z-]*"[^}]*}' "$log" | grep -v '"id":"mcpp\.dist\.apple\.bundle"')"
+    echo "ok: mcpp.dist.apple.bundle is the plan's sole terminal artifact ($bundle_out)"
+}
+
 rm -rf target
 "$MCPP" build > build.log 2>&1 || fail "the host build failed to compile build.mcpp" build.log
 BIN=target/.build-mcpp/build.mcpp.bin
@@ -89,6 +150,7 @@ grep 'mcpp.dist.apple.layout' "$log" | grep -q '\${mcpp\.stage_dir}' \
 grep -q 'holds only' "$log" \
     && fail "a non-empty staged tree still produced the 0-byte staged-tree warning" "$log"
 echo "ok: flat layout, no codesign, a named warning, and every iOS-only plist key"
+check_terminal_bundle "$log"
 
 echo "== iOS Simulator row, an empty pack_stage_dir (#622 B2 defect 1) =="
 run_row simnostage ios sim /tmp/ios-plan-sim-nostage.log EMPTY > /dev/null
@@ -101,6 +163,7 @@ grep 'mcpp.dist.apple.layout' "$log" | grep -q '\${mcpp\.stage_dir}' \
 grep -q 'holds only' "$log" \
     && fail "an empty pack_stage_dir produced the misleading 0-byte staged-tree warning" "$log"
 echo "ok: an empty pack_stage_dir takes the single-binary path, named through \${mcpp.target_file:...}, with no staged-tree warning"
+check_terminal_bundle "$log"
 
 echo "== iOS Simulator row, a manifest directory with no ios-icons/ (#622 B2 defect 2) =="
 badmanifest=$(mktemp -d)
@@ -111,6 +174,8 @@ grep -qF "$badmanifest/ios-icons" "$log" \
     || fail "the missing-icon refusal did not resolve options::icon against MCPP_MANIFEST_DIR" "$log"
 grep -q 'mcpp.dist.apple.layout' "$log" \
     && fail "a layout step was planned even though the icon directory was refused" "$log"
+grep -q 'mcpp.dist.apple.bundle' "$log" \
+    && fail "a bundle step was planned even though the icon directory was refused" "$log"
 echo "ok: a relative options::icon resolves against MCPP_MANIFEST_DIR, and a missing directory is refused at plan time, naming options::icon and the path"
 
 echo "== iOS device row =="
@@ -123,6 +188,7 @@ grep -q 'is ignored on the iOS Simulator row' "$log" \
 grep -A2 '<key>CFBundleSupportedPlatforms</key>' "$plist" | grep -q 'iPhoneOS' \
     || fail "CFBundleSupportedPlatforms does not name iPhoneOS on the device row" "$plist"
 echo "ok: codesign is planned, and CFBundleSupportedPlatforms names iPhoneOS"
+check_terminal_bundle "$log"
 
 echo "== macOS row is unaffected =="
 outdir=$(run_row macos macos "" /tmp/ios-plan-macos.log)
@@ -137,5 +203,6 @@ for key in CFBundleSupportedPlatforms UIDeviceFamily LSRequiresIPhoneOS MinimumO
 done
 grep -q '<key>NSHighResolutionCapable</key>' "$plist" || fail "the macOS plist lost NSHighResolutionCapable" "$plist"
 echo "ok: the macOS row's steps and plist are unchanged by the iOS branch"
+check_terminal_bundle "$log"
 
 echo "PASS: dist-apple's iOS row, at the plan level"
