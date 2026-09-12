@@ -221,6 +221,44 @@ inline std::string ndk_lib_triple_for() {
     return {};
 }
 
+// Does `so` NEED `libc++_shared.so`? Read from the dynamic section with
+// `llvm-readelf -d`, from the SAME toolchain that linked it -- the one
+// `mcpp::toolchain_dir()` names for this build, not a host `readelf` this
+// project never declared. Measured against this exact NDK (30.0.16248370):
+// an ordinary `import std;` link NEEDs it (`readelf -d` on the fixture's own
+// `.so` lists `NEEDED libc++_shared.so`, and `mcpp pack`'s own warning on
+// this row -- "this toolchain ships no libc++.a/libc++abi.a; using
+// toolchain-coupled" -- says the same thing from the flags side), so this
+// is asked per file rather than assumed true for every build: a project
+// that links `-static-libstdc++` or carries no C++ translation unit at all
+// needs nothing extra, and copying the runtime in unconditionally would
+// carry a library nothing in the APK opens.
+inline bool needs_libcxx_shared(const std::string& toolchainDir, const std::string& so) {
+    const std::string readelf = (fs::path(toolchainDir) / "bin" / "llvm-readelf").string();
+    if (!is_file(readelf) || !is_file(so)) return false;
+    const std::string cmd = "\"" + readelf + "\" -d \"" + so + "\" 2>/dev/null";
+    // `popen` is POSIX and Windows spells it `_popen` -- this module compiles
+    // on every host (`tests/all-rules-compile`), even though `plan_for`
+    // refuses before reaching this call on every row but Android.
+#if defined(_WIN32)
+    FILE* p = ::_popen(cmd.c_str(), "r");
+#else
+    FILE* p = ::popen(cmd.c_str(), "r");
+#endif
+    if (!p) return false;
+    bool found = false;
+    char line[512];
+    while (std::fgets(line, sizeof line, p)) {
+        if (std::strstr(line, "libc++_shared.so")) { found = true; break; }
+    }
+#if defined(_WIN32)
+    ::_pclose(p);
+#else
+    ::pclose(p);
+#endif
+    return found;
+}
+
 inline std::string replace_dashes(std::string s) {
     for (char& c : s) if (c == '-') c = '_';
     return s;
@@ -606,6 +644,33 @@ inline plan plan_for(options opt = {}) {
     std::vector<std::string> libInputs;
     const fs::path libAbiDir = work / "lib" / abi;
     for (auto const& so : soFiles) collect_tree(so, libAbiDir / fs::path(so).filename(), libInputs);
+
+    // `libc++_shared.so`, WHEN THE CLOSURE NEEDS IT. See `needs_libcxx_shared`
+    // for the measurement. Not in `${mcpp.pack_stage_dir()}`'s `lib/` --
+    // Android's own closure does not walk dependencies onto that tree at all
+    // (this member's header) -- so it comes from the ACTIVE toolchain's own
+    // sysroot, the same one that linked every `.so` this member just staged.
+    {
+        const std::string toolchainDir = mcpp::toolchain_dir();
+        const std::string triple = ndk_lib_triple_for();
+        if (!toolchainDir.empty() && !triple.empty()) {
+            const std::string libcxx =
+                (fs::path(toolchainDir) / "sysroot" / "usr" / "lib" / triple
+                 / "libc++_shared.so").string();
+            bool needed = false;
+            for (auto const& so : soFiles)
+                if (needs_libcxx_shared(toolchainDir, so)) { needed = true; break; }
+            if (needed) {
+                if (is_file(libcxx))
+                    collect_tree(libcxx, libAbiDir / "libc++_shared.so", libInputs);
+                else
+                    mcpp::warning(std::format(
+                        "mcpp.dist.apk: the closure NEEDs libc++_shared.so but "
+                        "{} does not exist -- the apk will fail to load",
+                        libcxx).c_str());
+            }
+        }
+    }
 
     const fs::path assetsDir = work / "assets";
     const std::string runJsonPath = (assetsDir / "mcpp-run.json").string();
