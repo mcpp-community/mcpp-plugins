@@ -1,0 +1,45 @@
+# Fixture: the iOS row of dist-apple, checked at the PLAN level.
+#
+# NO HOST HERE CAN REACH A REAL MEASUREMENT. `--target aarch64-ios-sim`
+# refuses before `build.mcpp` ever runs, on every host without Xcode:
+#
+#   error: target aarch64-ios-sim needs the iphonesimulator SDK, which this
+#   machine does not provide.
+#
+# so `tests/msi-consumer`'s own reasoning ("a plan-level assertion is not a
+# measurement... only answerable on the platform the member serves") does not
+# even get this member as far as a plan-level assertion on a non-Apple CI
+# runner: there is no `--target` that reaches `plan_for` with `MCPP_TARGET_OS`
+# actually set to `ios` unless the runner IS a Mac with Xcode installed.
+#
+# This package is instead built for the HOST (an ordinary `mcpp build`, no
+# `--target`), which compiles `build.mcpp` into an ordinary ELF binary at
+# `target/.build-mcpp/build.mcpp.bin` and, on this row, does not even reach
+# `plan_for` at pack time (`generate()`'s call to it runs during the plain
+# build too, and returns `applies == false` because `pack_format()` is
+# empty then). `check-ios-plan.sh` runs that COMPILED binary a second time,
+# directly, with `MCPP_TARGET_OS`, `MCPP_TARGET_ENV`, `MCPP_PACK_FORMAT` and
+# the rest of the environment contract set by hand to the values the engine
+# would set for `--target aarch64-ios-sim --format app` and for the device
+# row `aarch64-ios`. `mcpp::target_os()` and its siblings read these through
+# `std::getenv` and nothing else (`hostprogram.cppm`), so this exercises the
+# exact same code `plan_for` runs under a real iOS build -- everything past
+# "which environment variables does this process see" is unchanged.
+[package]
+name        = "ios-app-consumer"
+version     = "0.3.0"
+description = "Fixture: the iOS row of dist-apple, checked at the plan level"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-apple"], host-module = true }
+
+[targets.ios-app-consumer]
+kind = "bin"
+main = "src/main.cpp"

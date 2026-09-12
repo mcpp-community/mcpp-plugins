@@ -83,12 +83,47 @@
 // here applying to a step this member does not attempt at all rather than
 // one it works around.
 //
-// iOS IS THE SAME SHAPE PLUS A TARGET ROW THE ENGINE DOES NOT YET HAVE, NOT A
-// REDESIGN. An iOS app is the same `Contents`-free flat bundle format's
-// sibling with its own signing and provisioning-profile rules; what is
-// missing is not logic in this file but a target triple and an SDK mcpp does
-// not resolve today. This member gains iOS when that row lands. It is not
-// implemented here.
+// iOS IS THE SAME SHAPE, A FLAT LAYOUT INSTEAD OF `Contents/`, AND THREE
+// KEYS `-format app` NEVER WROTE (#622 B1). The target row and the SDK
+// (`aarch64-ios-sim`, `aarch64-ios`) are the engine's; what was missing here
+// was the branch, not a mechanism -- every action below is the same four
+// steps the header above already lists, addressed at the bundle's own root
+// rather than `Contents/`.
+//
+// FLAT, BECAUSE THAT IS WHAT AN iOS BUNDLE IS. There is no `Contents/`
+// subdirectory on this platform: the executable, `Info.plist` and every
+// resource sit directly under `<Name>.app/`. So `execDir`, `plistDst` and
+// `resourceDir` below are the bundle root itself on this branch and
+// `Contents/MacOS`, `Contents/Info.plist`, `Contents/Resources` on the
+// macOS one -- one predicate, read once, rather than four `os == "macos"`
+// checks scattered through the function.
+//
+// `CFBundleSupportedPlatforms` READS THE SIMULATOR FROM `target_env()`, NOT
+// FROM A SEPARATE OPTION. `aarch64-ios-sim` and `aarch64-ios` are two
+// triples for one OS (`triple.cppm`'s own comment: "the simulator is
+// deliberately not a row [of its own identity]... it has its own SDK"), so
+// the engine already carries the distinction this key needs; restating it
+// as an `options` field would be a second copy of what `target_env()`
+// answers.
+//
+// SIGNING SPLITS ON THE SAME PREDICATE. A simulator bundle installs
+// unsigned -- `simctl install` does not check a signature -- so
+// `options::identity` is ignored there rather than attempted and left to
+// fail inside `codesign`, which cannot produce a device-shaped signature
+// for a simulator binary in any case. The device row's `codesign` step is
+// byte-for-byte the macOS one: same argv shape, same opt-in, same
+// hardened-runtime and entitlements flags.
+//
+// ICONS TAKE A DIRECTORY ON THIS ROW, A FILE ON THE OTHER. macOS names one
+// `.icns`; iOS's convention is a set of flat PNGs at several pixel sizes,
+// listed by stem under `CFBundleIcons` / `CFBundlePrimaryIcon` /
+// `CFBundleIconFiles`. Generating the required sizes from a source image is
+// Xcode's `actool`, which is not redistributable and not reimplemented
+// here (the same boundary `codesign` and `wix.exe` already draw): this
+// member copies whatever PNGs the project already has into the bundle root
+// and lists their stems. A project supplying the wrong sizes gets a bundle
+// that installs and a Home Screen icon Apple's UI does not like -- a
+// cosmetic failure, not a build one.
 
 module;
 #include <cstdio>
@@ -129,22 +164,52 @@ struct options {
     // Empty means `package_version()`.
     std::string version;
 
-    // A project-supplied icon file, copied into `Contents/Resources/` and
-    // named by `CFBundleIconFile`. Finder specifically expects `.icns` (or
-    // the newer `.icon` bundle) to render an application icon; this member
-    // does not validate or convert the format, only wires up whatever file
-    // is named. Empty omits `Contents/Resources/` and `CFBundleIconFile`
-    // entirely -- macOS runs a bundle with no custom icon without complaint.
+    // On macOS: a project-supplied icon FILE, copied into
+    // `Contents/Resources/` and named by `CFBundleIconFile`. Finder
+    // specifically expects `.icns` (or the newer `.icon` bundle) to render
+    // an application icon; this member does not validate or convert the
+    // format, only wires up whatever file is named. Empty omits
+    // `Contents/Resources/` and `CFBundleIconFile` entirely -- macOS runs a
+    // bundle with no custom icon without complaint.
+    //
+    // On iOS: a project-supplied DIRECTORY of flat PNGs -- a file here is
+    // refused, naming the directory shape iOS expects. Every `*.png` in it
+    // is copied to the bundle's root and its stem (the filename without
+    // `.png`) is listed under `CFBundleIcons` / `CFBundlePrimaryIcon` /
+    // `CFBundleIconFiles`, so a project names its icon set once, at
+    // whatever sizes it has generated, rather than once per size in this
+    // member's own vocabulary. Empty omits the bundle icon entirely, as on
+    // macOS.
     std::string icon;
 
-    // `LSMinimumSystemVersion`. mcpp does not expose the compiled deployment
-    // target to a build program, so this member does not guess one; empty
-    // omits the key, and a project that needs the floor enforced states it.
+    // `LSMinimumSystemVersion` on macOS, `MinimumOSVersion` on iOS.
+    //
+    // ON iOS THIS IS AN OVERRIDE, NOT THE ONLY SOURCE. mcpp 2026.9.12.2
+    // exposes the compiled deployment target as `mcpp::min_platform_version()`
+    // (#622 A11) -- the same value the linked Mach-O's `LC_BUILD_VERSION`
+    // carries -- and this member reads it first, falling back to this field
+    // only when the engine reports nothing (a target row the engine does not
+    // yet compute a floor for). A project therefore states
+    // `[build] ios_deployment_target` once and this key is free.
+    //
+    // ON macOS THIS STAYS THE ONLY SOURCE, deliberately: `min_platform_version`
+    // answers non-empty on macOS only when mcpp itself runs on a Mac
+    // (`mcpp::platform::macos::deployment_target` is guarded `#if defined
+    // (__APPLE__)`, because `MACOSX_DEPLOYMENT_TARGET` and the SDK default
+    // it falls back to are both properties of the machine RUNNING mcpp, not
+    // of the target triple), so reading it here would make a `.app` built
+    // by a Linux packaging host silently lose the key a macOS host would
+    // have set. Extending the engine reading to macOS is future work the
+    // design record recommends and this member does not take, so that the
+    // existing macOS fixture's bundle is unchanged by this row's addition.
     std::string minimum_system_version;
 
     // A `codesign` identity -- a name or hash `security find-identity` would
     // list. Empty means unsigned, which is the default; see the header
-    // comment for why signing is opt-in rather than automatic.
+    // comment for why signing is opt-in rather than automatic. Ignored on
+    // the iOS Simulator row regardless of this value -- see the header
+    // comment's signing paragraph -- and a non-empty value there produces a
+    // `mcpp::warning` naming why rather than a signature.
     std::string identity;
 
     // `--options runtime`, the hardened runtime, only meaningful together
@@ -174,7 +239,11 @@ struct step {
     const char*               description;
     std::vector<std::string>  argv;
     std::vector<std::string>  inputs;
-    std::string               output;
+    // MORE THAN ONE OUTPUT ON THE iOS ICON STEP: a directory of PNGs copies
+    // to a directory of PNGs, and the graph rule is "name the output
+    // files" -- plural, when a single command produces several. Every other
+    // step still declares exactly one; a vector costs those nothing.
+    std::vector<std::string>  outputs;
 };
 
 struct plan {
@@ -303,14 +372,32 @@ inline std::string plist_escape(std::string_view s) {
 // Written as XML text directly rather than by shelling out to `plutil`: the
 // content is a handful of string keys this member already holds, and adding
 // a second host tool to discover and invoke would buy nothing over
-// formatting the eleven lines by hand. `LSMinimumSystemVersion` and
-// `CFBundleIconFile` are omitted rather than emitted empty when their inputs
-// are empty -- an empty string in either key is a claim as unsupported as
-// omitting the key, so omission is the honest one.
+// formatting the lines by hand. `LSMinimumSystemVersion` / `MinimumOSVersion`
+// and `CFBundleIconFile` are omitted rather than emitted empty when their
+// inputs are empty -- an empty string in either key is a claim as
+// unsupported as omitting the key, so omission is the honest one.
+//
+// `is_ios` AND `is_sim` DECIDE FOUR KEYS, NOT ONE BRANCH. `MinimumOSVersion`
+// replaces `LSMinimumSystemVersion`; `CFBundleSupportedPlatforms`,
+// `UIDeviceFamily` and `LSRequiresIPhoneOS` are iOS-only and absent from
+// every macOS bundle this member has ever written, which is the
+// byte-identical property the macOS fixture depends on; `NSHighResolutionCapable`
+// is a macOS concept (Retina-aware drawing on a platform that also has
+// non-Retina displays) with nothing to opt into on iOS, so it is macOS-only
+// in the other direction.
 inline std::string plist_document(const std::string& executable, const std::string& bundle_id,
                                   const std::string& name, const std::string& version,
-                                  const std::string& min_system_version,
-                                  const std::string& icon_name) {
+                                  bool is_ios, bool is_sim,
+                                  const std::string& min_os_version,
+                                  // macOS: the icon FILE's basename, extension
+                                  // included, exactly as `CFBundleIconFile` has
+                                  // always taken it. iOS: unused (see
+                                  // `ios_icon_stems`) and always empty.
+                                  const std::string& mac_icon_name,
+                                  // iOS: every PNG stem found in
+                                  // `options::icon`'s directory. macOS: unused
+                                  // and always empty.
+                                  const std::vector<std::string>& ios_icon_stems) {
     std::string doc;
     doc += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     doc += "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
@@ -327,19 +414,47 @@ inline std::string plist_document(const std::string& executable, const std::stri
     doc += std::format("    <key>CFBundleVersion</key>\n    <string>{}</string>\n",
                        plist_escape(version));
     doc += "    <key>CFBundlePackageType</key>\n    <string>APPL</string>\n";
-    if (!min_system_version.empty())
-        doc += std::format("    <key>LSMinimumSystemVersion</key>\n    <string>{}</string>\n",
-                           plist_escape(min_system_version));
-    doc += "    <key>NSHighResolutionCapable</key>\n    <true/>\n";
-    // Not in the letter of this member's key list, but added deliberately:
-    // without it, an icon file this member went to the trouble of copying
-    // into `Contents/Resources/` is inert -- nothing in the bundle would ever
-    // reference it, and Finder would show the generic application icon
-    // regardless of `options::icon`. Wiring the file up once it exists is
-    // what makes the option do what its name says.
-    if (!icon_name.empty())
-        doc += std::format("    <key>CFBundleIconFile</key>\n    <string>{}</string>\n",
-                           plist_escape(icon_name));
+    if (!min_os_version.empty())
+        doc += std::format("    <key>{}</key>\n    <string>{}</string>\n",
+                           is_ios ? "MinimumOSVersion" : "LSMinimumSystemVersion",
+                           plist_escape(min_os_version));
+    if (is_ios) {
+        // `env == "sim"` is the engine's own distinction between the two
+        // rows (triple.cppm: "the simulator is deliberately not a row of
+        // its own identity... it has its own SDK"); this key is the one
+        // place a bundle has to restate it, because `simctl install` and a
+        // real device's installer both read it to refuse the other kind.
+        doc += std::format(
+            "    <key>CFBundleSupportedPlatforms</key>\n    <array>\n"
+            "        <string>{}</string>\n    </array>\n",
+            is_sim ? "iPhoneSimulator" : "iPhoneOS");
+        // `[1, 2]`: iPhone and iPad. Nothing here narrows a project to one
+        // idiom -- that is a project decision (a size class, a storyboard)
+        // this member has no basis for making.
+        doc += "    <key>UIDeviceFamily</key>\n    <array>\n"
+               "        <integer>1</integer>\n        <integer>2</integer>\n    </array>\n";
+        doc += "    <key>LSRequiresIPhoneOS</key>\n    <true/>\n";
+        if (!ios_icon_stems.empty()) {
+            doc += "    <key>CFBundleIcons</key>\n    <dict>\n"
+                   "        <key>CFBundlePrimaryIcon</key>\n        <dict>\n"
+                   "            <key>CFBundleIconFiles</key>\n            <array>\n";
+            for (auto const& stem : ios_icon_stems)
+                doc += std::format("                <string>{}</string>\n", plist_escape(stem));
+            doc += "            </array>\n        </dict>\n    </dict>\n";
+        }
+    } else {
+        doc += "    <key>NSHighResolutionCapable</key>\n    <true/>\n";
+        // Not in the letter of this member's key list, but added
+        // deliberately: without it, an icon file this member went to the
+        // trouble of copying into `Contents/Resources/` is inert -- nothing
+        // in the bundle would ever reference it, and Finder would show the
+        // generic application icon regardless of `options::icon`. Wiring the
+        // file up once it exists is what makes the option do what its name
+        // says.
+        if (!mac_icon_name.empty())
+            doc += std::format("    <key>CFBundleIconFile</key>\n    <string>{}</string>\n",
+                               plist_escape(mac_icon_name));
+    }
     doc += "</dict>\n</plist>\n";
     return doc;
 }
@@ -360,19 +475,26 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
-    // macOS only, and this is a refusal rather than a silent skip: a user who
-    // typed `--format app` on Linux asked for something that does not exist
-    // there, and the engine has already accepted the value because the graph
-    // declared it.
-    if (const std::string os = mcpp::target_os(); os != "macos") {
+    // macOS or iOS only, and this is a refusal rather than a silent skip: a
+    // user who typed `--format app` on Linux asked for something that does
+    // not exist there, and the engine has already accepted the value
+    // because the graph declared it.
+    const std::string os = mcpp::target_os();
+    const bool isIos = (os == "ios");
+    if (os != "macos" && !isIos) {
         std::cerr << std::format(
-            "mcpp.dist.apple: a .app bundle is a macOS format, and this "
-            "build targets '{}'.\n"
-            "  use: --format tar, or build for a macOS target",
+            "mcpp.dist.apple: a .app bundle is a macOS or iOS format, and "
+            "this build targets '{}'.\n"
+            "  use: --format tar, or build for a macOS or iOS target",
             os.empty() ? "unknown" : os) << '\n';
-        p.reason = "not a macOS target";
+        p.reason = "not a macOS or iOS target";
         return p;
     }
+    // `aarch64-ios-sim` and `aarch64-ios` share one OS and diverge only in
+    // `env` (triple.cppm's own words: "the simulator is deliberately not a
+    // row [of its own identity]"). Every place this member reads the
+    // simulator/device split reads it from here, once.
+    const bool isSim = isIos && (std::string(mcpp::target_env()) == "sim");
 
     // THE STAGED TREE IS OPTIONAL, AND THAT IS THE WHOLE FINDING.
     //
@@ -425,10 +547,43 @@ inline plan plan_for(options opt = {}) {
     const std::string executableName = stage.empty()
         ? target : bundle_executable_name(launcher);
 
-    if (!opt.icon.empty() && !is_file(opt.icon)) {
-        std::cerr << std::format("mcpp.dist.apple: the icon {} was not found", opt.icon) << '\n';
-        p.reason = "icon not found";
-        return p;
+    // macOS: `options::icon` is a FILE. iOS: it is a DIRECTORY of flat PNGs
+    // (see the `options::icon` comment and the header's icon paragraph) --
+    // two different validations of the same field, because the two
+    // platforms' icon conventions are not the same shape and this member
+    // does not invent a third field to hold the distinction.
+    std::vector<std::string> iosIconStems;
+    if (!opt.icon.empty()) {
+        if (isIos) {
+            std::error_code ec;
+            if (!std::filesystem::is_directory(opt.icon, ec)) {
+                std::cerr << std::format(
+                    "mcpp.dist.apple: the iOS icon {} is not a directory. "
+                    "Set `options::icon` to a directory of flat PNGs "
+                    "(one per size Apple's Home Screen and Settings need); "
+                    "this member lists their stems under `CFBundleIcons` "
+                    "and does not generate sizes itself.", opt.icon) << '\n';
+                p.reason = "icon is not a directory";
+                return p;
+            }
+            for (auto const& e : std::filesystem::directory_iterator(opt.icon, ec)) {
+                if (ec) break;
+                if (e.is_regular_file(ec) && e.path().extension() == ".png")
+                    iosIconStems.push_back(e.path().stem().string());
+            }
+            std::sort(iosIconStems.begin(), iosIconStems.end());
+            if (iosIconStems.empty()) {
+                std::cerr << std::format(
+                    "mcpp.dist.apple: the icon directory {} carries no "
+                    "*.png files.", opt.icon) << '\n';
+                p.reason = "icon directory carries no PNGs";
+                return p;
+            }
+        } else if (!is_file(opt.icon)) {
+            std::cerr << std::format("mcpp.dist.apple: the icon {} was not found", opt.icon) << '\n';
+            p.reason = "icon not found";
+            return p;
+        }
     }
     if (!opt.entitlements.empty() && !is_file(opt.entitlements)) {
         std::cerr << std::format(
@@ -451,12 +606,27 @@ inline plan plan_for(options opt = {}) {
     const std::string bundleId   = bundle_id_for(opt);
     const std::string bundlePath = !opt.output.empty() ? opt.output
                                   : (std::filesystem::path(opt.out_dir) / (name + ".app")).string();
-    const std::string contents   = bundlePath + "/Contents";
+    // FLAT ON iOS, `Contents/`-SHAPED ON macOS -- the one difference the
+    // header comment names, read here so every step below just names
+    // `execDir` / `plistDst` / `resourceDir` and never spells `Contents`
+    // itself. On macOS these are exactly the three paths this member wrote
+    // before iOS existed.
+    const std::string execDir     = isIos ? bundlePath : bundlePath + "/Contents/MacOS";
+    const std::string plistDst    = isIos ? bundlePath + "/Info.plist" : bundlePath + "/Contents/Info.plist";
+    const std::string resourceDir = isIos ? bundlePath : bundlePath + "/Contents/Resources";
 
-    const std::string iconName = opt.icon.empty() ? std::string()
-                                : std::filesystem::path(opt.icon).filename().string();
+    const std::string macIconName = (!isIos && !opt.icon.empty())
+        ? std::filesystem::path(opt.icon).filename().string() : std::string();
+    // #622 A11: the engine's own floor first, the option as a fallback --
+    // and only on iOS. See the `options::minimum_system_version` comment for
+    // why macOS does not take this fallback path.
+    const std::string engineMinVersion = mcpp::min_platform_version();
+    const std::string minOsVersion = isIos
+        ? (!engineMinVersion.empty() ? engineMinVersion : opt.minimum_system_version)
+        : opt.minimum_system_version;
     const std::string plistBytes = plist_document(executableName, bundleId, name, version,
-                                                  opt.minimum_system_version, iconName);
+                                                  isIos, isSim, minOsVersion,
+                                                  macIconName, iosIconStems);
     const std::string plistSrc = (std::filesystem::path(opt.out_dir) / (name + "-Info.plist")).string();
     if (!write_if_different(plistSrc, plistBytes)) {
         std::cerr << std::format("mcpp.dist.apple: cannot write {}", plistSrc) << '\n';
@@ -476,11 +646,11 @@ inline plan plan_for(options opt = {}) {
     info.id          = "mcpp.dist.apple.info-plist";
     info.role        = "artifact";
     info.description = "INFO.PLIST";
-    info.argv         = { "ditto", plistSrc, contents + "/Info.plist" };
+    info.argv         = { "ditto", plistSrc, plistDst };
     info.inputs       = { plistSrc };
-    info.output       = contents + "/Info.plist";
+    info.outputs      = { plistDst };
     p.steps.push_back(info);
-    assembled.push_back(info.output);
+    assembled.push_back(plistDst);
 
     step layout;
     layout.id          = "mcpp.dist.apple.layout";
@@ -504,27 +674,50 @@ inline plan plan_for(options opt = {}) {
     layout.argv         = stage.empty()
         ? std::vector<std::string>{ "ditto",
               std::format("${{mcpp.target_file:{}}}", target),
-              contents + "/MacOS/" + executableName }
-        : std::vector<std::string>{ "ditto", "${mcpp.stage_dir}",
-              contents + "/MacOS" };
+              execDir + "/" + executableName }
+        : std::vector<std::string>{ "ditto", "${mcpp.stage_dir}", execDir };
     layout.inputs       = { std::format("${{mcpp.target_file:{}}}", target) };
-    layout.output       = contents + "/MacOS/" + executableName;
+    layout.outputs      = { execDir + "/" + executableName };
     p.steps.push_back(layout);
-    assembled.push_back(layout.output);
+    assembled.push_back(execDir + "/" + executableName);
 
     if (!opt.icon.empty()) {
         step icon;
         icon.id          = "mcpp.dist.apple.icon";
         icon.role        = "artifact";
         icon.description = "APP ICON";
-        icon.argv         = { "ditto", opt.icon, contents + "/Resources/" + iconName };
-        icon.inputs       = { opt.icon };
-        icon.output       = contents + "/Resources/" + iconName;
+        if (isIos) {
+            // `ditto <dir> <dir>` copies SRC's CONTENTS into DST (see the
+            // header comment), so every PNG in `opt.icon` lands directly at
+            // the bundle root in one invocation -- the flat layout iOS
+            // wants, from a directory a project already has.
+            icon.argv   = { "ditto", opt.icon, resourceDir };
+            icon.inputs = { opt.icon };
+            for (auto const& stem : iosIconStems)
+                icon.outputs.push_back(resourceDir + "/" + stem + ".png");
+        } else {
+            icon.argv    = { "ditto", opt.icon, resourceDir + "/" + macIconName };
+            icon.inputs  = { opt.icon };
+            icon.outputs = { resourceDir + "/" + macIconName };
+        }
         p.steps.push_back(icon);
-        assembled.push_back(icon.output);
+        for (auto const& o : icon.outputs) assembled.push_back(o);
     }
 
-    if (!opt.identity.empty()) {
+    // CODESIGN IS SKIPPED, NOT ATTEMPTED, ON THE SIMULATOR ROW -- see the
+    // header comment's signing paragraph. The warning fires at PLAN time
+    // (not only on the success path `submit`'s own floor check uses)
+    // because it is a property of the ROW and `options::identity`, decided
+    // before any action runs, and `mcpp::warning` is replayed on a cache hit
+    // like every other advisory this collection emits -- so it does not
+    // vanish the second time a project packs the same simulator build.
+    if (!opt.identity.empty() && isIos && isSim) {
+        mcpp::warning(
+            "mcpp.dist.apple: `options::identity` is ignored on the iOS "
+            "Simulator row -- simulator bundles install unsigned, and "
+            "codesign cannot produce a device-shaped signature for one. Set "
+            "identity for a device build (aarch64-ios) instead.");
+    } else if (!opt.identity.empty()) {
         step sign;
         sign.id          = "mcpp.dist.apple.codesign";
         sign.role        = "artifact";
@@ -543,10 +736,11 @@ inline plan plan_for(options opt = {}) {
         // codesign has no flag to write a receipt to an arbitrary path, so
         // this names the one file signing a BUNDLE (rather than a flat
         // Mach-O) is documented to write as part of embedding the signature:
-        // `Contents/_CodeSignature/CodeResources`, a manifest of the signed
-        // resources' hashes. This is documented Apple codesign behaviour,
-        // not something measured here -- codesign does not run on Linux.
-        sign.output = contents + "/_CodeSignature/CodeResources";
+        // `Contents/_CodeSignature/CodeResources` on macOS, and the same
+        // relative path under the bundle root on the iOS device row's flat
+        // layout. This is documented Apple codesign behaviour, not
+        // something measured here -- codesign does not run on Linux.
+        sign.outputs = { (isIos ? bundlePath : bundlePath + "/Contents") + "/_CodeSignature/CodeResources" };
         p.steps.push_back(sign);
     }
 
@@ -563,9 +757,9 @@ inline bool submit(const plan& p) {
         a.id          = s.id;
         a.role        = s.role;
         a.description = s.description;
-        for (auto const& tok : s.argv)   a.arg(tok.c_str());
-        for (auto const& in  : s.inputs) a.input(in.c_str());
-        a.output(s.output.c_str());
+        for (auto const& tok : s.argv)    a.arg(tok.c_str());
+        for (auto const& in  : s.inputs)  a.input(in.c_str());
+        for (auto const& out : s.outputs) a.output(out.c_str());
         a.submit();
     }
 
