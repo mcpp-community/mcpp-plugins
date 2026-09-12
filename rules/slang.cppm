@@ -325,9 +325,17 @@ inline bool write_header(const std::string& header, const std::string& inc) {
 
 // The path as `per_file` keys it and as `mcpp::device_sources()` lists it are
 // both package-relative, but one may have been typed on Windows and the other
-// derived there. Components are compared, not characters.
+// derived there: separators are unified and a leading `./` dropped before the
+// two are compared.
+//
+// Strings, not `std::filesystem::path`: this member must not instantiate the
+// path iterator -- see `mcpp::plugins::names::relative_to` for the compiler
+// that refuses it. The two normalisations this key needs are string operations.
 inline std::string key_of(std::string_view path) {
-    return std::filesystem::path(path).lexically_normal().generic_string();
+    std::string s(path);
+    for (auto& c : s) if (c == '\\') c = '/';
+    while (s.starts_with("./")) s.erase(0, 2);
+    return s;
 }
 
 inline bool compile(std::span<const std::string> shaders, options opt = {}) {
@@ -458,8 +466,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // Where a sidecar is found at run time: relative to the package root,
         // which is where `mcpp run` starts the program. The cost of that is
         // stated on `mcpp::plugins::surface::storage::sidecar`.
-        const auto sidecarName =
-            std::filesystem::path(spv).lexically_relative(root).generic_string();
+        const auto sidecarName = mcpp::plugins::names::relative_to(spv, root);
         items.push_back({ .identifier     = p.stem().string(),
                           .name_space     = ns,
                           .data_header    = headerRel,

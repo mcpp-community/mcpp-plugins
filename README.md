@@ -6,7 +6,7 @@ imports each one from `build.mcpp` under the module name the member declares.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.7.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.7.1", features = ["rules-spirv"], host-module = true }
 ```
 
 `[build-dependencies]`, not `[dependencies]`. The two keys answer separate
@@ -81,7 +81,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.7.0", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.7.1", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that
@@ -164,6 +164,15 @@ looks harmless.
 
 0.5.0, 0.5.1 and 0.5.2 do not move it. Naming an island's entry points is a
 change to what this package generates, not to what it asks the engine for.
+
+0.7.1 does not move it either, and records a compiler rather than an engine:
+under MSVC 14.52 (36629 and 36725, measured on xrgui's CI) a module that has
+instantiated `std::filesystem::path`'s iterator poisons every importer that
+touches `path` again -- `filesystem(1572): error C2801: '_Path_iterator<...>::operator =='
+must be a non-static member`. Nothing in this package instantiates that
+iterator now: the lib root reads paths apart as strings
+(`mcpp::plugins::names::components`), and the members' relative-path
+arithmetic is `mcpp::plugins::names::relative_to`.
 
 The previous shared floor was 2026.9.7.1, the release that reads
 `device_extensions` and `rule_module`, reports `[language] modules` and the
