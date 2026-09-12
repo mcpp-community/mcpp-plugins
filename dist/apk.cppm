@@ -1,5 +1,5 @@
 // mcpp.dist.apk -- an application target becomes an installable, signed
-// `.apk`.
+// `.apk`, with or without a Java host.
 //
 // WHY THIS IS NEITHER A RULE NOR A TOOL. A rule states how a translation unit
 // is compiled by a compiler mcpp does not drive. A tool states something the
@@ -9,22 +9,23 @@
 // and produces something a user installs. That is the third category
 // `dist/appimage.cppm` establishes.
 //
-// LEVEL 0: A NATIVE APPLICATION, NO JAVA. A `NativeActivity` application
-// needs no Java at all (`hasCode="false"`): the manifest, the native library
-// and whatever assets were deployed are enough. A later revision of this
-// member adds `options::java_sources` for a project that hosts its native
-// code from a Java/Kotlin activity instead (`javac`, `d8`, a real
-// `<activity>`); this revision compiles neither, and always names
-// `android.app.NativeActivity` as the manifest's activity.
+// LEVEL 0 AND LEVEL 1. A `NativeActivity` application needs no Java at all
+// (`hasCode="false"`): the manifest, the native library and whatever assets
+// were deployed are enough. `options::java_sources` adds a second tier --
+// `javac`, `d8`, a real `<activity>` -- for a project that hosts its native
+// code from a Java/Kotlin activity. Both tiers share every step below except
+// the two that compile and dex Java sources, which level 0 never submits.
 //
-// FIVE ACTIONS, ALWAYS IN THIS ORDER, UNDER THESE IDS -- `apk:manifest`
-// (resource compilation, submitted only when `options::resources` names a
-// directory -- there is nothing else this step could do without one),
+// FIVE ACTIONS, level 0, always in this order and under these ids -- `apk:
+// manifest` (resource compilation, submitted only when `options::resources`
+// names a directory -- there is nothing else this step could do without one),
 // `apk:link` (aapt2 turns the generated manifest, `-I android.jar` and the
 // optional compiled resources into an unsigned, unaligned `base.apk`),
 // `apk:libs` (the native library and the deployed assets join the archive --
 // aapt2 has no flag for this, so this step is `jar`, not aapt2), `apk:align`
-// (`zipalign`), `apk:sign` (`apksigner`).
+// (`zipalign`), `apk:sign` (`apksigner`). Level 1 adds `apk:javac` and
+// `apk:d8` between `apk:link` and `apk:libs`, and `apk:libs`'s own command
+// grows one more `-C` pair for `classes.dex`.
 //
 // WHAT `mcpp pack`'S OWN CLOSURE DOES NOT DO FOR THIS ROW, MEASURED. Android's
 // `run_shared_program` (mcpp.pack) stages the linked `.so` under the staged
@@ -112,6 +113,18 @@ struct options {
     // no resources at all -- a legal, common case for a NativeActivity
     // application that draws everything itself.
     std::string resources;
+
+    // LEVEL 1. A directory of `.java` sources this member compiles with
+    // `javac` and dexes with `d8`. Empty (the default) is level 0: no Java,
+    // `hasCode="false"`, `android.app.NativeActivity` as the manifest's
+    // activity.
+    std::string java_sources;
+
+    // LEVEL 1, REQUIRED WHEN `java_sources` IS SET. The fully-qualified
+    // activity class the manifest names as `<activity android:name>` and the
+    // launcher intent-filter targets. Ignored at level 0, where the activity
+    // is always `android.app.NativeActivity`.
+    std::string activity;
 
     // A package name (`ns:name`), never a path (rule 9, 2026-09-12 design
     // record): where the signing keystore comes from. Empty means
@@ -381,6 +394,23 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
+    if (opt.java_sources.empty() && !opt.activity.empty()) {
+        // Not fatal -- an explicit activity with no Java host is simply
+        // unused -- but the project almost certainly meant `java_sources`
+        // too, and level 0's activity is never a name this member reads.
+        mcpp::warning("mcpp.dist.apk: options::activity is set with no "
+                      "options::java_sources; level 0 always uses "
+                      "android.app.NativeActivity and ignores it");
+    }
+    if (!opt.java_sources.empty() && opt.activity.empty()) {
+        std::cerr << "mcpp.dist.apk: options::java_sources is set, so this "
+                     "is a level-1 (Java-hosted) package, and options::"
+                     "activity is required: the manifest has no other way "
+                     "to name the launchable activity.\n";
+        p.reason = "java_sources without activity";
+        return p;
+    }
+    const bool hasCode = !opt.java_sources.empty();
 
     // ── the payloads this member declared ──────────────────────────────
     const std::string buildTools = mcpp::xpkg_dir("xim", "android-build-tools");
@@ -426,18 +456,19 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
-    // `apksigner`: the JAVA_HOME/PATH wrapper `xim:android-build-tools`
+    // `apksigner`/`d8`: the JAVA_HOME/PATH wrapper `xim:android-build-tools`
     // itself writes under its own `bin/` (see that package's header) --
     // POSIX only, which is the coverage this member's fixture and CI both
-    // run under; a Windows consumer's `apksigner.bat` already honours
-    // `JAVA_HOME` through that package's own `config()` and needs no
+    // run under; a Windows consumer's `apksigner.bat`/`d8.bat` already
+    // honour `JAVA_HOME` through that package's own `config()` and need no
     // different path here.
     const std::string aapt2     = (fs::path(buildTools) / "aapt2").string();
     const std::string zipalign  = (fs::path(buildTools) / "zipalign").string();
     const std::string apksigner = (fs::path(buildTools) / "bin" / "apksigner").string();
+    const std::string d8        = (fs::path(buildTools) / "bin" / "d8").string();
     for (auto const& [name, path] : {
              std::pair{"aapt2", aapt2}, std::pair{"zipalign", zipalign},
-             std::pair{"apksigner", apksigner}}) {
+             std::pair{"apksigner", apksigner}, std::pair{"d8", d8}}) {
         if (!is_file(path)) {
             std::cerr << std::format(
                 "mcpp.dist.apk: {} was not found at {} -- {} does not look "
@@ -448,15 +479,13 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
-    // `jar`: NOT part of `xim:android-build-tools` (only `apksigner` and
-    // `d8` are wrapped there, see that package's header, and level 0 needs
-    // neither `d8`) -- comes from `xim:jdk-temurin` directly, declared on
-    // this member's own table rather than assumed reachable through
-    // android-build-tools' runtime dependency, which provisions the JDK for
-    // ITS OWN wrappers and does not make it visible to a consumer's build
-    // program (docs/31, "declare the tool where it will be looked up").
-    // `aapt2 link` cannot add `lib/<abi>/` entries to an APK, so this
-    // member's own packaging step (`apk:libs`) is `jar`, not aapt2.
+    // `javac`/`jar`: NEITHER is part of `xim:android-build-tools` (only
+    // `apksigner` and `d8` are wrapped there, see that package's header) --
+    // both come from `xim:jdk-temurin` directly, declared on this member's
+    // own table rather than assumed reachable through android-build-tools'
+    // runtime dependency, which provisions the JDK for ITS OWN wrappers and
+    // does not make it visible to a consumer's build program (docs/31,
+    // "declare the tool where it will be looked up").
     const std::string jdkHome = mcpp::xpkg_dir("xim", "jdk-temurin");
     if (jdkHome.empty()) {
         std::cerr << "mcpp.dist.apk: xim:jdk-temurin was not found "
@@ -465,13 +494,16 @@ inline plan plan_for(options opt = {}) {
         p.reason = "jdk-temurin not found";
         return p;
     }
-    const std::string jar = (fs::path(jdkHome) / "bin" / "jar").string();
-    if (!is_file(jar)) {
-        std::cerr << std::format(
-            "mcpp.dist.apk: jar was not found at {} -- {} does not look "
-            "like a JDK payload", jar, jdkHome) << '\n';
-        p.reason = "jar not found";
-        return p;
+    const std::string javac = (fs::path(jdkHome) / "bin" / "javac").string();
+    const std::string jar   = (fs::path(jdkHome) / "bin" / "jar").string();
+    for (auto const& [name, path] : {std::pair{"javac", javac}, std::pair{"jar", jar}}) {
+        if (!is_file(path)) {
+            std::cerr << std::format(
+                "mcpp.dist.apk: {} was not found at {} -- {} does not look "
+                "like a JDK payload", name, path, jdkHome) << '\n';
+            p.reason = std::format("{} not found", name);
+            return p;
+        }
     }
 
     // ── signing: a keystore, an alias and a password ───────────────────
@@ -538,10 +570,7 @@ inline plan plan_for(options opt = {}) {
     // ── the manifest and the run sidecar, written now (plan time) ─────────
     const std::string appId = application_id_for(opt, target);
     const std::string label = label_for(opt);
-    // Level 0 only in this revision: no Java host, so the manifest's
-    // activity is always the platform's own `NativeActivity`.
-    const std::string activityName = "android.app.NativeActivity";
-    const bool hasCode = false;
+    const std::string activityName = hasCode ? opt.activity : std::string("android.app.NativeActivity");
 
     const std::string manifestPath = (fs::path(opt.out_dir) / "dist-apk" / "AndroidManifest.xml").string();
     if (!write_if_different(manifestPath,
@@ -586,10 +615,13 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
-    // ── the small helper script this pipeline needs (argv only, no
+    // ── the small helper scripts this pipeline needs (argv only, no
     // shell): one that copies the archive, folds in whatever
     // `mcpp::deploy` placed beside the link output, and hands the result to
-    // `jar` ──────────────────────────────────────────────────────────────
+    // `jar`; one that stamps a directory-shaped tool's success (docs/30:
+    // "you must name the output files", and javac's own output set -- one
+    // .class per top-level AND per inner class -- is not knowable at plan
+    // time) ─────────────────────────────────────────────────────────────
     const fs::path helpersDir = fs::path(opt.out_dir) / "dist-apk";
     const std::string copyThenJar = (helpersDir / "copy-then-jar.sh").string();
     write_if_different(copyThenJar,
@@ -610,6 +642,39 @@ inline plan plan_for(options opt = {}) {
         "fi\n"
         "\"$jar\" uf \"$dst\" \"$@\"\n");
     { std::error_code ec; fs::permissions(copyThenJar,
+        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+        fs::perm_options::add, ec); }
+    const std::string runAndStamp = (helpersDir / "run-and-stamp.sh").string();
+    write_if_different(runAndStamp,
+        "#!/bin/sh\n"
+        "set -e\n"
+        "stamp=\"$1\"; shift\n"
+        "\"$@\"\n"
+        "mkdir -p \"$(dirname \"$stamp\")\"\n"
+        "touch \"$stamp\"\n");
+    { std::error_code ec; fs::permissions(runAndStamp,
+        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+        fs::perm_options::add, ec); }
+    // `d8` DOES NOT ACCEPT A DIRECTORY, MEASURED (2026-09-12, d8 9.2.4,
+    // `xim:android-build-tools` 37.0.0): `d8 --output <dir> <classesDir>`
+    // fails in the tool itself, `Unsupported source file type`, one frame
+    // into `BaseCommand$Builder.addProgramFiles`. javac's own output set is
+    // not knowable at plan time (see above), so this wrapper finds the
+    // `.class` files `d8`'s command line needs at COMMAND time instead --
+    // the identical "find" this member already had to reach for `assets/`.
+    const std::string runD8 = (helpersDir / "run-d8.sh").string();
+    write_if_different(runD8,
+        "#!/bin/sh\n"
+        "# mcpp.dist.apk helper. Do not edit.\n"
+        "set -e\n"
+        "d8=\"$1\"; classesdir=\"$2\"; shift 2\n"
+        "classes=$(find \"$classesdir\" -name '*.class')\n"
+        "if [ -z \"$classes\" ]; then\n"
+        "    echo \"run-d8.sh: no .class file under $classesdir\" >&2\n"
+        "    exit 1\n"
+        "fi\n"
+        "\"$d8\" \"$@\" $classes\n");
+    { std::error_code ec; fs::permissions(runD8,
         fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
         fs::perm_options::add, ec); }
 
@@ -650,6 +715,58 @@ inline plan plan_for(options opt = {}) {
     p.steps.push_back(link);
     std::string apkPath = link.output;
 
+    std::vector<std::string> javaOutputs; // classes.dex, when level 1
+    if (hasCode) {
+        if (!is_dir(opt.java_sources)) {
+            std::cerr << std::format(
+                "mcpp.dist.apk: options::java_sources '{}' is not a "
+                "directory", opt.java_sources) << '\n';
+            p.reason = "java_sources directory not found";
+            return p;
+        }
+        std::vector<std::string> javaFiles;
+        { std::error_code ec;
+          for (auto& e : fs::recursive_directory_iterator(opt.java_sources, ec)) {
+              if (ec) break;
+              if (e.is_regular_file(ec) && e.path().extension() == ".java")
+                  javaFiles.push_back(e.path().string());
+          }
+        }
+        if (javaFiles.empty()) {
+            std::cerr << std::format(
+                "mcpp.dist.apk: options::java_sources '{}' carries no .java "
+                "file", opt.java_sources) << '\n';
+            p.reason = "no .java sources";
+            return p;
+        }
+        mcpp::rerun_if_changed_glob((opt.java_sources + "/**/*.java").c_str());
+
+        const std::string classesDir = (outDir / "classes").string();
+        step javacStep;
+        javacStep.id = "apk:javac";
+        javacStep.role = "artifact";
+        javacStep.description = "JAVAC";
+        javacStep.output = classesDir + "/.stamp";
+        javacStep.argv = { runAndStamp, javacStep.output, javac,
+                          "-source", "17", "-target", "17",
+                          "-cp", androidJar, "-d", classesDir };
+        for (auto const& f : javaFiles) javacStep.argv.push_back(f);
+        javacStep.inputs = javaFiles;
+        javacStep.inputs.push_back(androidJar);
+        p.steps.push_back(javacStep);
+
+        const std::string dexDir = (outDir / "dex").string();
+        step d8Step;
+        d8Step.id = "apk:d8";
+        d8Step.role = "artifact";
+        d8Step.description = "D8";
+        d8Step.output = dexDir + "/classes.dex";
+        d8Step.argv = { runD8, d8, classesDir, "--min-api", minSdk, "--lib", androidJar,
+                       "--output", dexDir };
+        d8Step.inputs = { javacStep.output, androidJar };
+        p.steps.push_back(d8Step);
+        javaOutputs.push_back(d8Step.output);
+    }
 
     // ── native library and assets join the archive ─────────────────────
     step libs;
@@ -661,8 +778,14 @@ inline plan plan_for(options opt = {}) {
                  work.string(), "${mcpp.bin_dir}",
                  "-C", work.string(), "lib",
                  "-C", work.string(), "assets" };
+    if (!javaOutputs.empty()) {
+        libs.argv.push_back("-C");
+        libs.argv.push_back((outDir / "dex").string());
+        libs.argv.push_back("classes.dex");
+    }
     libs.inputs = { apkPath, runJsonPath };
     for (auto const& f : libInputs) libs.inputs.push_back(f);
+    for (auto const& f : javaOutputs) libs.inputs.push_back(f);
     p.steps.push_back(libs);
 
     step align;
