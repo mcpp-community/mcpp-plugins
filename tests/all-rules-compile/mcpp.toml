@@ -43,7 +43,7 @@ plugins = { path = "../..", features = [
   "rules-ascendc", "rules-cuda", "rules-hip", "rules-slang", "rules-spirv",
   "rules-sycl",
   "tools-embed", "tools-island",
-  "dist-appimage", "dist-wix", "dist-apple", "dist-web",
+  "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns

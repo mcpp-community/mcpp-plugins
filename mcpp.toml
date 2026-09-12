@@ -164,6 +164,8 @@ implies = ["surface"]
 
 [features.dist-web]
 sources = ["dist/web.cppm"]
+[features.dist-apk]
+sources = ["dist/apk.cppm"]
 implies = ["surface"]
 
 [features.tools-embed]
@@ -390,6 +392,47 @@ implies           = ["surface"]
 # `dist-apple` declares no payload for `codesign`: it is part of Xcode, which is
 # not redistributable, so the member locates it and says where it looked. The
 # open-source `rcodesign` is the package that would replace that lookup.
+
+# ── The environment `dist-apk` needs ───────────────────────────────────────
+#
+# THE GATE IS THE TARGET ENVIRONMENT, NOT AN ACCELERATOR. `env = "android"` is
+# a property of `--target`, resolved before provisioning runs, exactly the
+# axis `dist-wix` gates its own payload on (`target.windows`) rather than a
+# feature-only gate: a non-Android build must install none of this even when
+# the feature is named, the same "two gates, and both must open before a byte
+# is downloaded" shape the accelerator rules use, applied to the target axis
+# instead.
+#
+# FOUR PACKAGES, EACH OWNED BY A DIFFERENT HALF OF THE PIPELINE. `aapt2`,
+# `zipalign`, and the `apksigner`/`d8` wrappers all live in one archive
+# (`xim:android-build-tools`); `android.jar` is versioned by API level on its
+# own (`xim:android-platform`) because that is the number a project pins, not
+# a build-tools release; `xim:jdk-temurin` is declared here directly for
+# `javac`/`jar`, which `xim:android-build-tools`' own runtime dependency
+# provisions for ITS OWN wrappers without making visible to a consumer's
+# build program (docs/31, "declare the tool where it will be looked up");
+# `xim:android-debug-keystore` is the published debug-signing convention, a
+# data file rather than a program, resolved the identical way.
+#
+# A FLOOR FOR THE TOOLS, AN EXACT VERSION FOR THE JDK AND THE PLATFORM. The
+# build-tools release is coupled to nothing this rule can see -- newer is
+# simply newer, as `dist-appimage`'s own `>=1.9.1` argues for `appimagetool`.
+# `xim:jdk-temurin` is pinned to the exact store key `xim:android-build-
+# tools`'s own runtime dependency resolves (`25.0.4+7`, not the alias
+# `25.0.4`): that package's header records a resolver defect where an alias
+# key can be handed back as a dependency's "version" and joined to a store
+# path that does not exist, and this rule's own tools inherit the identical
+# hazard if they pin the alias. `xim:android-platform`'s table is keyed by
+# alias too (`"35" = { ref = "35-r2" }`), so this declares the resolved key
+# directly for the same reason -- `targetSdkVersion` is read back from the
+# directory this entry resolves to (`api_level_from_platform_dir`), so an
+# alias that silently failed to resolve would surface as a build-time
+# refusal rather than a wrong number, but there is no reason to court it.
+[target.'cfg(env = "android")'.feature-xlings.dist-apk]
+"xim:android-build-tools"     = ">=37.0.0"
+"xim:android-platform"        = "35-r2"
+"xim:jdk-temurin"             = "25.0.4+7"
+"xim:android-debug-keystore"  = "1.0.0"
 
 [targets.plugins]
 kind = "lib"

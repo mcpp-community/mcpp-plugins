@@ -1083,6 +1083,48 @@ jobs:
       - name: dist-web produces a static directory, and node runs it
         working-directory: tests/web-consumer
         run: MCPP="$MCPP" ./check-web-plan.sh
+      # `kind = "app"` on `*-linux-android` links a shared object (#622 A3),
+      # so this fixture's own toolchain resolution provisions `xim:android-
+      # ndk` for `--target x86_64-linux-android` exactly as mcpp's own CI
+      # does; `dist-apk` provisions the four payloads on its own
+      # `feature-xlings.dist-apk` table (`xim:android-build-tools`, `xim:
+      # android-platform`, `xim:jdk-temurin`, `xim:android-debug-keystore`).
+      # NOT YET GREEN under this job's pinned `MCPP_VERSION`: `kind = "app"`
+      # and `mcpp::min_platform_version()` are #622 engine additions, and
+      # this step needs the release that carries them (see this repository's
+      # README, `dist-apk`'s own row) -- raising the pin is P5's own change,
+      # together with the rest of this collection's release.
+      - name: dist-apk produces a signed APK, level 0 and level 1
+        working-directory: tests/apk-consumer
+        run: |
+          "$MCPP" build --target x86_64-linux-android
+          "$MCPP" pack --format apk --target x86_64-linux-android | tee pack.log
+          apk=$(find target -name 'apk-consumer.apk' | head -1)
+          test -n "$apk" || { cat pack.log; echo "FAIL: no apk-consumer.apk"; exit 1; }
+
+          BT=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-android-build-tools" -mindepth 1 -maxdepth 1 -type d | head -1)
+          JDK=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-jdk-temurin" -mindepth 1 -maxdepth 1 -type d | head -1)
+          AAPT2="$BT/aapt2"
+          APKSIGNER="$BT/bin/apksigner"
+          JAR="$JDK/bin/jar"
+
+          "$APKSIGNER" verify --print-certs "$apk" 2>/dev/null | tee verify.log
+          grep -q 'CN=Android Debug' verify.log \
+            || { echo "FAIL: not signed with the debug key"; exit 1; }
+
+          "$JAR" tf "$apk" | tee listing.log
+          for f in "lib/x86_64/libapk-consumer.so" "assets/mcpp-run.json" \
+                   "AndroidManifest.xml" "assets/generated/res.bin"; do
+            grep -qxF "$f" listing.log \
+              || { echo "FAIL: the apk does not list $f"; exit 1; }
+          done
+
+          "$AAPT2" dump badging "$apk" 2>/dev/null | tee badging.log
+          grep -q "^package: name='" badging.log \
+            || { echo "FAIL: aapt2 could not read the package name"; exit 1; }
+          grep -q "sdkVersion:'24'" badging.log \
+            || { echo "FAIL: minSdkVersion is not 24 (this fixture's own min_api_level)"; exit 1; }
+          echo "ok: dist-apk level 0 -- a signed, aapt2-readable APK carrying the native library, the deployed asset and the run sidecar"
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
