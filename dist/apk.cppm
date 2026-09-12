@@ -109,16 +109,46 @@ struct options {
     // `<application android:label>`. Empty means the package name.
     std::string label;
 
+    // A project file, package-root-relative, that replaces the built-in
+    // manifest. Six tokens are substituted verbatim wherever they appear --
+    // `{{application_id}}`, `{{label}}`, `{{activity}}`, `{{lib_name}}`,
+    // `{{min_sdk}}`, `{{target_sdk}}` -- and everything else in the file is
+    // the project's, verbatim: permissions, receivers, meta-data, an icon,
+    // an activity-alias, `configChanges`. This member adds nothing to it
+    // (design record `2026-09-13-four-upstream-asks-from-a-ui-framework.md`,
+    // §3.2).
+    //
+    // THREE TOKENS ARE REQUIRED, NOT MERELY SUBSTITUTED, because their value
+    // is also written to `assets/mcpp-run.json`, which `adb-run` reads to
+    // start the application without `aapt2` on the machine that runs it: a
+    // template missing `{{application_id}}` or `{{activity}}` is refused at
+    // plan time, naming the token and that reader; `{{lib_name}}` joins them
+    // at level 0 (`java_sources` empty), because the manifest's own
+    // `<meta-data>` element is the only place the loaded library's name is
+    // recorded. An unknown `{{...}}` token is refused too, naming it -- see
+    // the render function below for why that check belongs to this member
+    // and is not proposed for `dist-web`.
+    //
+    // Empty means the built-in default, which is `manifest_xml`'s own 0.8.0
+    // output expressed with these tokens; level 0 with no template renders a
+    // manifest byte-identical to 0.8.0's (`tests/apk-consumer`).
+    std::string manifest_template;
+
     // A `res/`-shaped directory `aapt2 compile --dir` compiles. Empty means
     // no resources at all -- a legal, common case for a NativeActivity
     // application that draws everything itself.
     std::string resources;
 
-    // LEVEL 1. A directory of `.java` sources this member compiles with
-    // `javac` and dexes with `d8`. Empty (the default) is level 0: no Java,
-    // `hasCode="false"`, `android.app.NativeActivity` as the manifest's
-    // activity.
-    std::string java_sources;
+    // LEVEL 1. One or more directories of `.java` sources; one `javac` over
+    // every root's files and one `d8` over the result (the member compiles
+    // what it is given, and a second root is more of the same input, not a
+    // second step). A project with a path-dependency framework that also
+    // hosts Java lists that dependency's own directory alongside its own
+    // rather than merging the two trees itself. Empty (the default) is
+    // level 0: no Java, `hasCode="false"`, `android.app.NativeActivity` as
+    // the manifest's activity. A single string is still accepted in a
+    // `build.mcpp`: a one-element initialiser list is the same spelling.
+    std::vector<std::string> java_sources;
 
     // LEVEL 1, REQUIRED WHEN `java_sources` IS SET. The fully-qualified
     // activity class the manifest names as `<activity android:name>` and the
@@ -178,6 +208,40 @@ inline bool is_file(const std::string& p) {
 inline bool is_dir(const std::string& p) {
     std::error_code ec;
     return !p.empty() && fs::is_directory(p, ec);
+}
+
+// Is `root` under the package root, `mcpp::manifest_dir()`, and if so, what
+// is its manifest-relative form? A project root is declared with
+// `rerun_if_changed_glob` below (a file appearing there re-runs the build
+// program); a dependency root is not -- its file set changes only with the
+// dependency's version, already in the build's fingerprint, and the glob's
+// own walk does not reach outside the package root regardless (design
+// record §3.3). Same shape as `mcpp.tools.island`'s overlap check:
+// `weakly_canonical` plus `lexically_relative`, never the iterator that
+// poisons an importer under GCC 16 / MSVC (`mcpp::plugins::names::
+// relative_to`'s own header) -- safe here because this member is its own
+// module and imports no sibling that would inherit the instantiation.
+//
+// THE RETURNED PATH IS MANIFEST-RELATIVE, NOT ABSOLUTE, BECAUSE THE GLOB
+// PATTERN MUST BE. The engine matches a glob by comparing the CANDIDATE made
+// relative to the package root against the pattern
+// (`modules/manifest/src/glob.cppm`, `path_matches_glob`); an absolute
+// pattern is compared against a relative candidate and never matches
+// anything, so the fingerprint is always the empty set and a `.java` file
+// appearing never changes it -- the criterion's "no" reading as silence
+// (design record, rule 8). `opt.java_sources`'s own roots are absolute
+// (`mcpp::manifest_dir()` composed with a subdirectory), so declaring the
+// glob with `root` itself, not this function's return value, was exactly
+// that defect.
+inline std::optional<std::string> root_in_project(const std::string& root) {
+    std::error_code ec;
+    const auto a = fs::weakly_canonical(root, ec);
+    if (ec) return std::nullopt;
+    const auto b = fs::weakly_canonical(mcpp::manifest_dir(), ec);
+    if (ec) return std::nullopt;
+    const auto rel = a.lexically_relative(b).generic_string();
+    if (rel.empty() || rel.starts_with("..")) return std::nullopt;
+    return rel;
 }
 
 inline bool write_if_different(const fs::path& path, std::string_view bytes) {
@@ -311,22 +375,81 @@ inline std::string api_level_from_platform_dir(const std::string& dir) {
     return digits;
 }
 
-inline std::string manifest_xml(const std::string& app_id, const std::string& label,
-                                const std::string& min_sdk, const std::string& target_sdk,
-                                const std::string& target, bool has_code,
-                                const std::string& activity_name) {
-    std::string a = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+inline std::string replace_all_copy(std::string s, std::string_view from, std::string_view to) {
+    if (from.empty()) return s;
+    std::size_t pos = 0;
+    while ((pos = s.find(from, pos)) != std::string::npos) {
+        s.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return s;
+}
+
+// The six tokens a manifest template may use.
+inline const std::vector<std::string>& manifest_tokens() {
+    static const std::vector<std::string> v = {
+        "application_id", "label", "activity", "lib_name", "min_sdk", "target_sdk"};
+    return v;
+}
+
+// Every `{{...}}` a template names, in first-appearance order, duplicates
+// dropped -- what both checks in `render_manifest` below read.
+inline std::vector<std::string> tokens_in(const std::string& text) {
+    std::vector<std::string> out;
+    std::size_t i = 0;
+    while ((i = text.find("{{", i)) != std::string::npos) {
+        const auto close = text.find("}}", i + 2);
+        if (close == std::string::npos) break;
+        std::string name = text.substr(i + 2, close - (i + 2));
+        if (std::ranges::find(out, name) == out.end()) out.push_back(std::move(name));
+        i = close + 2;
+    }
+    return out;
+}
+
+// The tokens `assets/mcpp-run.json` is ALSO written from -- a template that
+// omits one silently ships a run sidecar the manifest disagrees with.
+// `application_id` and `activity` are required unconditionally; `lib_name`
+// joins them at level 0, where the manifest's own `<meta-data>` element is
+// the only place the loaded library's name is recorded.
+inline std::vector<std::string> required_manifest_tokens(bool has_code) {
+    std::vector<std::string> v = {"application_id", "activity"};
+    if (!has_code) v.push_back("lib_name");
+    return v;
+}
+
+// THE BUILT-IN DEFAULT, EXPRESSED WITH THE TOKENS. This is `manifest_xml`'s
+// 0.8.0 output verbatim, with every literal value it used to compute
+// replaced by the token that value now comes through -- so level 0 with no
+// project template renders byte-identical to what 0.8.0 wrote
+// (`tests/apk-consumer`). `{{activity}}` carries the level-0 constant
+// (`android.app.NativeActivity`) as well as a level-1 project's own class,
+// because the run sidecar needs the activity name at both levels and the
+// required-token check reads the TEMPLATE TEXT, not the level -- so the same
+// token has to appear on both of this function's two branches.
+// `{{lib_name}}`'s `<meta-data>` element exists only at level 0: it
+// announces which shared object `NativeActivity` should load, and a
+// Java-hosted activity finds its own native library another way.
+//
+// NO XML COMMENT MARKS THE THREE REQUIRED TOKENS IN THIS STRING, ON PURPOSE:
+// this exact text is compared byte-for-byte against 0.8.0's output, which
+// carried none, and a template with no author to read a comment gains
+// nothing from one. The design record's "mark the required tokens" is done
+// here instead, in the `REQUIRED` labels on the C++ lines that build them.
+inline std::string default_manifest_template(bool has_code) {
+    std::string a =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
-        "    package=\"" + app_id + "\">\n"
-        "    <uses-sdk android:minSdkVersion=\"" + min_sdk +
-        "\" android:targetSdkVersion=\"" + target_sdk + "\"/>\n"
-        "    <application android:label=\"" + label + "\" android:hasCode=\"" +
-        (has_code ? "true" : "false") + "\">\n"
-        "        <activity android:name=\"" + activity_name +
-        "\" android:exported=\"true\">\n";
+        "    package=\"{{application_id}}\">\n"                     // REQUIRED
+        "    <uses-sdk android:minSdkVersion=\"{{min_sdk}}\" "
+        "android:targetSdkVersion=\"{{target_sdk}}\"/>\n"
+        "    <application android:label=\"{{label}}\" android:hasCode=\"" +
+        std::string(has_code ? "true" : "false") + "\">\n"
+        "        <activity android:name=\"{{activity}}\" "          // REQUIRED
+        "android:exported=\"true\">\n";
     if (!has_code) {
         a += "            <meta-data android:name=\"android.app.lib_name\" "
-             "android:value=\"" + target + "\"/>\n";
+             "android:value=\"{{lib_name}}\"/>\n";                  // REQUIRED at level 0
     }
     a += "            <intent-filter>\n"
          "                <action android:name=\"android.intent.action.MAIN\"/>\n"
@@ -336,6 +459,54 @@ inline std::string manifest_xml(const std::string& app_id, const std::string& la
          "    </application>\n"
          "</manifest>\n";
     return a;
+}
+
+// Checks a manifest template and substitutes it, or refuses (returning
+// `false` with `reason` set) naming exactly what is wrong.
+//
+// THIS CHECK IS `dist-apk`'S OWN, DELIBERATELY NOT `dist-web`'S. A manifest
+// has a closed, six-token vocabulary this member itself defines; a web page
+// template may legitimately carry `{{ }}` for a front-end framework (Vue,
+// Mustache, ...) this member never reads, so `dist-web` leaves an unknown
+// token literal for that project's own tooling to read. An unknown token
+// here would otherwise reach `aapt2` unsubstituted and fail there with a
+// worse message, and the refusal belongs where the name is known -- the same
+// rule read against two different facts, not an inconsistency between the
+// two members.
+inline bool render_manifest(const std::string& templateText, bool has_code,
+                            const std::string& appId, const std::string& label,
+                            const std::string& activityName, const std::string& libName,
+                            const std::string& minSdk, const std::string& targetSdk,
+                            std::string& out, std::string& reason) {
+    for (auto const& tok : tokens_in(templateText)) {
+        if (std::ranges::find(manifest_tokens(), tok) == manifest_tokens().end()) {
+            std::cerr << "mcpp.dist.apk: the manifest template names an unknown "
+                         "token '{{" << tok << "}}' -- expected one of "
+                         "application_id, label, activity, lib_name, min_sdk, "
+                         "target_sdk\n";
+            reason = "unknown manifest template token '" + tok + "'";
+            return false;
+        }
+    }
+    for (auto const& tok : required_manifest_tokens(has_code)) {
+        if (templateText.find("{{" + tok + "}}") == std::string::npos) {
+            std::cerr << "mcpp.dist.apk: the manifest template does not use "
+                         "'{{" << tok << "}}', and assets/mcpp-run.json -- "
+                         "which adb-run starts the application from -- is "
+                         "written from the same value: add {{" << tok
+                      << "}} to the template.\n";
+            reason = "manifest template missing required token '" + tok + "'";
+            return false;
+        }
+    }
+    out = templateText;
+    out = replace_all_copy(std::move(out), "{{application_id}}", appId);
+    out = replace_all_copy(std::move(out), "{{label}}", label);
+    out = replace_all_copy(std::move(out), "{{activity}}", activityName);
+    out = replace_all_copy(std::move(out), "{{lib_name}}", libName);
+    out = replace_all_copy(std::move(out), "{{min_sdk}}", minSdk);
+    out = replace_all_copy(std::move(out), "{{target_sdk}}", targetSdk);
+    return true;
 }
 
 inline std::string run_json(const std::string& app_id, const std::string& activity_name) {
@@ -624,9 +795,36 @@ inline plan plan_for(options opt = {}) {
     const std::string label = label_for(opt);
     const std::string activityName = hasCode ? opt.activity : std::string("android.app.NativeActivity");
 
+    std::string manifestTemplateText;
+    if (!opt.manifest_template.empty()) {
+        const std::string tplPath =
+            (fs::path(mcpp::manifest_dir()) / opt.manifest_template).string();
+        if (!is_file(tplPath)) {
+            std::cerr << std::format(
+                "mcpp.dist.apk: the manifest template {} was not found", tplPath) << '\n';
+            p.reason = "manifest template not found";
+            return p;
+        }
+        // The template is declared so an edit to it reaches the graph -- the
+        // one thing the ask's workaround (overwriting the manifest after
+        // `plan_for()` returns) cannot do, because it depends on this
+        // member's own internal path.
+        mcpp::rerun_if_changed(tplPath.c_str());
+        std::ifstream in(tplPath, std::ios::binary);
+        manifestTemplateText.assign((std::istreambuf_iterator<char>(in)),
+                                    std::istreambuf_iterator<char>());
+    } else {
+        manifestTemplateText = default_manifest_template(hasCode);
+    }
+
+    std::string manifestBytes;
+    if (!render_manifest(manifestTemplateText, hasCode, appId, label, activityName,
+                         target, minSdk, targetSdk, manifestBytes, p.reason)) {
+        return p;
+    }
+
     const std::string manifestPath = (fs::path(opt.out_dir) / "dist-apk" / "AndroidManifest.xml").string();
-    if (!write_if_different(manifestPath,
-            manifest_xml(appId, label, minSdk, targetSdk, target, hasCode, activityName))) {
+    if (!write_if_different(manifestPath, manifestBytes)) {
         std::cerr << std::format("mcpp.dist.apk: cannot write {}", manifestPath) << '\n';
         p.reason = "cannot write AndroidManifest.xml";
         return p;
@@ -806,29 +1004,55 @@ inline plan plan_for(options opt = {}) {
 
     std::vector<std::string> javaOutputs; // classes.dex, when level 1
     if (hasCode) {
-        if (!is_dir(opt.java_sources)) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: options::java_sources '{}' is not a "
-                "directory", opt.java_sources) << '\n';
-            p.reason = "java_sources directory not found";
-            return p;
-        }
+        // ONE `javac` OVER EVERY ROOT'S `.java` FILES. The member compiles
+        // what it is given (design record §3.3) and a second root is more of
+        // the same input, not a second step -- `javaFiles` below is one flat
+        // list across every root, and one `javac` invocation compiles all of
+        // it into one `classesDir`, exactly as it did over one root before.
         std::vector<std::string> javaFiles;
-        { std::error_code ec;
-          for (auto& e : fs::recursive_directory_iterator(opt.java_sources, ec)) {
-              if (ec) break;
-              if (e.is_regular_file(ec) && e.path().extension() == ".java")
-                  javaFiles.push_back(e.path().string());
-          }
+        for (auto const& root : opt.java_sources) {
+            if (!is_dir(root)) {
+                std::cerr << std::format(
+                    "mcpp.dist.apk: options::java_sources root '{}' is not a "
+                    "directory", root) << '\n';
+                p.reason = "java_sources directory not found";
+                return p;
+            }
+            const std::size_t before = javaFiles.size();
+            { std::error_code ec;
+              for (auto& e : fs::recursive_directory_iterator(root, ec)) {
+                  if (ec) break;
+                  if (e.is_regular_file(ec) && e.path().extension() == ".java")
+                      javaFiles.push_back(e.path().string());
+              }
+            }
+            if (javaFiles.size() == before) {
+                std::cerr << std::format(
+                    "mcpp.dist.apk: options::java_sources root '{}' carries "
+                    "no .java file", root) << '\n';
+                p.reason = "no .java sources";
+                return p;
+            }
+            // THE RE-RUN QUESTION (design record §3.3). `glob_fingerprint`
+            // walks the PACKAGE ROOT and matches paths relative to it; a
+            // root outside that walk (a dependency's unpack directory)
+            // matches nothing, and the fingerprint would be the same as "no
+            // files" -- a criterion whose "no" reads as silence. So a
+            // project root (under `mcpp::manifest_dir()`) is declared with
+            // the glob, as today; a dependency root is not: its file set
+            // changes only with the dependency's version, already in the
+            // build's fingerprint, and each of its files is already an
+            // input of the `javac` action below.
+            //
+            // THE PATTERN IS MANIFEST-RELATIVE (`root_in_project`'s return
+            // value), NOT `root` ITSELF, which is absolute: the engine's
+            // glob fingerprint compares each candidate file made relative to
+            // the package root against the pattern, so an absolute pattern
+            // is compared against a relative candidate and never matches --
+            // see `root_in_project`'s own header for the measurement.
+            if (auto rel = root_in_project(root))
+                mcpp::rerun_if_changed_glob((*rel + "/**/*.java").c_str());
         }
-        if (javaFiles.empty()) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: options::java_sources '{}' carries no .java "
-                "file", opt.java_sources) << '\n';
-            p.reason = "no .java sources";
-            return p;
-        }
-        mcpp::rerun_if_changed_glob((opt.java_sources + "/**/*.java").c_str());
 
         const std::string classesDir = (outDir / "classes").string();
         step javacStep;

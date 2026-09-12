@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fixture for criterion (c): every required token but the application id
+     one, replaced here with a literal package name. dist-apk must refuse
+     this at plan time, naming the missing token and assets/mcpp-run.json. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.mcpp.apkconsumer.fixed">
+    <uses-sdk android:minSdkVersion="{{min_sdk}}" android:targetSdkVersion="{{target_sdk}}"/>
+    <application android:label="{{label}}" android:hasCode="false">
+        <activity android:name="{{activity}}" android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="{{lib_name}}"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

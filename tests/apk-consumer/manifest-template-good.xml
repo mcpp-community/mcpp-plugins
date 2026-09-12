@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fixture: a project manifest naming a permission and a receiver, neither
+     of which the built-in default ever writes; criterion (b) checks both
+     with `aapt2 dump xmltree` on the linked base.apk. Everything here but
+     the six tokens is this file's own, verbatim, exactly as `dist/apk.cppm`
+     states this member's contract to be. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{{application_id}}">
+    <uses-sdk android:minSdkVersion="{{min_sdk}}" android:targetSdkVersion="{{target_sdk}}"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application android:label="{{label}}" android:hasCode="false">
+        <activity android:name="{{activity}}" android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="{{lib_name}}"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <receiver android:name="org.mcpp.apkconsumer.SampleReceiver" android:exported="false"/>
+    </application>
+</manifest>

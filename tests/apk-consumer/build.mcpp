@@ -3,6 +3,22 @@
 // `dist-apk` picks it up from there and stages it into the APK's `assets/`
 // -- see dist/apk.cppm's header for why that source is the ordinary build
 // tree and not the pack pipeline's own staged tree on this row.
+//
+// TWO ENVIRONMENT VARIABLES, READ ONLY HERE, SELECT THE FIVE CRITERIA OF
+// design record §3.5 / §9.2 P1-P2 WITHOUT A SECOND FIXTURE.
+//
+//   APK_CONSUMER_TEMPLATE   a manifest template file, package-root-relative.
+//                           Unset is the byte-identity criterion (a): the
+//                           built-in default, level 0.
+//   APK_CONSUMER_LEVEL1     non-empty selects level 1: a real activity and
+//                           two Java roots, one under this package and one a
+//                           sibling directory this build program reaches by
+//                           an absolute path, standing in for a path
+//                           dependency's own Java tree (design record §3.3).
+//
+// Neither variable is read by `dist-apk` itself -- both are this fixture's
+// own choice of which of its options to set, the same way any project would
+// choose them from its own configuration.
 import std;
 import mcpp;
 import mcpp.dist.apk;
@@ -24,5 +40,18 @@ int main() {
 
     mcpp::dist::apk::options opt;
     opt.target = "apk-consumer";
+
+    if (const char* tpl = std::getenv("APK_CONSUMER_TEMPLATE"); tpl && *tpl) {
+        opt.manifest_template = tpl;
+    }
+    if (const char* level1 = std::getenv("APK_CONSUMER_LEVEL1"); level1 && *level1) {
+        opt.activity = "org.mcpp.apkconsumer.MainActivity";
+        // The project's own Java root, and a SIBLING of this fixture's own
+        // directory, reached by an absolute path computed from
+        // `mcpp::manifest_dir()` rather than a second package -- see
+        // `tests/apk-consumer-external-java/`'s own header.
+        opt.java_sources = { root + "/java", root + "/../apk-consumer-external-java" };
+    }
+
     return mcpp::dist::apk::generate(opt) ? 0 : 1;
 }

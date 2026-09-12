@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fixture for criterion (d): every required token, plus one this member
+     does not know. dist-apk must refuse this at plan time, naming bogus. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{{application_id}}">
+    <uses-sdk android:minSdkVersion="{{min_sdk}}" android:targetSdkVersion="{{target_sdk}}"/>
+    <application android:label="{{label}}" android:hasCode="false">
+        <activity android:name="{{activity}}" android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="{{lib_name}}"/>
+            <meta-data android:name="unused" android:value="{{bogus}}"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

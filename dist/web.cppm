@@ -45,19 +45,36 @@
 // inside a directory named for a browser, which is a worse failure than a
 // refusal naming the one target this format serves.
 //
-// `cp` PER FILE, ARGV ONLY, NO SHELL -- AND THAT IS WHY THIS MEMBER IS
-// POSIX-HOST ONLY FOR NOW. `dist/appimage.cppm`'s own copies are single
+// THE ENGINE COPIES, NOT `cp`. Each staged file was one `cp SRC DST` action,
+// argv only, no shell -- exactly the shape `mcpp::action` is built for (a
+// graph edge per file, skippable on a cache hit) -- and that made this
+// member POSIX-host only, because neither precedent (`dist/appimage.cppm`'s
 // files handed straight to `appimagetool`'s own argument list; `dist/
-// apple.cppm` copies whole directories with `ditto`, which exists only on
-// macOS. Neither precedent is a portable multi-file copier this member
-// could reuse on Windows, so it declares one `cp SRC DST` action per file in
-// the discovered set instead of shelling out to a recursive copy -- exactly
-// the shape `mcpp::action` is built for (a graph edge per file, skippable on
-// a cache hit), and the one the design record's implementation notes accept
-// ("one cp/copy per file is acceptable"). The README states the POSIX-host
-// limitation; lifting it needs either a `copy`-argv branch on the host OS or
-// a small copier this member carries itself, and neither is written here
-// because nothing in this collection has needed one yet.
+// apple.cppm`'s directories copied with `ditto`, macOS only) is a portable
+// multi-file copier. Lifting that needed either a `copy`-argv branch on the
+// host OS or a small copier this member carried itself, and both are the
+// wrong shape: `cmd /c copy` is a shell, is the 8191-character limit, and is
+// the switch-quoting this repository has already been bitten by twice; a
+// copier carried by the member is a host tool sub-build (#355) for one `cp`.
+//
+// The engine already has the copier. `mcpp stage --output <dst> <src>` is
+// the subcommand every `stage_file` edge in `build.ninja` already runs: it
+// creates the destination's parent, compares content and writes only on
+// difference. `${mcpp.self}`, an action argv substitution for the engine's
+// own absolute path, is what lets an action NAME it, so each copy step is
+// `{ "${mcpp.self}", "stage", "--verify", "content", "--output", dst, src }`
+// -- `--verify content` spelled out rather than defaulted, because a
+// contract must not depend on which of "the help text's default" (`size`)
+// and "the code's default" (`content`) a reader believes. Plan-time
+// `create_directories` is gone with it: `stage` creates the destination's
+// parent itself.
+//
+// `${mcpp.self}` AND `mcpp stage`'S ARGUMENT SHAPE ARE THE ENGINE CONTRACT
+// SINCE 2026.9.13.1, not a convenience this member happens to use -- see
+// docs/30's substitution table in that release. This member's floor is that
+// release for exactly this reason: an older engine leaves `${mcpp.self}`
+// literal in the command, and the action fails at run time with a
+// not-found for a path that reads as a token.
 //
 // WHY `index.html` IS WRITTEN AT PLAN TIME TO A SIDE FILE AND COPIED, RATHER
 // THAN WRITTEN DIRECTLY TO ITS FINAL PATH. `dist/apple.cppm`'s own header
@@ -317,14 +334,9 @@ inline plan plan_for(options opt = {}) {
 
     for (auto const& rel : relFiles) {
         const std::string dst = webDir + "/" + rel;
-        // Directories are created here, at plan time -- cheap (a handful of
-        // path segments, never hundreds of megabytes) and the same trade
-        // `write_if_different` already makes for `index.html`'s own parent.
-        // The CONTENT copy is the action; an empty directory existing a
-        // build early is not a cache-visible effect.
-        std::error_code ec;
-        std::filesystem::create_directories(
-            std::filesystem::path(dst).parent_path(), ec);
+        // No `create_directories` here: `mcpp stage` creates the
+        // destination's parent itself, which is the part of this step the
+        // engine now does that the member used to.
 
         step s;
         s.id          = "mcpp.dist.web.file";
@@ -334,9 +346,13 @@ inline plan plan_for(options opt = {}) {
         // program just read `stageBin` from -- the same reasoning every
         // other member gives: the path in the graph and the path here
         // cannot disagree, and naming it earns this action the engine's
-        // automatic dependency on the staged tree's manifest.
+        // automatic dependency on the staged tree's manifest. `${mcpp.self}`
+        // is the same substitution family, naming the engine's own
+        // executable so this action's command is an argv the engine
+        // interprets on every host, with no shell and no host-specific copy
+        // tool.
         const std::string src = "${mcpp.stage_dir}/bin/" + rel;
-        s.argv    = { "cp", src, dst };
+        s.argv    = { "${mcpp.self}", "stage", "--verify", "content", "--output", dst, src };
         s.inputs  = { src };
         s.outputs = { dst };
         p.steps.push_back(std::move(s));
@@ -346,7 +362,8 @@ inline plan plan_for(options opt = {}) {
     page.id          = "mcpp.dist.web.index";
     page.role        = "artifact";
     page.description = "INDEX.HTML";
-    page.argv    = { "cp", indexSrc, webDir + "/index.html" };
+    page.argv    = { "${mcpp.self}", "stage", "--verify", "content", "--output",
+                     webDir + "/index.html", indexSrc };
     page.inputs  = { indexSrc };
     page.outputs = { webDir + "/index.html" };
     p.steps.push_back(std::move(page));
