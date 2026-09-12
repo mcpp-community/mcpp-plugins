@@ -66,17 +66,9 @@ export namespace mcpp::plugins::names {
 // `a` made relative to the directory `b`, as strings: separators unified, and
 // the prefix stripped when `a` lies under `b`; `a` unchanged otherwise.
 //
-// A MEMBER MUST NOT INSTANTIATE `std::filesystem::path`'s ITERATOR. This lib
-// root may -- `common_base_dir` below calls `lexically_relative` and compiles
-// -- but a member that imports this module and reaches the same iterator again
-// fails under MSVC 14.52 (36629 and 36725, measured on xrgui's CI):
-//
-//   include\filesystem(1572): error C2801: '..._Path_iterator<...>::operator =='
-//   must be a non-static member
-//
-// the STL's hidden-friend comparison, refused when it is instantiated a second
-// time behind `import std` plus this module's BMI. So the members' relative-path
-// arithmetic is this string function, defined once here.
+// NOTHING IN THIS PACKAGE INSTANTIATES `std::filesystem::path`'s ITERATOR --
+// see `components()` below for the compiler that refuses it. The members'
+// relative-path arithmetic is this string function, defined once here.
 inline std::string relative_to(std::string a, std::string b) {
     for (auto& c : a) if (c == '\\') c = '/';
     for (auto& c : b) if (c == '\\') c = '/';
@@ -176,13 +168,44 @@ inline std::vector<std::string> split_module_name(std::string_view name) {
 // A single path has no common prefix with anything, so its own directory is the
 // base and its namespace is empty -- which is the same answer the general case
 // gives once a second file appears beside it.
+// A path's components as strings: both separators split, empty and `.`
+// components dropped. This is the one place the lib root reads a path apart,
+// and it does so WITHOUT `std::filesystem::path`'s iterator on purpose:
+//
+// A MODULE THAT INSTANTIATES `_Path_iterator` POISONS ITS IMPORTERS UNDER MSVC
+// 14.52. Measured on xrgui's CI (14.52.36629 and .36725): this unit compiled
+// while it iterated paths, and every member importing it that then touched
+// `std::filesystem` at all failed inside the STL --
+//
+//   include\filesystem(1572): error C2801: '..._Path_iterator<...>::operator =='
+//   must be a non-static member
+//
+// -- the iterator's hidden-friend comparison, refused when the importer meets
+// it both through `import std` and through this module's BMI. Removing the
+// calls from the members changed nothing; the instantiation had to leave the
+// lib root. Component comparison is what `lexically_relative` bought in 0.5.2
+// (a Windows separator bug), and splitting on both separators keeps that.
+inline std::vector<std::string> components(std::string_view path) {
+    std::vector<std::string> out;
+    std::string cur;
+    auto flush = [&] { if (!cur.empty() && cur != ".") out.push_back(cur); cur.clear(); };
+    for (char c : path) { if (c == '/' || c == '\\') flush(); else cur += c; }
+    flush();
+    return out;
+}
+
+// The directory part of a path, as written: everything before the last
+// separator, or empty when there is none.
+inline std::string_view parent_of(std::string_view path) {
+    const auto slash = path.find_last_of("/\\");
+    return slash == std::string_view::npos ? std::string_view{} : path.substr(0, slash);
+}
+
 inline std::string common_base_dir(std::span<const std::string> paths) {
     std::vector<std::string> prefix;
     bool first = true;
     for (auto const& src : paths) {
-        std::vector<std::string> segs;
-        for (auto const& part : std::filesystem::path(src).parent_path())
-            if (auto s = part.string(); !s.empty() && s != ".") segs.push_back(s);
+        auto segs = components(parent_of(src));
         if (first) { prefix = std::move(segs); first = false; continue; }
         std::size_t keep = 0;
         while (keep < prefix.size() && keep < segs.size() && prefix[keep] == segs[keep]) ++keep;
@@ -208,29 +231,29 @@ inline std::string common_base_dir(std::span<const std::string> paths) {
 // 'image' in namespace 'island_interface::kernels'`, while the same fixture
 // passed on Linux and macOS.
 //
-// `lexically_relative` compares COMPONENTS, so the separator a caller happened
-// to write is not part of the question. A base that is not a prefix yields a
-// path starting `..`, which is a caller error rather than a namespace; it
-// answers with no segments rather than with the whole absolute path, which is
-// what the string form produced.
+// COMPONENTS are compared, so the separator a caller happened to write is not
+// part of the question -- `components()` splits on both. A base that is not a
+// prefix is a caller error rather than a namespace; it answers with no
+// segments rather than with the whole absolute path, which is what the first
+// string form produced. (Through `components()` rather than
+// `lexically_relative` for the reason stated on it.)
 inline std::vector<std::string> namespace_of(std::string_view src, std::string_view base) {
     std::vector<std::string> out;
-    const auto dir = std::filesystem::path(src).parent_path();
-    auto rel = dir;
+    auto dir = components(parent_of(src));
     if (!base.empty()) {
-        rel = dir.lexically_relative(std::filesystem::path(base));
-        if (rel.empty() || rel.begin()->string() == "..") return out;
+        const auto b = components(base);
+        if (b.size() > dir.size()) return out;
+        for (std::size_t i = 0; i < b.size(); ++i) if (b[i] != dir[i]) return out;
+        dir.erase(dir.begin(), dir.begin() + static_cast<std::ptrdiff_t>(b.size()));
     }
-    for (auto const& part : rel) {
-        auto s = part.string();
-        if (s.empty() || s == "." || s == ".." || s == "/" || s == "\\") continue;
+    for (auto const& s : dir) {
+        if (s == "..") continue;
         // `shaders/default/` is an ordinary directory name and
         // `namespace default {` is not a namespace.
         out.push_back(identifier(s, "dir"));
     }
     return out;
 }
-
 } // namespace mcpp::plugins::names
 
 
