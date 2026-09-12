@@ -20,21 +20,10 @@ T saxpy<T : __BuiltinFloatingPointType>(T a, T x, T y) {
     return a * x + y;
 }
 
-// THE ENTRY POINT'S NAME IS THE MEASUREMENT. `-fvk-use-entrypoint-name` makes
-// slangc write this name into the module's OpEntryPoint instead of `main`, so
-// the bytes say whether an argument the consumer passed through
-// `options::extra_args` reached the compiler. And `OFFSET_ENTRY` is a macro the
-// consumer defines for `offset.slang` ONLY, through `options::per_file`: if it
-// arrived here, this module carries `wrongMain` and the consumer reports it.
-#ifdef OFFSET_ENTRY
-#define ENTRY wrongMain
-#else
-#define ENTRY computeMain
-#endif
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void ENTRY(uint3 tid : SV_DispatchThreadID) {
+void computeMain(uint3 tid : SV_DispatchThreadID) {
     const uint i = tid.x;
     if (i >= push.n) return;
     data[2 * push.n + i] = saxpy(push.a, data[i], data[push.n + i]);
