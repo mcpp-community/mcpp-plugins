@@ -1,0 +1,33 @@
+# Fixture: an application target packaged as a signed, native (level 0) APK.
+#
+# It proves the third family end to end on the one row where the program
+# itself is not the thing the graph links (#622 A3: `kind = "app"` on
+# `*-linux-android` is a shared object, not an executable) and where the
+# distributable's own closure is not the engine's (this member reads the
+# staged tree's `lib/` and the ordinary build's `bin/` itself; see
+# `dist/apk.cppm`'s header for what is measured and why).
+[package]
+name        = "apk-consumer"
+version     = "0.3.0"
+description = "Fixture: packages an app target as a signed APK"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-apk"], host-module = true }
+
+[targets.apk-consumer]
+kind = "app"
+main = "src/main.cpp"
+
+# #622 A11: `minSdkVersion` reads `mcpp::min_platform_version()`, so the
+# criterion below (`aapt2 dump badging` reporting `sdkVersion:'24'`) is a
+# property of THIS declaration and not of a default this fixture never
+# stated.
+[target.x86_64-linux-android]
+min_api_level = 24

@@ -16,6 +16,7 @@ import mcpp.tools.island;
 import mcpp.dist.appimage;
 import mcpp.dist.wix;
 import mcpp.dist.apple;
+import mcpp.dist.apk;
 
 int main() {
     // No accelerator is named, so each of these returns true without looking
@@ -55,6 +56,13 @@ int main() {
     ok = ok && !wixPlan.applies;
     auto applePlan = mcpp::dist::apple::plan_for();
     ok = ok && !applePlan.applies;
+    // `dist-apk`'s own gate is the target ENVIRONMENT (`cfg(env = "android")`
+    // on its payload table, `mcpp::target_env() != "android"` in
+    // `plan_for` itself), not `pack_format()` alone -- this fixture's host
+    // build satisfies neither, so no payload was ever declared for this run
+    // and this call reaches no `xpkg_dir` lookup at all.
+    auto apkPlan = mcpp::dist::apk::plan_for();
+    ok = ok && !apkPlan.applies;
 
     std::println("all-rules-compile: every rule and dist module compiled for this host");
     return ok ? 0 : 1;
