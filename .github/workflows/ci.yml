@@ -1078,7 +1078,7 @@ jobs:
       # the emsdk payload the way the local sandbox this member was
       # developed against does.
       - name: Install the emsdk payload for dist-web
-        run: "$MCPP" toolchain install emsdk 6.0.9
+        run: '"$MCPP" toolchain install emsdk 6.0.9'
 
       - name: dist-web produces a static directory, and node runs it
         working-directory: tests/web-consumer
