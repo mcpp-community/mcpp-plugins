@@ -31,3 +31,4 @@ main = "src/main.cpp"
 # stated.
 [target.x86_64-linux-android]
 min_api_level = 24
+runner = ["adb-run"]
