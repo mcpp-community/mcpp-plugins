@@ -620,25 +620,30 @@ inline plan plan_for(options opt = {}) {
 
     // ── the temporary staging tree: lib/<abi>/, assets/ ─────────────────
     //
-    // ASSETS ARE NOT COLLECTED HERE, AND THAT IS A MEASURED LIMIT OF THIS
-    // PROGRAM'S OWN VANTAGE POINT, NOT A CHOICE. `mcpp::out_dir()` is
-    // `target/.build-mcpp/out/` -- one path per PACKAGE, the generator
-    // scratch directory `mcpp::deploy`'s own `from` argument is read out of
-    // (`build_program.cppm`'s `build_dir`, and 652b's own comment: "as
-    // opposed to `${mcpp.out_dir}` inside an action, which is per-triple").
-    // The real per-triple `bin/` this member needs to enumerate -- where
-    // `mcpp::deploy`'s `to` actually lands -- is `${mcpp.bin_dir}`, and that
-    // placeholder is substituted by the ENGINE only inside an action's own
-    // argv, never into a string this program can read. So the enumeration
-    // that would happen here in every other member's `plan_for` (`dist-
-    // appimage`'s `is_file`, `dist-apple`'s identical reads against
-    // `pack_stage_dir()`) instead happens inside `collect-assets.sh` below,
-    // at COMMAND time, against the real path the engine hands it. The
-    // consequence, stated rather than hidden: this action's `inputs` cannot
-    // name each deployed file individually (their absolute paths are not
-    // obtainable here), so a build that changes ONLY a deployed file's
-    // bytes, with nothing else in the link changing, is not guaranteed to
-    // re-run this step. Unmeasured; see this member's report.
+    // ASSETS, READ AT PLAN TIME AGAINST `pack_stage_dir()`, THE SAME WAY
+    // EVERY OTHER MEMBER READS ITS STAGED TREE (`dist-appimage`'s `is_file`,
+    // `dist-apple`'s identical reads). docs/30 ("Producing a distributable")
+    // and e2e 651/649 in the mcpp tree both show `mcpp::deploy`'s `to`
+    // landing at `<staged tree>/bin/<to>/...`, beside the packed executable
+    // -- the second pass of `mcpp pack --format apk` runs `plan_for` AFTER
+    // the tree is staged, so those files already exist on disk when this
+    // program reads them, exactly as `dist-appimage` reads `${mcpp.stage_
+    // dir}`'s `AppRun` candidates.
+    //
+    // MEASURED ON THIS ROW, 2026-09-12, AGAINST THE ENGINE REVISION THIS
+    // MEMBER IS BUILT AGAINST: `*-linux-android`'s own staged tree carries
+    // `lib/<name>.so` and NOTHING ELSE -- `run_shared_program` (mcpp.pack)
+    // stages the app's own object and stops, calling neither the ELF
+    // closure walk nor `stage_runtime_files` the way every other row's
+    // `run()` does (see this member's header, "WHAT `mcpp pack`'S OWN
+    // CLOSURE DOES NOT DO FOR THIS ROW"). So the loop below is written to
+    // the documented, cross-row contract and DOES fire wherever the engine
+    // actually stages `bin/<to>/...` beside the executable; on THIS row,
+    // today, `bin/` does not exist in the staged tree at all, and the loop
+    // is a no-op -- a deployed file is declared correctly and staged
+    // nowhere, which is the honest report of a gap in `run_shared_program`
+    // rather than in this member. See this member's own report for the
+    // measurement that found it.
     const fs::path work = fs::path(opt.out_dir) / "dist-apk" / "stage";
     { std::error_code ec; fs::remove_all(work, ec); }
     std::vector<std::string> libInputs;
@@ -673,38 +678,43 @@ inline plan plan_for(options opt = {}) {
     }
 
     const fs::path assetsDir = work / "assets";
+    std::vector<std::string> assetInputs;
+    { // every deploy'd file, `<stage>/bin/<rel>` -> `assets/<rel>` -- see the
+      // long comment above for what this loop finds on this row today.
+      const fs::path stageBin = fs::path(stage) / "bin";
+      std::error_code ec;
+      if (fs::is_directory(stageBin, ec)) {
+          for (auto& e : fs::recursive_directory_iterator(stageBin, ec)) {
+              if (ec) break;
+              if (!e.is_regular_file(ec)) continue;
+              auto rel = fs::relative(e.path(), stageBin, ec);
+              collect_tree(e.path(), assetsDir / rel, assetInputs);
+          }
+      }
+    }
     const std::string runJsonPath = (assetsDir / "mcpp-run.json").string();
     if (!write_if_different(runJsonPath, run_json(appId, activityName))) {
         std::cerr << std::format("mcpp.dist.apk: cannot write {}", runJsonPath) << '\n';
         p.reason = "cannot write mcpp-run.json";
         return p;
     }
+    assetInputs.push_back(runJsonPath);
 
-    // ── the small helper scripts this pipeline needs (argv only, no
-    // shell): one that copies the archive, folds in whatever
-    // `mcpp::deploy` placed beside the link output, and hands the result to
-    // `jar`; one that stamps a directory-shaped tool's success (docs/30:
-    // "you must name the output files", and javac's own output set -- one
-    // .class per top-level AND per inner class -- is not knowable at plan
-    // time) ─────────────────────────────────────────────────────────────
+    // ── the small helper script this pipeline needs (argv only, no
+    // shell): copies the archive and hands the result to `jar`. The
+    // staging tree it copies from (`work`) is fully populated by the time
+    // this runs -- native libraries and deployed assets alike are read
+    // above, at plan time, not discovered by this script -- so, unlike an
+    // earlier revision of this member, it takes no `bindir` argument at
+    // all ─────────────────────────────────────────────────────────────
     const fs::path helpersDir = fs::path(opt.out_dir) / "dist-apk";
     const std::string copyThenJar = (helpersDir / "copy-then-jar.sh").string();
     write_if_different(copyThenJar,
         "#!/bin/sh\n"
         "# mcpp.dist.apk helper. Do not edit.\n"
         "set -e\n"
-        "src=\"$1\"; dst=\"$2\"; jar=\"$3\"; work=\"$4\"; bindir=\"$5\"; shift 5\n"
+        "src=\"$1\"; dst=\"$2\"; jar=\"$3\"; shift 3\n"
         "cp \"$src\" \"$dst\"\n"
-        "mkdir -p \"$work/assets\"\n"
-        "# Every deploy'd subdirectory beside the link output, folded into\n"
-        "# assets/ under its own name -- see the header comment on why this\n"
-        "# happens here, at command time, and not in plan_for's own C++.\n"
-        "if [ -d \"$bindir\" ]; then\n"
-        "    for d in \"$bindir\"/*/; do\n"
-        "        [ -d \"$d\" ] || continue\n"
-        "        cp -R \"${d%/}\" \"$work/assets/\"\n"
-        "    done\n"
-        "fi\n"
         "\"$jar\" uf \"$dst\" \"$@\"\n");
     { std::error_code ec; fs::permissions(copyThenJar,
         fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
@@ -840,7 +850,6 @@ inline plan plan_for(options opt = {}) {
     libs.description = "APK LIBS+ASSETS";
     libs.output = (outDir / "withlibs.apk").string();
     libs.argv = { copyThenJar, apkPath, libs.output, jar,
-                 work.string(), "${mcpp.bin_dir}",
                  "-C", work.string(), "lib",
                  "-C", work.string(), "assets" };
     if (!javaOutputs.empty()) {
@@ -848,8 +857,9 @@ inline plan plan_for(options opt = {}) {
         libs.argv.push_back((outDir / "dex").string());
         libs.argv.push_back("classes.dex");
     }
-    libs.inputs = { apkPath, runJsonPath };
+    libs.inputs = { apkPath };
     for (auto const& f : libInputs) libs.inputs.push_back(f);
+    for (auto const& f : assetInputs) libs.inputs.push_back(f);
     for (auto const& f : javaOutputs) libs.inputs.push_back(f);
     p.steps.push_back(libs);
 
