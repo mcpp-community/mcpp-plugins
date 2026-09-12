@@ -76,6 +76,32 @@ struct options {
     std::vector<std::string> defines;
     // `-O` levels Slang accepts. Empty leaves the compiler's own default.
     std::string optimization = "3";
+    // ARGUMENTS THIS RULE HAS NO FIELD FOR, passed to slangc verbatim.
+    //
+    // slangc takes some two hundred options -- `-fvk-use-gl-layout`,
+    // `-fvk-use-entrypoint-name`, `-emit-spirv-directly`, `-floating-point-mode`,
+    // `-g` -- and a rule that grew a field for each would be a copy of `slangc
+    // -h` that drifts. The rule owns the arguments that decide WHAT is produced
+    // (target, profile, output, the embedding); everything else is the
+    // project's, and this is where it goes. Appended after the rule's own flags
+    // and before `-o`, so a project's argument can never trail the output name.
+    std::vector<std::string> extra_args;
+
+    // WHAT ONE SHADER GETS THAT THE OTHERS DO NOT.
+    //
+    // One `compile()` call writes one surface, so a project cannot call it twice
+    // with two option sets: the second call would rewrite the generated module
+    // with only its own shaders. A per-file table keeps the one call and the one
+    // surface. The key is the shader's path as the constrained glob names it --
+    // package-relative, `/`-separated -- and a key that names no shader in this
+    // build is refused with the shaders that were seen, because a typo that
+    // silently applied nothing is the failure this table would otherwise hide.
+    struct overrides {
+        std::vector<std::string> defines;      // `-D`, added to `options::defines`
+        std::vector<std::string> extra_args;   // added after `options::extra_args`
+    };
+    std::map<std::string, overrides> per_file;
+
     // An explicit compiler path wins over discovery.
     std::string compiler;
     std::string out_dir = std::string(mcpp::out_dir());
@@ -84,6 +110,18 @@ struct options {
     // Identical to `mcpp.rules.spirv`, from the same generator. See
     // `mcpp::plugins::surface`.
     mcpp::plugins::surface::kind surface = mcpp::plugins::surface::default_surface();
+
+    // Where the compiled SPIR-V lives. `header` compiles it in as generated
+    // source, `object` as a section reached through `.incbin`, `sidecar` as a
+    // file beside the artifact. The same axis `mcpp.rules.spirv` has, with the
+    // same default, for the measurement recorded on
+    // `mcpp::plugins::surface::storage`.
+    //
+    // It changes what this rule asks the compiler for. Under `header` slangc is
+    // told to embed (`-source-embed-style u32`); under the other two it writes a
+    // bare `.spv`, which is the one shape every consumer of a file wants.
+    mcpp::plugins::surface::storage storage = mcpp::plugins::surface::storage::header;
+
     std::string module_name;
     std::string base_dir;
 };
@@ -130,6 +168,9 @@ inline target parse_target(std::string_view accel) {
 // appendix; an unknown version falls back to the floor every Vulkan
 // implementation accepts rather than guessing upward.
 inline std::string profile_for(std::string_view vulkanVersion) {
+    // Vulkan 1.4 requires SPIR-V 1.6 support and admits nothing newer, so the
+    // row is the same as 1.3's; without it a 1.4 build fell to the floor below.
+    if (vulkanVersion == "1.4") return "spirv_1_6";
     if (vulkanVersion == "1.3") return "spirv_1_6";
     if (vulkanVersion == "1.2") return "spirv_1_5";
     if (vulkanVersion == "1.1") return "spirv_1_3";
@@ -282,6 +323,21 @@ inline bool write_header(const std::string& header, const std::string& inc) {
     return out.good();
 }
 
+// The path as `per_file` keys it and as `mcpp::device_sources()` lists it are
+// both package-relative, but one may have been typed on Windows and the other
+// derived there: separators are unified and a leading `./` dropped before the
+// two are compared.
+//
+// Strings, not `std::filesystem::path`: this member must not instantiate the
+// path iterator -- see `mcpp::plugins::names::relative_to` for the compiler
+// that refuses it. The two normalisations this key needs are string operations.
+inline std::string key_of(std::string_view path) {
+    std::string s(path);
+    for (auto& c : s) if (c == '\\') c = '/';
+    while (s.starts_with("./")) s.erase(0, 2);
+    return s;
+}
+
 inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     if (shaders.empty()) return true;
 
@@ -341,6 +397,31 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         }
     }
 
+    // EVERY `per_file` KEY MUST NAME A SHADER IN THIS CALL. Resolved up front so
+    // that a key with a typo is refused before any action is submitted, naming
+    // what it could have matched -- rather than applying nothing and building
+    // a module the project believes carries the option.
+    std::map<std::string, const options::overrides*> overridesBySource;
+    {
+        std::map<std::string, std::string> keyed;   // normalised key -> shader
+        for (auto const& src : shaders) keyed.emplace(key_of(src), src);
+        for (auto const& [key, ov] : opt.per_file) {
+            const auto it = keyed.find(key_of(key));
+            if (it == keyed.end()) {
+                std::cerr << std::format(
+                    "mcpp.rules.slang: `per_file` names `{}`, and no shader in this build "
+                    "has that path.\n"
+                    "  The key is the path as the constrained glob names it, relative to the\n"
+                    "  package root. The shaders this call compiles are:\n", key);
+                for (auto const& src : shaders) std::cerr << "    " << src << '\n';
+                return false;
+            }
+            overridesBySource.emplace(it->second, &ov);
+        }
+    }
+
+    const bool embedAsSource = opt.storage == mcpp::plugins::surface::storage::header;
+
     std::vector<mcpp::plugins::surface::item> items;
 
     for (auto const& src : shaders) {
@@ -367,19 +448,39 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // makes the file the compiler writes and the file this rule declares
         // the same one, without depending on that appending rule at all.
         const auto inc    = base + "_embed.h";
+        // Declared here rather than beside the action, because the item below
+        // names it: under `object` the surface writes `.incbin` of this path
+        // before any action runs, and under `sidecar` the accessor opens it.
+        const std::string spv = base + ".spv";
+        const std::string output = embedAsSource ? inc : spv;
         const auto input  = p.is_absolute() ? src : root + "/" + src;
 
-        if (!write_header(header, inc)) return false;
+        // The wrapper header exists only to make the compiler's embedded output
+        // a translation unit. The other two storages never read a header, so
+        // writing one would leave a file nothing includes.
+        if (embedAsSource && !write_header(header, inc)) return false;
 
         std::string headerRel;
         for (auto const& seg : ns) headerRel += seg + "/";
         headerRel += p.stem().string() + ".h";
+        // Where a sidecar is found at run time: relative to the package root,
+        // which is where `mcpp run` starts the program. The cost of that is
+        // stated on `mcpp::plugins::surface::storage::sidecar`.
+        const auto sidecarName = mcpp::plugins::names::relative_to(spv, root);
         items.push_back({ .identifier     = p.stem().string(),
                           .name_space     = ns,
                           .data_header    = headerRel,
                           .data_symbol    = sym,
+                          .payload_path   = spv,
+                          .sidecar_name   = sidecarName,
                           // What the compiler stated, rather than `sizeof`.
-                          .data_size_expr = sym + "_sizeInBytes" });
+                          // Only the embedded output declares it; a file's size
+                          // is read when the file is.
+                          .data_size_expr = embedAsSource ? sym + "_sizeInBytes"
+                                                          : std::string{} });
+
+        const options::overrides* ov = nullptr;
+        if (auto it = overridesBySource.find(src); it != overridesBySource.end()) ov = it->second;
 
         const std::string id   = "slang:" + src;
         const std::string desc = "slangc " + src;
@@ -393,12 +494,21 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         a.arg("-profile"); a.arg(profile.c_str());
         if (!opt.optimization.empty()) a.arg(("-O" + opt.optimization).c_str());
         for (auto const& d : opt.defines) a.arg(("-D" + d).c_str());
+        if (ov) for (auto const& d : ov->defines) a.arg(("-D" + d).c_str());
         for (auto const& i : opt.includes)
             a.arg(("-I" + (std::filesystem::path(i).is_absolute() ? i : root + "/" + i)).c_str());
-        // The embedded form, and the name it declares.
-        a.arg("-source-embed-style"); a.arg("u32");
-        a.arg("-source-embed-name");  a.arg(sym.c_str());
-        a.arg("-o"); a.arg(inc.c_str());
+        // The project's own arguments, global first so a per-file one that
+        // contradicts it comes later and wins under slangc's last-wins rule.
+        for (auto const& x : opt.extra_args) a.arg(x.c_str());
+        if (ov) for (auto const& x : ov->extra_args) a.arg(x.c_str());
+        if (embedAsSource) {
+            // The embedded form, and the name it declares.
+            a.arg("-source-embed-style"); a.arg("u32");
+            a.arg("-source-embed-name");  a.arg(sym.c_str());
+        }
+        // Under `object` and `sidecar` neither flag is passed and slangc writes
+        // a bare SPIR-V module.
+        a.arg("-o"); a.arg(output.c_str());
         // What the shader `#include`s, which only slangc can know. `a.input()`
         // below names the `.slang` and is fixed here, before the compiler has
         // read a line; a shader including a second `.slang` therefore had no
@@ -407,12 +517,12 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         //
         // Measured: `slangc ... -depfile s.d` writes
         // `out.spv: <entry>.slang <included>.slang`.
-        const std::string dep = inc + ".d";
+        const std::string dep = output + ".d";
         a.arg("-depfile"); a.arg(dep.c_str());
         a.depfile = dep.c_str();
         a.arg(input.c_str());
         a.input(input.c_str());
-        a.output(inc.c_str());
+        a.output(output.c_str());
         a.submit();
     }
 
@@ -420,6 +530,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
 
     mcpp::plugins::surface::options so;
     so.surface     = opt.surface;
+    so.store       = opt.storage;
     so.elem        = mcpp::plugins::surface::element::word32;
     so.module_name = moduleName;
     so.out_dir     = gen;
@@ -431,6 +542,14 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
 
     const auto out = mcpp::plugins::surface_for(items, so);
     if (!out.ok) return false;
+
+    // The degradation is reported here because the generator cannot report it:
+    // `mcpp::warning` is a build-program channel and `mcpp.plugins.surface`
+    // deliberately has none. Whoever sets `options::storage` owns this.
+    if (out.files.store != so.store)
+        mcpp::warning("mcpp.rules.slang: object storage needs a GAS assembler and this "
+                      "toolchain has none; the payload is compiled in as generated source "
+                      "instead. The declarations a consumer sees are unchanged.");
 
     mcpp::fact("mcpp.plugins", std::string(mcpp::plugins::version).c_str());
     return true;

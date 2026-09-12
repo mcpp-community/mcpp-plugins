@@ -1,0 +1,19 @@
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.rules.slang;
+
+// THE THIRD STORAGE, FOR SLANG: the payload stays a file and the program reads
+// it. One line differs from `slang-consumer`, and the consumer's source is
+// unchanged -- which is the whole claim the surface makes.
+//
+// Its cost is the one `spirv-sidecar` records: the accessor opens a path
+// relative to the WORKING DIRECTORY, so the program finds its shaders when run
+// from the package root and does not when run from elsewhere.
+int main() {
+    mcpp::rerun_if_changed_glob("shaders/**/*.slang");
+    mcpp::rules::slang::options opt;
+    opt.surface = mcpp::plugins::surface::kind::module_;
+    opt.storage = mcpp::plugins::surface::storage::sidecar;
+    return mcpp::rules::slang::compile(opt) ? 0 : 1;
+}

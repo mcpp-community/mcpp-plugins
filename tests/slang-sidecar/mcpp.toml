@@ -1,0 +1,35 @@
+# The consumer that tests mcpp.rules.slang under sidecar storage.
+#
+# The same fixture shape as `spirv-sidecar`, for the same claim: the consumer's
+# source cannot tell which storage its shaders use, and a project that moved a
+# shader from GLSL to Slang would change the file and nothing else. What this
+# fixture adds is that the STORAGE axis is now the Slang rule's as well -- before
+# 0.7.0 the rule wrote `-source-embed-style u32` unconditionally and had no
+# `options::storage` at all.
+[package]
+name        = "slang-sidecar"
+namespace   = "example"
+version     = "0.1.0"
+description = "A Slang compute shader compiled to a SPIR-V file beside the artifact through mcpp.rules.slang"
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-slang"], host-module = true }
+
+# NO [xlings.workspace]. `xim:slang` is declared by the rule, under the feature
+# that selects it and the accelerator it serves.
+
+[build]
+accel = "vulkan1.2"
+sources = [
+  "src/*.cpp",
+  { glob = "shaders/*.slang", accel = "vulkan1.2" },
+]
+
+[targets.slang-sidecar]
+kind = "bin"
+main = "src/main.cpp"

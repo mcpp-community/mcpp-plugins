@@ -894,7 +894,16 @@ jobs:
         run: |
           "$MCPP" build
           "$MCPP" run | tee run.log
-          grep -q '^scale.slang: magic=07230203' run.log
+          # TWO SHADERS, AND THE ENTRY POINT'S NAME IS THE MEASUREMENT.
+          #
+          # `-fvk-use-entrypoint-name` reaches slangc through
+          # `options::extra_args` and makes the module carry the function's
+          # name instead of `main`; `-DOFFSET_ENTRY` reaches ONE shader through
+          # `options::per_file` and switches its name again. The consumer reads
+          # both names out of the SPIR-V bytes, and `scale.slang` would report
+          # `wrongMain` if the per-file macro had leaked to it.
+          grep -q '^scale.slang: magic=07230203 .* entry=computeMain ok' run.log
+          grep -q '^offset.slang: magic=07230203 .* entry=offsetMainDefined ok' run.log
           grep -q '^all ok' run.log
           if grep -rn 'scale\.h\|\.inc"' src/; then
             echo "FAIL: a consumer source names a generated file"
@@ -903,6 +912,51 @@ jobs:
           grep -q '^export module slang_consumer.shaders;' \
             target/.build-mcpp/out/slang/slang_consumer.shaders.cppm
           echo "ok: a Slang shader reached through the same surface as a GLSL one"
+
+      # THE NEGATIVE LEG. A `per_file` key that names no shader must refuse the
+      # build and list what it could have named; a rule that applied nothing
+      # and built anyway would hand the project a module it believes carries
+      # the option. Without this half the table could silently become a no-op
+      # and every positive assertion above would still pass.
+      - name: rules-slang refuses a per_file key that names no shader
+        working-directory: tests/slang-consumer
+        run: |
+          cp build.mcpp /tmp/build.mcpp.bak
+          sed -i 's|shaders/offset.slang|shaders/offest.slang|' build.mcpp
+          if "$MCPP" build > refused.log 2>&1; then
+            cp /tmp/build.mcpp.bak build.mcpp
+            echo "FAIL: a mistyped per_file key built anyway"; cat refused.log; exit 1
+          fi
+          cp /tmp/build.mcpp.bak build.mcpp
+          grep -q 'per_file. names .shaders/offest.slang., and no shader' refused.log
+          grep -q '^    shaders/offset.slang' refused.log
+          echo "ok: refused by name, and the shaders it could have named were listed"
+
+      # THE THIRD STORAGE, FOR SLANG. `options::storage` is new in 0.7.0; before
+      # it the rule embedded unconditionally. The consumer's source is the one
+      # `slang-consumer` has minus the per-file assertions, and the reverse leg
+      # is the point of the storage, as `spirv-sidecar` records.
+      - name: rules-slang with sidecar storage
+        working-directory: tests/slang-sidecar
+        run: |
+          "$MCPP" build
+          "$MCPP" run | tee run.log
+          grep -q '^magic=07230203' run.log
+          grep -q '^all ok' run.log
+          test -f target/.build-mcpp/out/slang/scale.spv
+          if grep -q 'source-embed' target/*/*/build.ninja; then
+            echo "FAIL: sidecar storage still asked slangc to embed"; exit 1
+          fi
+          bin=$(ls target/*/*/bin/slang-sidecar)
+          bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
+          if (cd /tmp && "$bin" > away.log 2>&1); then
+            echo "FAIL: the sidecar program succeeded from the wrong directory"
+            cat /tmp/away.log
+            exit 1
+          fi
+          grep -q 'sidecar payload was not found' /tmp/away.log \
+            || { echo "FAIL: it failed for some other reason"; cat /tmp/away.log; exit 1; }
+          echo "ok: a Slang payload found from the package root, reported missing from elsewhere"
 
       # A tool, not a rule: the header is written while the build program runs,
       # so there is no action to schedule. The second build is the measurement
