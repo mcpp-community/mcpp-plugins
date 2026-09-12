@@ -325,9 +325,25 @@ inline bool write_header(const std::string& header, const std::string& inc) {
 
 // The path as `per_file` keys it and as `mcpp::device_sources()` lists it are
 // both package-relative, but one may have been typed on Windows and the other
-// derived there. Components are compared, not characters.
+// derived there: separators are unified and a leading `./` dropped before the
+// two are compared.
+//
+// NOT `std::filesystem::path::lexically_normal()`, AND THE REASON IS A COMPILER.
+// This unit is compiled as a module interface that imports `std`, and MSVC
+// 14.52 (measured on both 14.52.36629 and 14.52.36725, xrgui's CI) refuses to
+// instantiate `_Path_iterator`'s hidden-friend `operator==` there:
+//
+//   include\filesystem(1572): error C2801: '..._Path_iterator<...>::operator =='
+//   must be a non-static member
+//
+// `lexically_normal` walks the path's components and is the one call 0.7.0
+// added that reaches that operator. The two normalisations this key needs are
+// string operations, so nothing is lost by not going through `path` at all.
 inline std::string key_of(std::string_view path) {
-    return std::filesystem::path(path).lexically_normal().generic_string();
+    std::string s(path);
+    for (auto& c : s) if (c == '\\') c = '/';
+    while (s.starts_with("./")) s.erase(0, 2);
+    return s;
 }
 
 inline bool compile(std::span<const std::string> shaders, options opt = {}) {
