@@ -25,10 +25,27 @@ plugins = { path = "../..", features = ["dist-apk"], host-module = true }
 kind = "app"
 main = "src/main.cpp"
 
+# `ANativeActivity_onCreate` (src/main.cpp) calls `ANativeActivity_finish`
+# and `__android_log_print`, both declared in `libandroid.so`/`liblog.so` --
+# the NDK's own stable stub libraries for the platform's native-activity and
+# logging ABIs, present in every system image `dist-apk` targets. Neither is
+# pulled in by anything already linked, so the closure needs them stated,
+# not inferred.
+[target.'cfg(env = "android")'.runtime]
+libraries = ["android", "log"]
+
 # #622 A11: `minSdkVersion` reads `mcpp::min_platform_version()`, so the
 # criterion below (`aapt2 dump badging` reporting `sdkVersion:'24'`) is a
 # property of THIS declaration and not of a default this fixture never
 # stated.
 [target.x86_64-linux-android]
+min_api_level = 24
+runner = ["adb-run"]
+
+# Same runner, the emulator's own guest abi. `adb-run` passes no `-s`
+# (device selection is `adb`'s own -- ANDROID_SERIAL is the caller's
+# configuration), so the identical declaration serves both the emulated
+# x86_64 row and a physical arm64-v8a device.
+[target.aarch64-linux-android]
 min_api_level = 24
 runner = ["adb-run"]

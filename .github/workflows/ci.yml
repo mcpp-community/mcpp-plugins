@@ -1094,6 +1094,19 @@ jobs:
       # this step needs the release that carries them (see this repository's
       # README, `dist-apk`'s own row) -- raising the pin is P5's own change,
       # together with the rest of this collection's release.
+      #
+      # THIS STEP ASSERTS PACKAGING ONLY, DELIBERATELY, NOT `mcpp run
+      # --format apk`. This fixture's own `main.cpp` and `mcpp.toml` DO wire
+      # up a real device row (`ANativeActivity_onCreate`, `runner =
+      # ["adb-run"]`) and it was run end to end (2026-09-12) against both a
+      # KVM-accelerated x86_64 emulator (`xim:android-emulator` +
+      # `xim:android-system-image`) and a physical arm64-v8a phone over adb,
+      # both exiting 0 with `1-2-3` in the logcat output -- but this GitHub-
+      # hosted runner has neither an emulator image nor a device attached,
+      # so a `run` step here would only ever report "no device/emulator
+      # found" and never `1-2-3`. That measurement stays a local/self-hosted
+      # concern until a runner class with a real device or a KVM-capable
+      # emulator is wired into this workflow.
       - name: dist-apk produces a signed APK, level 0 and level 1
         working-directory: tests/apk-consumer
         run: |
