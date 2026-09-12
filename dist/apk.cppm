@@ -259,8 +259,22 @@ inline bool needs_libcxx_shared(const std::string& toolchainDir, const std::stri
     return found;
 }
 
+// Index loop, not a range-for: GCC 16.1.0 refuses to inline
+// `__normal_iterator<char*, basic_string<char>>::operator*() const` when a
+// module interface unit that imports `std` also range-for's (or otherwise
+// takes `basic_string`'s own iterator over) a `std::string` or
+// `std::filesystem::path` --
+//
+//   bits/stl_iterator.h:1089:7: error: inlining failed in call to
+//   'always_inline' '... operator*() const'
+//
+// -- the same family of defect #18 met under MSVC's `_Path_iterator` (see
+// `mcpp::plugins::names::relative_to` and `components()` in
+// `src/plugins.cppm`), here on `libstdc++`'s `basic_string` iterator instead
+// of the filesystem one. `s[i]` indexes the string directly and never forms
+// that iterator, so it compiles under both.
 inline std::string replace_dashes(std::string s) {
-    for (char& c : s) if (c == '-') c = '_';
+    for (std::size_t i = 0; i < s.size(); ++i) if (s[i] == '-') s[i] = '_';
     return s;
 }
 
@@ -288,10 +302,10 @@ inline std::string label_for(const options& opt) {
 // with.
 inline std::string api_level_from_platform_dir(const std::string& dir) {
     if (dir.empty()) return {};
-    std::string leaf = fs::path(dir).filename().string();
+    const std::string leaf = fs::path(dir).filename().string();
     std::string digits;
-    for (char c : leaf) {
-        if (c >= '0' && c <= '9') digits += c;
+    for (std::size_t i = 0; i < leaf.size(); ++i) {
+        if (leaf[i] >= '0' && leaf[i] <= '9') digits += leaf[i];
         else break;
     }
     return digits;
