@@ -63,6 +63,28 @@ inline constexpr std::string_view version = "0.7.0";
 // is guaranteed rather than two files that happen to say the same thing.
 export namespace mcpp::plugins::names {
 
+// `a` made relative to the directory `b`, as strings: separators unified, and
+// the prefix stripped when `a` lies under `b`; `a` unchanged otherwise.
+//
+// A MEMBER MUST NOT INSTANTIATE `std::filesystem::path`'s ITERATOR. This lib
+// root may -- `common_base_dir` below calls `lexically_relative` and compiles
+// -- but a member that imports this module and reaches the same iterator again
+// fails under MSVC 14.52 (36629 and 36725, measured on xrgui's CI):
+//
+//   include\filesystem(1572): error C2801: '..._Path_iterator<...>::operator =='
+//   must be a non-static member
+//
+// the STL's hidden-friend comparison, refused when it is instantiated a second
+// time behind `import std` plus this module's BMI. So the members' relative-path
+// arithmetic is this string function, defined once here.
+inline std::string relative_to(std::string a, std::string b) {
+    for (auto& c : a) if (c == '\\') c = '/';
+    for (auto& c : b) if (c == '\\') c = '/';
+    while (!b.empty() && b.back() == '/') b.pop_back();
+    if (!b.empty() && a.starts_with(b + "/")) return a.substr(b.size() + 1);
+    return a;
+}
+
 // A GENERATED NAME THE C++ COMPILER WILL ACCEPT.
 //
 // Three transformations, and the third is the one every hand-rolled copy of

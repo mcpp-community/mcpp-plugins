@@ -328,17 +328,9 @@ inline bool write_header(const std::string& header, const std::string& inc) {
 // derived there: separators are unified and a leading `./` dropped before the
 // two are compared.
 //
-// NOT `std::filesystem::path::lexically_normal()`, AND THE REASON IS A COMPILER.
-// This unit is compiled as a module interface that imports `std`, and MSVC
-// 14.52 (measured on both 14.52.36629 and 14.52.36725, xrgui's CI) refuses to
-// instantiate `_Path_iterator`'s hidden-friend `operator==` there:
-//
-//   include\filesystem(1572): error C2801: '..._Path_iterator<...>::operator =='
-//   must be a non-static member
-//
-// `lexically_normal` walks the path's components and is the one call 0.7.0
-// added that reaches that operator. The two normalisations this key needs are
-// string operations, so nothing is lost by not going through `path` at all.
+// Strings, not `std::filesystem::path`: this member must not instantiate the
+// path iterator -- see `mcpp::plugins::names::relative_to` for the compiler
+// that refuses it. The two normalisations this key needs are string operations.
 inline std::string key_of(std::string_view path) {
     std::string s(path);
     for (auto& c : s) if (c == '\\') c = '/';
@@ -474,8 +466,7 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
         // Where a sidecar is found at run time: relative to the package root,
         // which is where `mcpp run` starts the program. The cost of that is
         // stated on `mcpp::plugins::surface::storage::sidecar`.
-        const auto sidecarName =
-            std::filesystem::path(spv).lexically_relative(root).generic_string();
+        const auto sidecarName = mcpp::plugins::names::relative_to(spv, root);
         items.push_back({ .identifier     = p.stem().string(),
                           .name_space     = ns,
                           .data_header    = headerRel,

@@ -361,8 +361,8 @@ inline plan plan_for(options opt = {}) {
         p.reason = "no launcher in the staged tree";
         return p;
     }
-    const auto launcher_rel =
-        std::filesystem::path(launcher).lexically_relative(stage).generic_string();
+    // Strings, not `lexically_relative`: see `mcpp::plugins::names::relative_to`.
+    const auto launcher_rel = mcpp::plugins::names::relative_to(launcher, stage);
 
     // ── The three files AppImage requires, written into the staged tree ────
     const std::string name = app_name_for(opt);
