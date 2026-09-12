@@ -22,6 +22,23 @@
 // no use for, and to write the one file neither the link nor `mcpp::deploy`
 // produces: a page that loads the script.
 //
+// A DEPLOY'D FILE'S RELATIVE PATH IS TAKEN FROM THE STAGED TREE, AND NOT
+// RECOMPUTED FROM `to`, ON PURPOSE. `mcpp::deploy(from, to)`'s `to` names a
+// DIRECTORY, executable-relative -- `types.cppm`'s own `DeployEntry` comment
+// ("a file placed in a directory relative to the executable") and the design
+// record's own criterion (`to = "myapp.resources/huxerui"` with `from =
+// ".../resources.bin"` lands at `bin/myapp.resources/huxerui/resources.bin`,
+// keeping `from`'s own basename) -- so a caller who passes a full destination
+// FILE path as `to` (as `tests/web-consumer/build.mcpp` once did, by mistake)
+// gets exactly that: the file deployed INTO a directory of that name,
+// nested under its own basename a second time. This member has no accessor
+// for a deploy directive's `to` and cannot see that mistake from here; what
+// it CAN do, and does, is mirror the staged tree's actual relative paths
+// faithfully rather than reconstructing them from a rule it would then have
+// to get right twice. A caller's `to` is therefore the whole of the
+// contract, and this member's own fixture is the worked example of getting
+// it right: `to = "assets"`, not `to = "assets/greeting.txt"`.
+//
 // REFUSED BY NAME ON EVERY OTHER TARGET, deliberately, and not merely
 // because no other row happens to produce a `.js` launcher: `--format web`
 // on an ELF or Mach-O row would otherwise silently ship a native binary
