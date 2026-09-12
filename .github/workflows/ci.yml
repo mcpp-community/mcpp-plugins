@@ -29,7 +29,7 @@ env:
   # every dispatched format was unreachable on macOS, including one that never
   # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
   # and `dist-apple` has been unreachable, not broken, since it was written.
-  MCPP_VERSION: 2026.9.12.3
+  MCPP_VERSION: 2026.9.13.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1127,7 +1127,11 @@ jobs:
       # --target wasm32-emscripten` -- see `tests/web-consumer/
       # check-web-plan.sh`'s own header for the host-toolchain defect this
       # needed fixed first (mcpp commit 23974c5e, #622 e2e 657) and the
-      # MCPP_VERSION this step therefore needs at least. `mcpp toolchain
+      # MCPP_VERSION this step therefore needs at least. Since 0.9.0 the same
+      # pin is also the floor for `${mcpp.self}` and `mcpp stage`'s argument
+      # shape as an engine contract (design record
+      # `2026-09-13-four-upstream-asks-from-a-ui-framework.md`, §4), which
+      # `dist-web`'s two copy steps now use in place of `cp`. `mcpp toolchain
       # install` first, because this job's `~/.mcpp` cache does not carry
       # the emsdk payload the way the local sandbox this member was
       # developed against does.
@@ -1137,6 +1141,14 @@ jobs:
       - name: dist-web produces a static directory, and node runs it
         working-directory: tests/web-consumer
         run: MCPP="$MCPP" ./check-web-plan.sh
+
+      # P3's own criterion: a second, no-op pack copies nothing, which `cp`
+      # could never give and `${mcpp.self} stage --verify content` gives for
+      # free. A sibling script, not an addition to the one above, so that
+      # one keeps passing exactly as it did before this batch.
+      - name: dist-web's second pack copies nothing
+        working-directory: tests/web-consumer
+        run: MCPP="$MCPP" ./check-web-idempotent.sh
       # `kind = "app"` on `*-linux-android` links a shared object (#622 A3),
       # so this fixture's own toolchain resolution provisions `xim:android-
       # ndk` for `--target x86_64-linux-android` exactly as mcpp's own CI
@@ -1194,6 +1206,20 @@ jobs:
           tr -d '\r' < badging.log | grep -Eq "^(min)?[sS]dkVersion:'24'" \
             || { echo "FAIL: minSdkVersion is not 24 (this fixture's own min_api_level)"; cat -A badging.log | head -12; exit 1; }
           echo "ok: dist-apk level 0 -- a signed, aapt2-readable APK carrying the native library, the deployed asset and the run sidecar"
+
+      # P1/P2's own criteria (design record §3.5 / §9.2), beside the step
+      # above rather than folded into it: (a) level 0 with no template is
+      # 0.8.0's manifest byte-for-byte; (b) a template's own permission and
+      # receiver reach the linked apk; (c),(d) a template missing a required
+      # token, or naming an unknown one, is refused at plan time, checked on
+      # build.mcpp's own stdout/stderr since mcpp discards it on a plan-time
+      # refusal's exit code of 0 (the script's own header says why); (e) two
+      # Java roots, one under this project and one a sibling directory
+      # reached by an absolute path, dex into one file carrying classes from
+      # both.
+      - name: dist-apk's manifest template and Java roots, (a) to (e)
+        working-directory: tests/apk-consumer
+        run: MCPP="$MCPP" ./check-apk-features.sh
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
