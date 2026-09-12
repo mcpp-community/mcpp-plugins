@@ -1,2 +1,2 @@
 #include <cstdio>
-int main() { std::puts("ios-app-consumer ok"); return 0; }
+int main() { std::puts("1-2-3"); return 0; }

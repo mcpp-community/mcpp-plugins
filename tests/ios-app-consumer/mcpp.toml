@@ -1,7 +1,7 @@
-# Fixture: the iOS row of dist-apple, checked at the PLAN level.
+# Fixture: the iOS row of dist-apple.
 #
-# NO HOST HERE CAN REACH A REAL MEASUREMENT. `--target aarch64-ios-sim`
-# refuses before `build.mcpp` ever runs, on every host without Xcode:
+# ONE FIXTURE, TWO CI LANES. On every host without Xcode, `--target
+# aarch64-ios-sim` refuses before `build.mcpp` ever runs:
 #
 #   error: target aarch64-ios-sim needs the iphonesimulator SDK, which this
 #   machine does not provide.
@@ -10,10 +10,10 @@
 # measurement... only answerable on the platform the member serves") does not
 # even get this member as far as a plan-level assertion on a non-Apple CI
 # runner: there is no `--target` that reaches `plan_for` with `MCPP_TARGET_OS`
-# actually set to `ios` unless the runner IS a Mac with Xcode installed.
-#
-# This package is instead built for the HOST (an ordinary `mcpp build`, no
-# `--target`), which compiles `build.mcpp` into an ordinary ELF binary at
+# actually set to `ios` unless the runner IS a Mac with Xcode installed. On
+# such a runner (`ubuntu-24.04`, the `consumers` job) this package is instead
+# built for the HOST (an ordinary `mcpp build`, no `--target`), which compiles
+# `build.mcpp` into an ordinary ELF binary at
 # `target/.build-mcpp/build.mcpp.bin` and, on this row, does not even reach
 # `plan_for` at pack time (`generate()`'s call to it runs during the plain
 # build too, and returns `applies == false` because `pack_format()` is
@@ -25,10 +25,17 @@
 # `std::getenv` and nothing else (`hostprogram.cppm`), so this exercises the
 # exact same code `plan_for` runs under a real iOS build -- everything past
 # "which environment variables does this process see" is unchanged.
+#
+# On the `macos-15` runner (the `rules-cross-platform` job) the SAME fixture
+# is instead built, packed and run for real, through `--target
+# aarch64-ios-sim`: see that job's "dist-apple's iOS row produces a bundle the
+# simulator launches" step. `[target.aarch64-ios-sim]` below is what that step
+# exercises and the plan-level lane never reaches, because it never sets
+# `MCPP_TARGET` at all.
 [package]
 name        = "ios-app-consumer"
 version     = "0.3.0"
-description = "Fixture: the iOS row of dist-apple, checked at the plan level"
+description = "Fixture: the iOS row of dist-apple, checked at the plan level and, on macOS, for real"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
 
@@ -40,6 +47,29 @@ import_std = true
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = ["dist-apple"], host-module = true }
 
+# THE SAME KEY THE PLAN-LEVEL LANE SETS BY HAND (`MCPP_TARGET_MIN_PLATFORM_
+# VERSION` in `check-ios-plan.sh`), stated here for the real build the macOS
+# lane runs. `mcpp::min_platform_version()` reads this for the effective
+# triple; `dist-apple` copies it into `Info.plist`'s `MinimumOSVersion`
+# unchanged, which is the value the macOS lane compares against.
+[build]
+ios_deployment_target = "17.0"
+
 [targets.ios-app-consumer]
 kind = "bin"
 main = "src/main.cpp"
+
+# THE SIMULATOR ROW ONLY -- the device row (`aarch64-ios`) keeps `runner`
+# unset, as `examples/13-platform-targets/mcpp.toml` does: an artifact cannot
+# be run off an iOS device without a signature the developer owns.
+[target.aarch64-ios-sim]
+runner = ["simctl-run"]
+
+# Declared beside the row that uses it, as every other cross-target fixture in
+# this ecosystem declares its runner's payload. `xim:apple-simulator-tools`
+# 0.2.0 is the release whose `simctl-run` installs and launches a `.app` when
+# the operand is a bundle (see this repository's README and CHANGELOG) --
+# `mcpp pack --format app` is what this fixture's macOS lane runs, so the
+# 0.1.0 bare-executable branch is not enough.
+[target.aarch64-ios-sim.xlings.workspace]
+"xim:apple-simulator-tools" = "0.2.0"

@@ -1715,6 +1715,88 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
           echo "ok: one bundle, a valid plist, and it launches"
 
+      # THE iOS ROW, FOR REAL (#622 B1's other half). `tests/ios-app-consumer`
+      # is the same fixture the Linux `consumers` job checks at the plan
+      # level (see that fixture's own header); here it is built, packed and
+      # run against the real target, because this runner -- unlike every
+      # other host this workflow uses -- carries the Xcode SDKs and a
+      # bootable simulator that make `--target aarch64-ios-sim` reachable at
+      # all.
+      #
+      # GATED ON THE SAME PRECONDITION mcpp's OWN iOS LANE GATES ON
+      # (mcpp's `ci-macos-ios.yml`, `ios-host-surface`): the iPhoneSimulator
+      # SDK ships inside Xcode as a separate component, not the Command Line
+      # Tools alone, so its absence is a fact about the runner image and not
+      # a regression in this collection. Skipped rather than failed, and
+      # skipped before anything is provisioned -- the same order `dist-apple`
+      # itself refuses in, and the reason `docs/20-toolchains.md` (mcpp)
+      # gives: "a machine without Xcode should not download a compiler before
+      # being told the compiler is not what is missing."
+      - name: dist-apple's iOS row produces a bundle the simulator launches
+        if: runner.os == 'macOS'
+        working-directory: tests/ios-app-consumer
+        shell: bash
+        run: |
+          set -uo pipefail
+          if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+            echo "SKIP: no iphonesimulator SDK on this runner"
+            echo "      (xcrun --sdk iphonesimulator --show-sdk-path failed) -- see"
+            echo "      mcpp's docs/20-toolchains.md, 'The Apple SDKs Are Located, Not Installed'"
+            exit 0
+          fi
+          set -e
+
+          rm -rf target
+          "$MCPP" build --target aarch64-ios-sim
+          if find target -name '*.app' | grep -q .; then
+            echo "FAIL: a plain build produced a bundle"; exit 1
+          fi
+          "$MCPP" pack --target aarch64-ios-sim --format app | tee pack.log
+          app=$(find target -name '*.app' -type d | head -1)
+          test -n "$app" || { cat pack.log; echo "FAIL: no .app bundle"; exit 1; }
+
+          # FLAT, NOT Contents/-SHAPED -- the one difference from the macOS
+          # bundle above, and the whole reason iOS needed its own branch in
+          # `dist/apple.cppm`.
+          if [ -d "$app/Contents" ]; then
+            echo "FAIL: the simulator bundle carries Contents/ -- not a flat iOS layout"
+            exit 1
+          fi
+          plist="$app/Info.plist"
+          test -f "$plist" || { echo "FAIL: no Info.plist at the bundle root"; exit 1; }
+          plutil -lint "$plist"
+
+          # `MinimumOSVersion` MUST CARRY THIS FIXTURE'S OWN `[build]
+          # ios_deployment_target`, not a default the engine invented.
+          minos=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$plist")
+          [ "$minos" = "17.0" ] || {
+            echo "FAIL: MinimumOSVersion is '$minos', expected 17.0 (this fixture's ios_deployment_target)"
+            exit 1; }
+          plat=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$plist")
+          [ "$plat" = "iPhoneSimulator" ] || {
+            echo "FAIL: CFBundleSupportedPlatforms is '$plat', expected iPhoneSimulator"
+            exit 1; }
+
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
+          test -x "$app/$exe" \
+            || { echo "FAIL: $app/$exe is missing or not executable"; ls -la "$app"; exit 1; }
+
+          # THE SIMULATOR, THROUGH THE DECLARED RUNNER. `mcpp run --format
+          # app` hands the packaged bundle to `runner = ["simctl-run"]`
+          # (`xim:apple-simulator-tools` 0.2.0, declared on this target row),
+          # which installs and launches it rather than spawning a bare
+          # executable -- the branch that package's 0.2.0 header records as
+          # needed for an installed bundle. This is the same path a
+          # consumer's own `mcpp run --target aarch64-ios-sim --format app`
+          # takes, not a bare `simctl spawn` this step could call directly.
+          out=$("$MCPP" run --target aarch64-ios-sim --format app 2>&1) && rc=0 || rc=$?
+          printf '%s\n' "$out" | tail -20
+          [ "$rc" -eq 0 ] \
+            || { echo "FAIL: mcpp run --target aarch64-ios-sim --format app exited $rc"; exit 1; }
+          grep -qx '1-2-3' <<<"$out" \
+            || { echo "FAIL: the program's output line '1-2-3' is absent"; exit 1; }
+          echo "ok: a flat iOS Simulator bundle, MinimumOSVersion 17.0, and the simulator ran it"
+
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
         run: |
