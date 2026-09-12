@@ -359,11 +359,19 @@ implies           = ["surface"]
 [target.'cfg(linux)'.feature-xlings.dist-appimage]
 "xim:appimagetool" = ">=1.9.1"
 
-# `dist-wix` and `dist-apple` declare no payload, and that is a licence fact
-# rather than an omission. WiX is a .NET tool distributed through NuGet and
-# `codesign` is part of Xcode; neither is redistributable, so each member
-# locates what the machine has and says where it looked when the lookup returns
-# empty -- the `msvc@system` shape, which mcpp already has.
+# WiX IS A PAYLOAD, AND FOR A WHILE THIS FILE SAID IT COULD NOT BE. The
+# toolset is under the Microsoft Reciprocal License and its own licence text
+# permits redistribution (see the header of dist/wix.cppm); `xim:wix` carries
+# 5.0.2. Declared on the Windows target axis, because the produced installer is
+# for a Windows program and the tool is a Windows .NET executable. The .NET
+# runtime it needs is a Windows component and is not declared: no package can
+# honestly own it.
+[target.windows.feature-xlings.dist-wix]
+"xim:wix" = { windows = "5.0.2" }
+
+# `dist-apple` declares no payload for `codesign`: it is part of Xcode, which is
+# not redistributable, so the member locates it and says where it looked. The
+# open-source `rcodesign` is the package that would replace that lookup.
 
 [targets.plugins]
 kind = "lib"

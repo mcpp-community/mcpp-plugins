@@ -1531,39 +1531,17 @@ jobs:
         shell: bash
         run: |
           set -e
-          # WiX ships through NuGet and is not redistributable through this
-          # ecosystem, which is why the member LOCATES it rather than declaring
-          # a payload. Installing it here is the CI runner supplying what a
-          # developer's machine would.
-          # WiX 6, PINNED, AND THE PIN IS THE WHOLE POINT.
-          #
-          # An unpinned `dotnet tool install wix` gets v7, which REFUSES TO RUN
-          # AT ALL until a licence is accepted out of band. Measured on
-          # windows-2022:
-          #
-          #   wix.exe : error WIX7015: You must accept the Open Source
-          #   Maintenance Fee (OSMF) EULA to use WiX Toolset v7.
-          #
-          # That is a runtime gate, not a licence term about redistribution: 6's
-          # own EULA states that binaries may be redistributed and that the
-          # source remains freely distributable under the Microsoft Reciprocal
-          # License. So 6 is the version this ecosystem can actually drive, and
-          # it is also the version `xim:wix` should carry when that package
-          # lands -- a package pinning 7 would install a tool that cannot run.
-          #
-          # THE DISPATCH WAS ALREADY CORRECT WHEN THIS FAILED, which is worth
-          # recording because it is why the fix is a version pin and not a code
-          # change. The same run reported
-          #
-          #   Distributing msi-consumer v0.3.0 (--format msi)
-          #   wix.exe build -arch x64 -d Executable=bin/msi-consumer.exe -o ... MsiConsumer.wxs
-          #
-          # so the `.wxs` was rendered, the argv was assembled and the engine
-          # handed the request to the member. Only the tool declined.
-          dotnet tool install --global wix --version 6.0.2 >/dev/null 2>&1 \
-            || dotnet tool update --global wix --version 6.0.2 >/dev/null 2>&1
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          wix --version
+          # THE TOOL COMES FROM THE PAYLOAD, NOT FROM THIS STEP. `dist-wix`
+          # declares `xim:wix` under `[target.windows.feature-xlings.dist-wix]`,
+          # so mcpp provisions it when the fixture activates the feature on a
+          # Windows target, and the member locates it through `xpkg_dir`. An
+          # earlier revision of this step installed WiX 6 with `dotnet tool`
+          # and the member searched PATH; the criterion below on the argv is
+          # what distinguishes the two, and a run that found a host `wix.exe`
+          # would fail it. WiX 7 is not an option for the payload either: it
+          # refuses to run until an OSMF licence is accepted out of band
+          # (`error WIX7015`, measured on windows-2022), while 5.0.2 and 6.0.2
+          # are under the Microsoft Reciprocal License and run as installed.
 
           # A plain build must have no distribution edge.
           "$MCPP" build
@@ -1573,6 +1551,9 @@ jobs:
           "$MCPP" pack --format msi | tee pack.log
           msi=$(find target -name '*.msi' | head -1)
           test -n "$msi" || { cat pack.log; echo "FAIL: no MSI"; exit 1; }
+          # The argv the engine ran names the tool; it must be the payload's.
+          grep -E 'xim-x-wix[/\\].*wix\.exe build' pack.log >/dev/null \
+            || { cat pack.log; echo "FAIL: wix.exe did not come from the xim:wix payload"; exit 1; }
 
           # THE CRITERION IS THE `File` TABLE, NOT THE FILE'S EXISTENCE. The
           # measured failure this member is shaped around is a VALID, EMPTY,
