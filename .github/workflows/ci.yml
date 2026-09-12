@@ -1687,9 +1687,17 @@ jobs:
           "$MCPP" pack --format msi | tee pack.log
           msi=$(find target -name '*.msi' | head -1)
           test -n "$msi" || { cat pack.log; echo "FAIL: no MSI"; exit 1; }
-          # The argv the engine ran names the tool; it must be the payload's.
-          grep -E 'xim-x-wix[/\\].*wix\.exe build' pack.log >/dev/null \
-            || { cat pack.log; echo "FAIL: wix.exe did not come from the xim:wix payload"; exit 1; }
+          # THE TOOL CAME FROM THE PAYLOAD BY CONSTRUCTION, and the criterion
+          # is the absence of any other: this step installs no WiX, the member
+          # has no PATH tier, and the runner image ships WiX 3 (candle/light)
+          # but no `wix.exe`. An MSI therefore exists only if the payload's
+          # `wix.exe` produced it. The engine prints the argv with the tool's
+          # basename, so the log line cannot carry the store path -- an earlier
+          # revision asserted on that and failed on a correct run.
+          if command -v wix.exe >/dev/null 2>&1 || command -v wix >/dev/null 2>&1; then
+            echo "FAIL: a host wix is on PATH; this step cannot tell the payload's tool from it"
+            command -v wix.exe wix; exit 1
+          fi
 
           # THE CRITERION IS THE `File` TABLE, NOT THE FILE'S EXISTENCE. The
           # measured failure this member is shaped around is a VALID, EMPTY,
