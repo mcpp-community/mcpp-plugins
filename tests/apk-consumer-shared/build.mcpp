@@ -1,0 +1,12 @@
+// Level 0, nothing stated but the target: what this fixture measures is the
+// archive's `lib/<abi>/`, which must carry the dependency's shared object
+// beside the app's (see mcpp.toml).
+import std;
+import mcpp;
+import mcpp.dist.apk;
+
+int main() {
+    mcpp::dist::apk::options opt;
+    opt.target = "apk-consumer-shared";
+    return mcpp::dist::apk::generate(opt) ? 0 : 1;
+}

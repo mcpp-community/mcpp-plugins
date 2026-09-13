@@ -1219,9 +1219,27 @@ jobs:
       # both; (g) a project's own res/ links as the BASE -- two resources
       # nothing else defines reach the apk (0.9.0 linked res/ as an aapt2
       # overlay, which refuses any resource the base does not already have).
-      - name: dist-apk's manifest template, Java roots and res/, (a) to (g)
+      - name: dist-apk's manifest template, Java roots, res/ and version tokens, (a) to (h)
         working-directory: tests/apk-consumer
         run: MCPP="$MCPP" ./check-apk-features.sh
+
+      # A dependency linked as a shared object on the Android row reaches
+      # `lib/<abi>/` beside the app's own: walked from the app's NEEDED at
+      # command time, because the closure on this row is `not-walked` and the
+      # engine stages the app's object and the deployed files only (0.9.3).
+      - name: dist-apk carries the graph's shared libraries
+        working-directory: tests/apk-consumer-shared
+        run: |
+          "$MCPP" build --target x86_64-linux-android
+          "$MCPP" pack --format apk --target x86_64-linux-android | tee pack.log
+          apk=$(find target -name 'apk-consumer-shared.apk' | head -1)
+          test -n "$apk" || { cat pack.log; echo "FAIL: no apk-consumer-shared.apk"; exit 1; }
+          JDK=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-jdk-temurin" -mindepth 1 -maxdepth 1 -type d | head -1)
+          "$JDK/bin/jar" tf "$apk" | tee listing.log
+          for f in "lib/x86_64/libapk-consumer-shared.so" "lib/x86_64/libapk-consumer-dep.so"; do
+            grep -qxF "$f" listing.log || { echo "FAIL: the apk does not list $f"; exit 1; }
+          done
+          echo "ok: the dependency's shared object is in the apk beside the app's"
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a

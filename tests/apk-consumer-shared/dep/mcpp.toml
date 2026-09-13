@@ -1,0 +1,20 @@
+# Fixture: a plain library the consumer beside it links as a SHARED object on
+# the Android row (`linkage = "shared"` in the consumer's own manifest), so
+# that `dist-apk` has a graph-built `lib<dep>.so` to find beside the app's.
+[package]
+name        = "apk-consumer-dep"
+namespace   = "mcpp"
+version     = "0.1.0"
+description = "Fixture: a dependency that becomes lib<dep>.so in an APK"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard = "c++23"
+
+[targets.apk-consumer-dep]
+kind = "lib"
+
+[build]
+sources      = ["src/dep.cpp"]
+include_dirs = ["include"]

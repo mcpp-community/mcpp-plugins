@@ -219,3 +219,24 @@ grep -q 'string/apk_consumer_title' resources-f.log || fail "the project's strin
 grep -q 'color/apk_consumer_background' resources-f.log || fail "the project's colour did not link" resources-f.log
 unset APK_CONSUMER_RES
 echo "ok: a project res/ with resources nobody else defines links as the base"
+
+# ── (h) version_name / version_code tokens ─────────────────────────────────
+#
+# 0.9.3: `{{version_name}}` is `[package] version` as written and
+# `{{version_code}}` its Android integer (major * 1000000 + minor * 1000 +
+# patch), so a manifest template can carry `android:versionName` /
+# `android:versionCode` without a second spelling of the version. The
+# built-in default template stays byte-identical to 0.8.0's (criterion (a)).
+echo "== (h) version_name / version_code tokens =="
+rm -rf target
+unset APK_CONSUMER_LEVEL1 APK_CONSUMER_RES || true
+export APK_CONSUMER_TEMPLATE=manifest-template-version.xml
+"$MCPP" build --target "$TARGET" > build-h.log 2>&1 || fail "build failed" build-h.log
+"$MCPP" pack --format apk --target "$TARGET" > pack-h.log 2>&1 || fail "pack failed" pack-h.log
+APK=$(find target -name 'apk-consumer.apk' | head -1)
+[ -n "$APK" ] || fail "no apk-consumer.apk" pack-h.log
+"$AAPT2" dump badging "$APK" > badging-h.log 2>&1 || fail "aapt2 dump badging failed" badging-h.log
+grep -q "versionName='0.3.0'" badging-h.log || fail "versionName is not the package version" badging-h.log
+grep -q "versionCode='3000'" badging-h.log || fail "versionCode is not 3000 for 0.3.0" badging-h.log
+unset APK_CONSUMER_TEMPLATE
+echo "ok: the manifest carries versionName 0.3.0 and versionCode 3000 from the package version"
