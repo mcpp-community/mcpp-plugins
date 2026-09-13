@@ -386,11 +386,37 @@ inline std::string replace_all_copy(std::string s, std::string_view from, std::s
     return s;
 }
 
-// The six tokens a manifest template may use.
+// The eight tokens a manifest template may use. `version_name` is the
+// package version as written; `version_code` is Android's monotonic integer
+// derived from its leading numeric segments (`version_code_for`).
 inline const std::vector<std::string>& manifest_tokens() {
     static const std::vector<std::string> v = {
-        "application_id", "label", "activity", "lib_name", "min_sdk", "target_sdk"};
+        "application_id", "label", "activity", "lib_name", "min_sdk", "target_sdk",
+        "version_name", "version_code"};
     return v;
+}
+
+// `android:versionCode` from a version string: major * 1000000 + minor * 1000
+// + patch over the first three dot-separated numeric segments, so that every
+// release a project cuts orders after the one before it, and "1" when the
+// string starts with no number at all -- Android refuses 0 and a manifest
+// without the attribute installs but never updates.
+inline std::string version_code_for(const std::string& version) {
+    long long code = 0, seg = 0;
+    int segments = 0;
+    bool digits = false;
+    const long long weights[3] = {1000000, 1000, 1};
+    for (std::size_t i = 0; i <= version.size() && segments < 3; ++i) {
+        const char c = i < version.size() ? version[i] : '\0';
+        if (c >= '0' && c <= '9') { seg = seg * 10 + (c - '0'); digits = true; continue; }
+        if (!digits) break;
+        code += std::min<long long>(seg, 999) * weights[segments] ;
+        ++segments; seg = 0; digits = false;
+        if (c != '.') break;
+    }
+    if (segments == 0) return "1";
+    if (code <= 0) return "1";
+    return std::to_string(code);
 }
 
 // Every `{{...}}` a template names, in first-appearance order, duplicates
@@ -478,13 +504,14 @@ inline bool render_manifest(const std::string& templateText, bool has_code,
                             const std::string& appId, const std::string& label,
                             const std::string& activityName, const std::string& libName,
                             const std::string& minSdk, const std::string& targetSdk,
+                            const std::string& versionName, const std::string& versionCode,
                             std::string& out, std::string& reason) {
     for (auto const& tok : tokens_in(templateText)) {
         if (std::ranges::find(manifest_tokens(), tok) == manifest_tokens().end()) {
             std::cerr << "mcpp.dist.apk: the manifest template names an unknown "
                          "token '{{" << tok << "}}' -- expected one of "
                          "application_id, label, activity, lib_name, min_sdk, "
-                         "target_sdk\n";
+                         "target_sdk, version_name, version_code\n";
             reason = "unknown manifest template token '" + tok + "'";
             return false;
         }
@@ -507,6 +534,8 @@ inline bool render_manifest(const std::string& templateText, bool has_code,
     out = replace_all_copy(std::move(out), "{{lib_name}}", libName);
     out = replace_all_copy(std::move(out), "{{min_sdk}}", minSdk);
     out = replace_all_copy(std::move(out), "{{target_sdk}}", targetSdk);
+    out = replace_all_copy(std::move(out), "{{version_name}}", versionName);
+    out = replace_all_copy(std::move(out), "{{version_code}}", versionCode);
     return true;
 }
 
@@ -818,9 +847,12 @@ inline plan plan_for(options opt = {}) {
         manifestTemplateText = default_manifest_template(hasCode);
     }
 
+    const std::string versionName = mcpp::package_version() ? mcpp::package_version() : "";
+    const std::string versionCode = version_code_for(versionName);
     std::string manifestBytes;
     if (!render_manifest(manifestTemplateText, hasCode, appId, label, activityName,
-                         target, minSdk, targetSdk, manifestBytes, p.reason)) {
+                         target, minSdk, targetSdk, versionName, versionCode,
+                         manifestBytes, p.reason)) {
         return p;
     }
 
@@ -930,6 +962,42 @@ inline plan plan_for(options opt = {}) {
         "cp \"$src\" \"$dst\"\n"
         "\"$jar\" uf \"$dst\" \"$@\"\n");
     { std::error_code ec; fs::permissions(copyThenJar,
+        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+        fs::perm_options::add, ec); }
+    // THE SHARED LIBRARIES THE GRAPH BUILT, WHICH THE STAGED TREE DOES NOT
+    // CARRY. A dependency declared `linkage = "shared"` is linked as its own
+    // `lib<dep>.so` beside the app's in the ordinary build's `bin/`, and the
+    // app's dynamic section NEEDs it by name. The engine stages the app's
+    // own object and the deployed files, but on this row the closure is
+    // `not-walked` (a host cannot run an Android artifact), so nothing else
+    // reaches `lib/` -- and an APK without `lib<dep>.so` installs and dies
+    // at `dlopen` (measured: HuxerUI's framework as a shared library,
+    // `NEEDED libhuxerui.so`, 2026.9.13.2 + 0.9.2). This helper walks NEEDED
+    // from the app's own object at command time -- the set is not knowable
+    // at plan time without the closure -- and copies every name that exists
+    // beside the object, recursively, into `lib/<abi>/`; names that live
+    // nowhere beside it (the platform's `libandroid.so`, `libc.so`) are
+    // skipped, and `libc++_shared.so` is the plan-time copy above.
+    const std::string collectNeeded = (helpersDir / "collect-needed.sh").string();
+    write_if_different(collectNeeded,
+        "#!/bin/sh\n"
+        "# mcpp.dist.apk helper. Do not edit.\n"
+        "set -e\n"
+        "readelf=\"$1\"; so=\"$2\"; dst=\"$3\"; stamp=\"$4\"\n"
+        "dir=$(dirname \"$so\")\n"
+        "mkdir -p \"$dst\"\n"
+        "copy_needed() {\n"
+        "  \"$readelf\" -d \"$1\" | sed -n 's/.*(NEEDED).*\\[\\(.*\\)\\].*/\\1/p' | while IFS= read -r n; do\n"
+        "    if [ -f \"$dir/$n\" ] && [ ! -f \"$dst/$n\" ]; then\n"
+        "      cp \"$dir/$n\" \"$dst/$n\"\n"
+        "      copy_needed \"$dir/$n\"\n"
+        "    fi\n"
+        "  done\n"
+        "}\n"
+        "copy_needed \"$so\"\n"
+        "mkdir -p \"$(dirname \"$stamp\")\"\n"
+        ": > \"$stamp\"\n");
+    { std::error_code ec; fs::permissions(collectNeeded,
         fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
         fs::perm_options::add, ec); }
     const std::string runAndStamp = (helpersDir / "run-and-stamp.sh").string();
@@ -1088,6 +1156,21 @@ inline plan plan_for(options opt = {}) {
         javaOutputs.push_back(d8Step.output);
     }
 
+    // ── the graph's shared libraries, walked from the app's NEEDED ────────
+    step needed;
+    needed.id = "apk:needed";
+    needed.role = "artifact";
+    needed.description = "APK NEEDED";
+    needed.output = (outDir / "needed.stamp").string();
+    {
+        const std::string toolchainDir = mcpp::toolchain_dir();
+        const std::string readelf = (fs::path(toolchainDir) / "bin" / "llvm-readelf").string();
+        const std::string targetFile = std::format("${{mcpp.target_file:{}}}", target);
+        needed.argv = { collectNeeded, readelf, targetFile, libAbiDir.string(), needed.output };
+        needed.inputs = { targetFile };
+    }
+    p.steps.push_back(needed);
+
     // ── native library and assets join the archive ─────────────────────
     step libs;
     libs.id = "apk:libs";
@@ -1102,7 +1185,7 @@ inline plan plan_for(options opt = {}) {
         libs.argv.push_back((outDir / "dex").string());
         libs.argv.push_back("classes.dex");
     }
-    libs.inputs = { apkPath };
+    libs.inputs = { apkPath, needed.output };
     for (auto const& f : libInputs) libs.inputs.push_back(f);
     for (auto const& f : assetInputs) libs.inputs.push_back(f);
     for (auto const& f : javaOutputs) libs.inputs.push_back(f);

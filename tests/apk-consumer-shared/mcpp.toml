@@ -1,0 +1,43 @@
+# Fixture: an app target whose dependency is a SHARED object on the Android
+# row -- the shape a framework takes there (the Java host loads it by name),
+# and the one `dist-apk` used to lose: the engine stages the app's own object
+# and the deployed files, the closure on this row is `not-walked`, and
+# `lib<dep>.so` reached neither `lib/` nor the APK (0.9.2). From 0.9.3 the
+# member walks the app's NEEDED at command time and copies what it finds
+# beside the object.
+[package]
+name        = "apk-consumer-shared"
+version     = "0.2.0"
+description = "Fixture: an APK whose graph carries a shared library"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard = "c++23"
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-apk"], host-module = true }
+
+# THE DEPENDENCY, DECLARED PER ROW. `linkage` is honoured in the root's own
+# declaration only (docs/04), and one identity may be declared once, so the
+# Android row and every other row each get their own table.
+[target.'cfg(env = "android")'.dependencies]
+mcpp.apk-consumer-dep = { path = "dep", linkage = "shared" }
+
+[target.'cfg(not(env = "android"))'.dependencies]
+mcpp.apk-consumer-dep = { path = "dep" }
+
+[targets.apk-consumer-shared]
+kind = "app"
+main = "src/main.cpp"
+
+[target.'cfg(env = "android")'.runtime]
+libraries = ["android", "log"]
+
+[target.x86_64-linux-android]
+min_api_level = 24
+runner = ["adb-run"]
+
+[target.aarch64-linux-android]
+min_api_level = 24
+runner = ["adb-run"]
