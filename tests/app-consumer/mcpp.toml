@@ -23,3 +23,10 @@ plugins = { path = "../..", features = ["dist-apple"], host-module = true }
 [targets.app-consumer]
 kind = "bin"
 main = "src/main.cpp"
+
+# A deployed file, which the bundle must carry at its resource destination
+# (`Contents/Resources/data/greeting.txt` on macOS). The engine stages it at
+# `bin/data/greeting.txt` beside the program (mcpp#630, item 3a), and
+# `dist-apple` places every such entry under the resource directory.
+[runtime]
+deploy = [ { from = "share/greeting.txt", to = "data" } ]

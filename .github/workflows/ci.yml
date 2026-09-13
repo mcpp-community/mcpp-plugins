@@ -29,7 +29,7 @@ env:
   # every dispatched format was unreachable on macOS, including one that never
   # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
   # and `dist-apple` has been unreachable, not broken, since it was written.
-  MCPP_VERSION: 2026.9.13.1
+  MCPP_VERSION: 2026.9.13.2
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1805,7 +1805,16 @@ jobs:
           # hand and got subtly wrong would otherwise fail at launch time on a
           # user's machine and nowhere here.
           plutil -lint "$app/Contents/Info.plist"
-          echo "ok: one bundle, a valid plist, and it launches"
+          # THE DEPLOYED FILE, AT THE RESOURCE DESTINATION AND NOT BESIDE THE
+          # PROGRAM (mcpp#630, item 3a): the engine stages `bin/data/...` and
+          # this member places it under `Contents/Resources/`.
+          test -f "$app/Contents/Resources/data/greeting.txt" \
+            || { echo "FAIL: the deployed file is not under Contents/Resources"; find "$app" -type f; exit 1; }
+          if [ -e "$app/Contents/MacOS/bin" ]; then
+            echo "FAIL: the staged tree was copied whole into Contents/MacOS"; find "$app" -type f; exit 1
+          fi
+          grep -q 'closure = not-walked' pack.log || echo "note: the stage manifest's closure line was not echoed by pack"
+          echo "ok: one bundle, a valid plist, it launches, and the resource is where NSBundle looks"
 
       # THE iOS ROW, FOR REAL (#622 B1's other half). `tests/ios-app-consumer`
       # is the same fixture the Linux `consumers` job checks at the plan
@@ -1868,6 +1877,12 @@ jobs:
           [ "$plat" = "iPhoneSimulator" ] || {
             echo "FAIL: CFBundleSupportedPlatforms is '$plat', expected iPhoneSimulator"
             exit 1; }
+          # THE DEPLOYED FILE, AT THE BUNDLE ROOT (the flat layout), and the
+          # executable at the root by its bare name -- not under `bin/`.
+          test -f "$app/data/greeting.txt" \
+            || { echo "FAIL: the deployed file is not at the bundle root"; find "$app" -type f; exit 1; }
+          test -x "$app/ios-app-consumer" \
+            || { echo "FAIL: the executable is not at the bundle root"; find "$app" -type f; exit 1; }
 
           exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
           test -x "$app/$exe" \

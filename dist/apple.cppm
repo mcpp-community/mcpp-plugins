@@ -246,9 +246,12 @@ struct options {
 // a different signing flag -- from becoming a reimplementation of this
 // member, the same trade `dist/appimage.cppm` makes.
 struct step {
-    const char*               id;
-    const char*                role;
-    const char*               description;
+    // Owned strings rather than literals: the resource steps below name one
+    // action per deployed entry, and an id derived from a file name has to
+    // outlive the function that formed it.
+    std::string               id;
+    const char*               role;
+    std::string               description;
     std::vector<std::string>  argv;
     std::vector<std::string>  inputs;
     // MORE THAN ONE OUTPUT ON THE iOS ICON STEP: a directory of PNGs copies
@@ -713,15 +716,65 @@ inline plan plan_for(options opt = {}) {
     // one and the program when there is not, and the `inputs` entry is the
     // same either way: the program is what this bundle is FOR, and naming it
     // is what orders this action after the link.
+    //
+    // WITH A STAGED TREE IT COPIES THE PROGRAM, NOT THE TREE. The engine
+    // stages a Mach-O program as `bin/<name>` with every deployed file under
+    // `bin/<to>/...` beside it (mcpp#630, item 3a: staging precedes the
+    // closure walk, and the tree is handed over with `closure = not-walked`
+    // in its manifest). Copying that tree whole into `Contents/MacOS/` put
+    // the executable at `Contents/MacOS/bin/<name>`, which is not where
+    // `CFBundleExecutable` says it is, and the resources beside a program
+    // rather than in `Contents/Resources/`, where `NSBundle` looks. So the
+    // launcher goes to the executable directory by itself, and the staged
+    // `bin/` entries that are not the launcher go to the bundle's resource
+    // destination below, at the relative path `mcpp::deploy`'s `to` gave
+    // them. `${mcpp.stage_dir}` is still named as an input of the launcher
+    // copy, which is what orders every step here after staging and gives
+    // the action its dependency on the tree's manifest.
     layout.argv         = stage.empty()
         ? std::vector<std::string>{ "ditto",
               std::format("${{mcpp.target_file:{}}}", target),
               execDir + "/" + executableName }
-        : std::vector<std::string>{ "ditto", "${mcpp.stage_dir}", execDir };
+        : std::vector<std::string>{ "ditto", launcher, execDir + "/" + executableName };
     layout.inputs       = { std::format("${{mcpp.target_file:{}}}", target) };
+    if (!stage.empty()) layout.inputs.push_back("${mcpp.stage_dir}");
     layout.outputs      = { execDir + "/" + executableName };
     p.steps.push_back(layout);
     assembled.push_back(execDir + "/" + executableName);
+
+    // THE DEPLOYED FILES, AT THE BUNDLE'S RESOURCE DESTINATION.
+    //
+    // Read at plan time against the staged tree, the way `dist-apk` reads
+    // its assets: the second pass of `mcpp pack --format app` runs this
+    // program after the tree is staged, so the entries exist on disk here.
+    // One action per top-level entry under `bin/` that is not the launcher,
+    // a file or a whole directory, each named by its own path so that the
+    // graph carries an edge per deployed thing rather than one edge for
+    // "everything". `ditto <dir> <dir>` copies the source's CONTENTS into
+    // the destination, which is the flat layout iOS wants at the bundle
+    // root and the `Contents/Resources/<to>/` layout macOS wants.
+    if (!stage.empty()) {
+        const std::filesystem::path stageBin = std::filesystem::path(stage) / "bin";
+        const std::filesystem::path launcherPath = std::filesystem::path(launcher);
+        std::error_code ec;
+        std::vector<std::filesystem::path> entries;
+        if (std::filesystem::is_directory(stageBin, ec))
+            for (auto const& e : std::filesystem::directory_iterator(stageBin, ec))
+                if (!ec && e.path() != launcherPath) entries.push_back(e.path());
+        std::ranges::sort(entries);
+        for (auto const& e : entries) {
+            const std::string rel = e.filename().string();
+            step res;
+            res.id          = "mcpp.dist.apple.resource." + rel;
+            res.role        = "artifact";
+            res.description = "APP RESOURCE " + rel;
+            res.argv        = { "ditto", e.string(), resourceDir + "/" + rel };
+            res.inputs      = { e.string(), "${mcpp.stage_dir}" };
+            res.outputs     = { resourceDir + "/" + rel };
+            p.steps.push_back(res);
+            assembled.push_back(resourceDir + "/" + rel);
+        }
+    }
 
     if (!opt.icon.empty()) {
         step icon;
@@ -827,9 +880,9 @@ inline bool submit(const plan& p) {
     if (!p.applies) return true;
     for (auto const& s : p.steps) {
         mcpp::action a;
-        a.id          = s.id;
+        a.id          = s.id.c_str();
         a.role        = s.role;
-        a.description = s.description;
+        a.description = s.description.c_str();
         for (auto const& tok : s.argv)    a.arg(tok.c_str());
         for (auto const& in  : s.inputs)  a.input(in.c_str());
         for (auto const& out : s.outputs) a.output(out.c_str());

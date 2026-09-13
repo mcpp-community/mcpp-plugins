@@ -59,6 +59,19 @@ ios_deployment_target = "17.0"
 kind = "bin"
 main = "src/main.cpp"
 
+# THE C++ STANDARD LIBRARY AND THE COMPILER RUNTIME ARE PACKAGES ON THE iOS
+# ROWS (mcpp#630, item 4). The payload's static libc++ is a macOS object and
+# its resource directory carries no iOS builtins archive; without these two
+# lines the engine links the SDK's libc++ under the payload's headers and
+# reports the pairing once. This fixture imports `std`, so it declares them.
+[target.'cfg(os = "ios")'.dependencies]
+llvm.libcxx               = "22.1.8.1"
+llvm.compiler-rt-builtins = "22.1.8.5"
+
+# A deployed file, which the iOS bundle carries at its root (the flat layout).
+[runtime]
+deploy = [ { from = "share/greeting.txt", to = "data" } ]
+
 # THE SIMULATOR ROW ONLY -- the device row (`aarch64-ios`) keeps `runner`
 # unset, as `examples/13-platform-targets/mcpp.toml` does: an artifact cannot
 # be run off an iOS device without a signature the developer owns.
