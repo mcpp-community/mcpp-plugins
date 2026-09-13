@@ -1216,8 +1216,10 @@ jobs:
       # refusal's exit code of 0 (the script's own header says why); (e) two
       # Java roots, one under this project and one a sibling directory
       # reached by an absolute path, dex into one file carrying classes from
-      # both.
-      - name: dist-apk's manifest template and Java roots, (a) to (e)
+      # both; (g) a project's own res/ links as the BASE -- two resources
+      # nothing else defines reach the apk (0.9.0 linked res/ as an aapt2
+      # overlay, which refuses any resource the base does not already have).
+      - name: dist-apk's manifest template, Java roots and res/, (a) to (g)
         working-directory: tests/apk-consumer
         run: MCPP="$MCPP" ./check-apk-features.sh
 

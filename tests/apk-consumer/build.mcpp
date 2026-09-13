@@ -4,8 +4,9 @@
 // -- see dist/apk.cppm's header for why that source is the ordinary build
 // tree and not the pack pipeline's own staged tree on this row.
 //
-// TWO ENVIRONMENT VARIABLES, READ ONLY HERE, SELECT THE FIVE CRITERIA OF
-// design record §3.5 / §9.2 P1-P2 WITHOUT A SECOND FIXTURE.
+// THREE ENVIRONMENT VARIABLES, READ ONLY HERE, SELECT THE SIX CRITERIA OF
+// design record §3.5 / §9.2 P1-P2 AND check-apk-features.sh's (g) WITHOUT A
+// SECOND FIXTURE.
 //
 //   APK_CONSUMER_TEMPLATE   a manifest template file, package-root-relative.
 //                           Unset is the byte-identity criterion (a): the
@@ -15,8 +16,11 @@
 //                           sibling directory this build program reaches by
 //                           an absolute path, standing in for a path
 //                           dependency's own Java tree (design record §3.3).
+//   APK_CONSUMER_RES        non-empty links this package's own `res/` -- two
+//                           resources nothing else defines, so they link only
+//                           as the BASE (positional), never as an overlay.
 //
-// Neither variable is read by `dist-apk` itself -- both are this fixture's
+// No variable is read by `dist-apk` itself -- both are this fixture's
 // own choice of which of its options to set, the same way any project would
 // choose them from its own configuration.
 import std;
@@ -43,6 +47,10 @@ int main() {
 
     if (const char* tpl = std::getenv("APK_CONSUMER_TEMPLATE"); tpl && *tpl) {
         opt.manifest_template = tpl;
+    }
+    // (g) a project's own res/ -- the base, not an overlay.
+    if (const char* res = std::getenv("APK_CONSUMER_RES"); res && *res) {
+        opt.resources = root + "/res";
     }
     if (const char* level1 = std::getenv("APK_CONSUMER_LEVEL1"); level1 && *level1) {
         opt.activity = "org.mcpp.apkconsumer.MainActivity";
