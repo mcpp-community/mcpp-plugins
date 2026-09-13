@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.9.0"
+version     = "0.9.1"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -425,14 +425,14 @@ implies           = ["surface"]
 # key can be handed back as a dependency's "version" and joined to a store
 # path that does not exist, and this rule's own tools inherit the identical
 # hazard if they pin the alias. `xim:android-platform`'s table is keyed by
-# alias too (`"35" = { ref = "35-r2" }`), so this declares the resolved key
+# alias too (`"36" = { ref = "36-r2" }`), so this declares the resolved key
 # directly for the same reason -- `targetSdkVersion` is read back from the
 # directory this entry resolves to (`api_level_from_platform_dir`), so an
 # alias that silently failed to resolve would surface as a build-time
 # refusal rather than a wrong number, but there is no reason to court it.
 [target.'cfg(env = "android")'.feature-xlings.dist-apk]
 "xim:android-build-tools"     = ">=37.0.0"
-"xim:android-platform"        = "35-r2"
+"xim:android-platform"        = "36-r2"
 "xim:jdk-temurin"             = "25.0.4+7"
 "xim:android-debug-keystore"  = "1.0.0"
 

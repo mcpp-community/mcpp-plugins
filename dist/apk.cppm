@@ -134,9 +134,10 @@ struct options {
     // manifest byte-identical to 0.8.0's (`tests/apk-consumer`).
     std::string manifest_template;
 
-    // A `res/`-shaped directory `aapt2 compile --dir` compiles. Empty means
-    // no resources at all -- a legal, common case for a NativeActivity
-    // application that draws everything itself.
+    // A `res/`-shaped directory `aapt2 compile --dir` compiles and `aapt2
+    // link` links as the application's OWN resources -- its launcher icon,
+    // colours, strings. Empty means no resources at all -- a legal, common
+    // case for a NativeActivity application that draws everything itself.
     std::string resources;
 
     // LEVEL 1. One or more directories of `.java` sources; one `javac` over
@@ -358,12 +359,12 @@ inline std::string label_for(const options& opt) {
 }
 
 // `xim:android-platform`'s own resolved directory is named after the
-// version it resolved -- "35-r2", "34-r3" (`pkgs/a/android-platform.lua`'s
-// own `extract_dir()` recovers the API level the identical way, from the
-// leading digits of its OWN version string) -- so the level a project
-// pinned is read back from the directory `xpkg_dir` already answered,
-// rather than duplicated as a second option this member could disagree
-// with.
+// version it resolved -- "36-r2", "35-r2", "34-r3" (`pkgs/a/android-
+// platform.lua`'s own `extract_dir()` recovers the API level the identical
+// way, from the leading digits of its OWN version string) -- so the level a
+// project pinned is read back from the directory `xpkg_dir` already
+// answered, rather than duplicated as a second option this member could
+// disagree with.
 inline std::string api_level_from_platform_dir(const std::string& dir) {
     if (dir.empty()) return {};
     const std::string leaf = fs::path(dir).filename().string();
@@ -995,7 +996,13 @@ inline plan plan_for(options opt = {}) {
     link.output = (outDir / "base.apk").string();
     link.argv = { aapt2, "link", "-I", androidJar, "--manifest", manifestPath,
                  "--min-sdk-version", minSdk, "--target-sdk-version", targetSdk };
-    if (!assembled.empty()) { link.argv.push_back("-R"); link.argv.push_back(assembled.back()); }
+    // POSITIONAL, NOT `-R`. `-R` is aapt2's overlay: a compilation unit whose
+    // resources must each override one the base already defines, and a
+    // project's `res/` IS the base -- linked with `-R`, its first colour
+    // failed as `color/ic_launcher_background does not override an existing
+    // resource` (0.9.0, measured by HuxerUI's Android row). A positional
+    // unit is the base.
+    if (!assembled.empty()) link.argv.push_back(assembled.back());
     link.argv.push_back("-o"); link.argv.push_back(link.output);
     link.inputs = { manifestPath, androidJar };
     if (!assembled.empty()) link.inputs.push_back(assembled.back());

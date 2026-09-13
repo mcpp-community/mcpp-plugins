@@ -2,9 +2,9 @@
 # End-to-end checks for dist-apk's manifest template (design record
 # `2026-09-13-four-upstream-asks-from-a-ui-framework.md`, §3.2 / §9.2 P1) and
 # Java-array (§3.3 / P2) changes, criteria (a) to (e) of §3.5 read against
-# this fixture. `build.mcpp` here reads two environment variables this
-# script sets to reach each configuration without a second fixture -- see
-# its own header.
+# this fixture, plus (g): a project's own res/ links as the base. `build.mcpp`
+# here reads three environment variables this script sets to reach each
+# configuration without a second fixture -- see its own header.
 #
 # Usage: MCPP=<mcpp 2026.9.13.1+> ./check-apk-features.sh   (run from this
 # directory, after `tests/apk-consumer`'s own level-0 CI step, whose target/
@@ -25,6 +25,11 @@ DEXDUMP="$BT/dexdump"
 [ -x "$DEXDUMP" ] || fail "dexdump not found under $BT"
 
 # ── (a) level 0, no template: byte-identical to 0.8.0's manifest ───────────
+#
+# One byte is not 0.8.0's: `targetSdkVersion` is read back from the pinned
+# `xim:android-platform` (`api_level_from_platform_dir`), 36 since 0.9.1
+# (35 in 0.8.0 and 0.9.0). The fixture carries the current level; every
+# other byte is the template 0.8.0 rendered.
 echo "== (a) level 0, no template =="
 rm -rf target
 unset APK_CONSUMER_TEMPLATE APK_CONSUMER_LEVEL1 || true
@@ -193,3 +198,24 @@ unset APK_CONSUMER_LEVEL1
 
 rm -f build-*.log pack-*.log xmltree-*.log refusal-*.log dexdump-*.log mcpp-env.txt
 echo "PASS: dist-apk's manifest template and Java-array criteria (a) to (f)"
+
+# ── (g) a project's res/ is the base, so a NEW resource links ──────────────
+#
+# 0.9.0 handed the compiled res/ to `aapt2 link` as `-R`, which is aapt2's
+# overlay semantics: every resource must override one the base already
+# defines, so the first colour of a real res/ failed with `does not override
+# an existing resource`. A project's res/ is the base and is linked
+# positionally; the two resources here are defined by nothing else.
+echo "== (g) a project res/ links as the base =="
+rm -rf target
+unset APK_CONSUMER_TEMPLATE APK_CONSUMER_LEVEL1 || true
+export APK_CONSUMER_RES=1
+"$MCPP" build --target "$TARGET" > build-f.log 2>&1 || fail "build failed" build-f.log
+"$MCPP" pack --format apk --target "$TARGET" > pack-f.log 2>&1 || fail "pack failed" pack-f.log
+APK=$(find target -name 'apk-consumer.apk' | head -1)
+[ -n "$APK" ] || fail "no apk-consumer.apk" pack-f.log
+"$AAPT2" dump resources "$APK" > resources-f.log 2>&1 || fail "aapt2 dump resources failed" resources-f.log
+grep -q 'string/apk_consumer_title' resources-f.log || fail "the project's string did not link" resources-f.log
+grep -q 'color/apk_consumer_background' resources-f.log || fail "the project's colour did not link" resources-f.log
+unset APK_CONSUMER_RES
+echo "ok: a project res/ with resources nobody else defines links as the base"
