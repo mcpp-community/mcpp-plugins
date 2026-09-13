@@ -246,9 +246,12 @@ struct options {
 // a different signing flag -- from becoming a reimplementation of this
 // member, the same trade `dist/appimage.cppm` makes.
 struct step {
-    const char*               id;
-    const char*                role;
-    const char*               description;
+    // Owned strings rather than literals: the resource steps below name one
+    // action per deployed entry, and an id derived from a file name has to
+    // outlive the function that formed it.
+    std::string               id;
+    const char*               role;
+    std::string               description;
     std::vector<std::string>  argv;
     std::vector<std::string>  inputs;
     // MORE THAN ONE OUTPUT ON THE iOS ICON STEP: a directory of PNGs copies
@@ -877,9 +880,9 @@ inline bool submit(const plan& p) {
     if (!p.applies) return true;
     for (auto const& s : p.steps) {
         mcpp::action a;
-        a.id          = s.id;
+        a.id          = s.id.c_str();
         a.role        = s.role;
-        a.description = s.description;
+        a.description = s.description.c_str();
         for (auto const& tok : s.argv)    a.arg(tok.c_str());
         for (auto const& in  : s.inputs)  a.input(in.c_str());
         for (auto const& out : s.outputs) a.output(out.c_str());
