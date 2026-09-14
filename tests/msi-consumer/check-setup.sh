@@ -4,8 +4,11 @@
 #   1. `mcpp pack --format setup` writes a Burn bundle named after the product
 #      and the architecture, never `setup.exe`, beside the MSI it chains.
 #   2. The bundle carries that MSI: `wix burn extract` takes the attached
-#      container apart, and the package inside is byte-for-byte the MSI the
-#      first action wrote.
+#      container apart, and one of the payloads inside is byte-for-byte the
+#      MSI the first action wrote. A payload is identified by its content, not
+#      by its file name: extracted without the bootstrapper application, whose
+#      manifest maps the names, the payloads keep their ids (`a0`, `a1`; the
+#      second is the MSI's cabinet), measured on windows-2022.
 #
 # The bundle's user interface is WiX's stock bootstrapper application, which
 # `wix build` finds only through the extension `xim:wix` 5.0.2-1 carries; a
@@ -45,12 +48,18 @@ wix="$home/registry/data/xpkgs/xim-x-wix/5.0.2-1/tool/tools/net6.0/any/wix.exe"
 [ -f "$wix" ] || fail "no wix.exe of xim:wix 5.0.2-1 at $wix"
 out="$PWD/target/setup-extract"
 rm -rf "$out"
-"$wix" burn extract "$(cygpath -w "$bundle")" -o "$(cygpath -w "$out")" > setup-extract.log 2>&1 \
-    || fail "wix burn extract refused the bundle" setup-extract.log
-inside=$(find "$out" -type f -iname '*.msi')
-reading extracted "$(find "$out" -type f | sed "s|^$out/||" | tr '\n' ' ')"
-[ "$(printf '%s\n' "$inside" | grep -c .)" = 1 ] || fail "expected one MSI in the bundle, found: $(echo $inside)" setup-extract.log
-cmp -s "$inside" "$msi" || fail "the MSI inside the bundle ($(size "$inside") bytes) differs from $msi ($(size "$msi") bytes)"
+"$wix" burn extract "$(cygpath -w "$bundle")" -oba "$(cygpath -w "$out/ba")" -o "$(cygpath -w "$out/payloads")" \
+    > setup-extract.log 2>&1 || fail "wix burn extract refused the bundle" setup-extract.log
+# A listing file rather than process substitution, which Git Bash emulates.
+find "$out/payloads" -type f | sort > setup-payloads.log
+reading extracted "$(sed "s|^$out/payloads/||" setup-payloads.log | tr '\n' ' ')"
+[ -s setup-payloads.log ] || fail "wix burn extract wrote no payload" setup-extract.log
+match=""
+while IFS= read -r payload; do
+    if cmp -s "$payload" "$msi"; then match="$payload"; break; fi
+done < setup-payloads.log
+[ -n "$match" ] || fail "no payload in the bundle is byte-for-byte $msi ($(size "$msi") bytes)" setup-payloads.log setup-extract.log
+reading msi-payload "${match#$out/payloads/}, $(size "$match") bytes"
 echo "ok: the bundle's container holds the MSI, byte-for-byte"
 
 echo "PASS: dist-wix writes a Burn bundle that chains the MSI"

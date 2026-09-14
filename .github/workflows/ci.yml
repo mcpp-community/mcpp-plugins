@@ -1890,7 +1890,7 @@ jobs:
       # bootstrapper application, chaining the MSI the step above measured, and
       # built through the extension `xim:wix` 5.0.2-1 carries.
       - name: dist-wix produces a Burn bundle that chains the MSI
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
         timeout-minutes: 20
         working-directory: tests/msi-consumer
         run: MCPP="$MCPP" ./check-setup.sh
@@ -1943,12 +1943,14 @@ jobs:
           echo "ok: one bundle, a valid plist, it launches, and the resource is where NSBundle looks"
 
       # THE CLOSURE AS A FRAMEWORK, ON THE BUNDLE (mcpp#634, B1 to B3). The
-      # plan-level half runs on Linux. This half reads the linked program's
+      # plan-level half runs on Linux. This step, the Metal step and the iOS
+      # step measure independent things, so each runs when an earlier step of
+      # the job failed and the job reports every reading it can take. This half reads the linked program's
       # load commands, verifies the bundle's ad-hoc signature, runs the program
       # with and without its framework, runs the bundle through `mcpp run
       # --format app` with no runner in the manifest, and attaches the image.
       - name: dist-apple carries the closure as a signed framework, runs through macapp-run, and writes a disk image
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         timeout-minutes: 30
         working-directory: tests/app-framework-consumer
         run: MCPP="$MCPP" ./check-apple-bundle.sh
@@ -1958,7 +1960,7 @@ jobs:
       # Metal toolchain the script asserts the rule's refusal and annotates the
       # run with a warning that the two criteria are unmeasured.
       - name: rules-metal compiles Metal libraries, or records that this runner has no Metal toolchain
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         timeout-minutes: 20
         working-directory: tests/metal-consumer
         run: MCPP="$MCPP" ./check-metal.sh
@@ -1981,7 +1983,7 @@ jobs:
       # gives: "a machine without Xcode should not download a compiler before
       # being told the compiler is not what is missing."
       - name: dist-apple's iOS row produces a bundle the simulator launches
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         working-directory: tests/ios-app-consumer
         shell: bash
         run: |

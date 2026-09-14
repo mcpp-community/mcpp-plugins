@@ -107,7 +107,9 @@ echo "ok: exit 7 through the framework copy; without it, exit $rc and 'Library n
 
 # ── 4. mcpp run --format app ───────────────────────────────────────────────
 echo "== 4. mcpp run --format app, through the runner dist-apple supplies =="
-if grep -q 'runner' mcpp.toml; then fail "the fixture's manifest names a runner" mcpp.toml; fi
+# The manifest's keys, not its prose: the header comment names the runner this
+# member supplies, so the comments are removed before the search.
+if sed 's/#.*$//' mcpp.toml | grep -q 'runner'; then fail "the fixture's manifest names a runner" mcpp.toml; fi
 # mcpp_run <variant> <mcpp run arguments...>
 mcpp_run() {
     local variant="$1"; shift
