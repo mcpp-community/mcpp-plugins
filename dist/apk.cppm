@@ -547,37 +547,6 @@ inline plan& refuse(plan& p, std::string reason, const std::string& message) {
     return p;
 }
 
-// What the engine wrote beside the staged tree: `<stage>.stage-manifest`
-// (mcpp's docs/50, "The stage manifest"). Only the header and the `needs`
-// lines are read; the file list that follows them is not.
-struct stage_manifest {
-    bool                     found = false;
-    bool                     walked = true;
-    std::string              reason;
-    struct need { std::string name; std::string where; };
-    std::vector<need>        needs;   // `where`: a staged path, `platform` or `unresolved`
-};
-
-inline stage_manifest read_stage_manifest(std::string stage) {
-    stage_manifest m;
-    while (stage.size() > 1 && (stage.back() == '/' || stage.back() == '\\'))
-        stage.pop_back();
-    std::ifstream in(stage + ".stage-manifest", std::ios::binary);
-    if (!in) return m;
-    m.found = true;
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line == "closure = not-walked") { m.walked = false; continue; }
-        if (line.starts_with("reason = ")) { m.reason = line.substr(9); continue; }
-        if (!line.starts_with("needs\t")) continue;
-        const auto second = line.find('\t', 6);
-        if (second == std::string::npos) continue;
-        m.needs.push_back({ line.substr(6, second - 6), line.substr(second + 1) });
-    }
-    return m;
-}
-
 // Android's own ABI names, the directory names a several-triple tree stages
 // under (`lib/<abi>/`) and an APK stores its native libraries under.
 inline bool is_android_abi(std::string_view name) {
@@ -645,7 +614,7 @@ inline plan plan_for(options opt = {}) {
     // manifest without a single `needs` line comes from an engine that staged
     // the application object alone, and packing that tree would produce a
     // package whose object cannot load, so it is refused rather than packed.
-    const auto manifest = read_stage_manifest(stage);
+    const auto manifest = mcpp::plugins::stage::read_manifest(stage);
     if (!manifest.found) {
         return refuse(p, "no stage manifest", std::format(
             "mcpp.dist.apk: the staged tree {} has no stage manifest beside it. "
