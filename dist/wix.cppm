@@ -537,14 +537,23 @@ inline std::string bundle_document(const std::string& name, const std::string& m
 }
 
 // THE REST OF THE STAGED TREE, NAMED FILE BY FILE. `mcpp pack` stages the
-// program and, beside it under `bin/`, everything the program needs at run
-// time: the files a build program deploys (`mcpp::deploy`, `[runtime] deploy`)
-// and the DLLs its closure resolved. An installer that carried the program
-// alone installs something that cannot find its own data. The header's rule
-// still holds -- a directory is never handed to WiX's harvester, which turns a
-// path resolving to nothing into a valid empty installer -- so each file is
-// enumerated here, while the staged tree exists, and named as a
-// `<File Source>`, which is an error when it is missing.
+// program and, beside it, everything the program needs at run time: the files
+// a build program deploys (`mcpp::deploy`, `[runtime] deploy`) and the DLLs its
+// closure resolved. An installer that carried the program alone installs
+// something that cannot find its own data. The header's rule still holds -- a
+// directory is never handed to WiX's harvester, which turns a path resolving
+// to nothing into a valid empty installer -- so each file is enumerated here,
+// while the staged tree exists, and named as a `<File Source>`, which is an
+// error when it is missing.
+//
+// BESIDE THE PROGRAM, WHEREVER THAT IS. A PE program is staged at the root of
+// the tree with its DLLs and deployed files around it (the Win32 loader looks
+// beside the executable, and that is the layout mcpp's `.zip` carries); every
+// other program under `bin/`. Measured on windows-2022 with mcpp 2026.9.14.2:
+// the root. The directory the program was found in is the one enumerated, and
+// at the root the three files mcpp writes there for an archive's reader --
+// `README.md`, `LICENSE` and `HOST-REQUIREMENTS` -- are not installed, as a
+// CMake install of the same program does not install them.
 //
 // Returned as (absolute source, install path relative to INSTALLFOLDER),
 // sorted, the program itself excluded: `$(Executable)` already names it.
@@ -552,16 +561,27 @@ inline std::vector<std::pair<std::string, std::string>>
 staged_files_for(const std::string& stage, const std::string& target) {
     std::vector<std::pair<std::string, std::string>> files;
     if (stage.empty()) return files;
-    const std::filesystem::path bin = std::filesystem::path(stage) / "bin";
     std::error_code ec;
-    if (!std::filesystem::is_directory(bin, ec)) return files;
-    for (auto it = std::filesystem::recursive_directory_iterator(bin, ec);
+    const std::filesystem::path root(stage);
+    std::filesystem::path beside;
+    for (const std::filesystem::path& dir : { root / "bin", root }) {
+        if (std::filesystem::is_regular_file(dir / target, ec) ||
+            std::filesystem::is_regular_file(dir / (target + ".exe"), ec)) {
+            beside = dir;
+            break;
+        }
+    }
+    if (beside.empty()) return files;
+    const bool atRoot = beside == root;
+    for (auto it = std::filesystem::recursive_directory_iterator(beside, ec);
          it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) break;
         if (!it->is_regular_file(ec)) continue;
-        const std::string relative = std::filesystem::relative(it->path(), bin, ec).generic_string();
+        const std::string relative = std::filesystem::relative(it->path(), beside, ec).generic_string();
         if (ec || relative.empty()) continue;
         if (relative == target || relative == target + ".exe") continue;
+        if (atRoot && (relative == "README.md" || relative == "LICENSE" || relative == "HOST-REQUIREMENTS"))
+            continue;
         files.emplace_back(it->path().string(), relative);
     }
     std::sort(files.begin(), files.end(),

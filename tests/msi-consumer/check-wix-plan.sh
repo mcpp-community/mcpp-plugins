@@ -17,8 +17,10 @@
 #   4. A bundle named `setup.exe` is refused before `wix` runs, as a warning.
 #   5. Every file staged beside the program is named, file by file, in the
 #      `StagedFiles` component group the generated definition references; the
-#      program itself is not, and each file is an input of the MSI action, as
-#      are `options::inputs` (MSI) and `options::bundle_inputs` (bundle).
+#      program itself is not, nor the root's README.md, LICENSE and
+#      HOST-REQUIREMENTS, and each file is an input of the MSI action, as are
+#      `options::inputs` (MSI) and `options::bundle_inputs` (bundle).
+#   6. A tree staged under `bin/` installs the files beside the program there.
 #
 # Usage: MCPP=<mcpp> ./check-wix-plan.sh   (run from this directory)
 set -eu
@@ -121,13 +123,18 @@ if not any(l.startswith("mcpp:warning=") and "WIX0388" in l for l in lines):
 echo "ok: refused as a warning, before wix runs"
 
 echo "== 5. the staged tree =="
+# A PE program's tree, as mcpp 2026.9.14.2 stages it on windows-2022: the
+# program at the root, its DLLs and deployed files beside it, and the three
+# files an archive's reader gets at the root.
 stage="$work/stage"
-mkdir -p "$stage/bin/data" "$stage/bin/locale/zh & tw"
-printf 'program' > "$stage/bin/msi-consumer.exe"
-printf 'greeting' > "$stage/bin/data/greeting.txt"
-printf 'dll' > "$stage/bin/runtime.dll"
-printf 'strings' > "$stage/bin/locale/zh & tw/strings.properties"
+mkdir -p "$stage/data" "$stage/locale/zh & tw"
+printf 'program' > "$stage/msi-consumer.exe"
+printf 'greeting' > "$stage/data/greeting.txt"
+printf 'dll' > "$stage/runtime.dll"
+printf 'strings' > "$stage/locale/zh & tw/strings.properties"
 printf 'readme' > "$stage/README.md"
+printf 'license' > "$stage/LICENSE"
+printf 'gpu' > "$stage/HOST-REQUIREMENTS"
 STAGE="$stage" INPUT="$work/app.ico" BUNDLE_INPUT="$work/theme.xml" \
     run_program setup "$work/staged" "$work/staged.log"
 check "$work/staged.log" "$work/staged" '
@@ -165,5 +172,23 @@ definition = open(os.path.join(out, "MsiConsumer.wxs")).read()
 if "<ComponentGroupRef Id=\"StagedFiles\" />" not in definition: fail("the generated definition does not install the StagedFiles group")
 '
 echo "ok: the staged files are named one by one, placed as staged, and are inputs of the MSI"
+
+echo "== 6. a tree staged under bin/ =="
+# Every non-PE program is staged under `bin/`; the files beside it there are
+# the ones installed, and nothing at the root is.
+binstage="$work/binstage"
+mkdir -p "$binstage/bin/data"
+printf 'program' > "$binstage/bin/msi-consumer"
+printf 'greeting' > "$binstage/bin/data/greeting.txt"
+printf 'readme' > "$binstage/README.md"
+STAGE="$binstage" run_program msi "$work/binstaged" "$work/binstaged.log"
+check "$work/binstaged.log" "$work/binstaged" '
+import xml.dom.minidom, os
+doc = xml.dom.minidom.parse(os.path.join(out, "MsiConsumer-staged.wxs"))
+named = sorted((c.getAttribute("Subdirectory"), os.path.basename(c.getElementsByTagName("File")[0].getAttribute("Source")))
+               for c in doc.getElementsByTagName("Component"))
+if named != [("data", "greeting.txt")]: fail("a bin/ tree names " + repr(named))
+'
+echo "ok: under bin/, the files beside the program and nothing else"
 
 echo "PASS: dist-wix plans the MSI and the bundle, and writes well-formed documents"
