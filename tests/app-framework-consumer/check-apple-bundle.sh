@@ -85,21 +85,21 @@ echo "ok: Contents/Frameworks/$DYLIB, nothing loadable among the resources, and 
 # ── 3. the bundled program ─────────────────────────────────────────────────
 echo "== 3. the bundled program loads the framework =="
 rc=0
-DYLD_PRINT_LIBRARIES=1 "$app/Contents/MacOS/$EXE" > bundle-run.out 2> bundle-run.err || rc=$?
-reading bundle-run "exit=$rc $(cat bundle-run.out)"
-[ "$rc" -eq 7 ] || fail "the bundled program exited $rc, not 7" bundle-run.out bundle-run.err
-grep -qx 'framework-1-2-3 argc=1' bundle-run.out || fail "the bundled program's output is missing" bundle-run.out
-loaded=$(grep "$DYLIB" bundle-run.err | head -1)
+DYLD_PRINT_LIBRARIES=1 "$app/Contents/MacOS/$EXE" > bundle-run-out.log 2> bundle-run-err.log || rc=$?
+reading bundle-run "exit=$rc $(cat bundle-run-out.log)"
+[ "$rc" -eq 7 ] || fail "the bundled program exited $rc, not 7" bundle-run-out.log bundle-run-err.log
+grep -qx 'framework-1-2-3 argc=1' bundle-run-out.log || fail "the bundled program's output is missing" bundle-run-out.log
+loaded=$(grep "$DYLIB" bundle-run-err.log | head -1)
 reading loaded "$loaded"
 case "$loaded" in *"/$NAME.app/Contents/Frameworks/$DYLIB") ;;
-    *) fail "the program did not load the framework copy" bundle-run.err ;; esac
+    *) fail "the program did not load the framework copy" bundle-run-err.log ;; esac
 cp -R "$app" "$work/"
 rm "$work/$NAME.app/Contents/Frameworks/$DYLIB"
 rc=0
-"$work/$NAME.app/Contents/MacOS/$EXE" > bundle-noframework.out 2>&1 || rc=$?
-reading without-framework "exit=$rc $(head -2 bundle-noframework.out | tr '\n' ' ')"
-[ "$rc" -ne 0 ] || fail "the program ran without its framework" bundle-noframework.out
-grep -q 'Library not loaded' bundle-noframework.out || fail "the failure is not 'Library not loaded'" bundle-noframework.out
+"$work/$NAME.app/Contents/MacOS/$EXE" > bundle-noframework.log 2>&1 || rc=$?
+reading without-framework "exit=$rc $(head -2 bundle-noframework.log | tr '\n' ' ')"
+[ "$rc" -ne 0 ] || fail "the program ran without its framework" bundle-noframework.log
+grep -q 'Library not loaded' bundle-noframework.log || fail "the failure is not 'Library not loaded'" bundle-noframework.log
 echo "ok: exit 7 through the framework copy; without it, exit $rc and 'Library not loaded'"
 
 # ── 4. mcpp run --format app ───────────────────────────────────────────────

@@ -17,7 +17,9 @@ set -eu
 MCPP="${MCPP:-mcpp}"
 fail() { echo "FAIL: $1"; shift; for f in "$@"; do echo "--- $f ---"; cat "$f" 2>/dev/null; done; exit 1; }
 reading() { printf 'READING %s: %s\n' "$1" "$2"; }
-packed() { sed -n 's/^ *Packed //p' "$1" | tail -1 | tr -d '\r'; }
+# The artifact a pack reports on its `Packed` line, with `/` separators so that
+# `dirname` reads a Windows spelling.
+packed() { sed -n 's/^ *Packed //p' "$1" | tail -1 | tr -d '\r' | tr '\\' '/'; }
 size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1"; }
 
 # ── 1. the bundle ──────────────────────────────────────────────────────────
@@ -35,13 +37,13 @@ echo "ok: $(basename "$bundle") beside $(basename "$msi")"
 
 # ── 2. the MSI inside the bundle ───────────────────────────────────────────
 echo "== 2. the bundle carries the MSI =="
-"$MCPP" self env > setup-env.txt
-home=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' setup-env.txt | tr -d '\r')
-[ -n "$home" ] || fail "could not read MCPP_HOME" setup-env.txt
+"$MCPP" self env > setup-env.log
+home=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' setup-env.log | tr -d '\r')
+[ -n "$home" ] || fail "could not read MCPP_HOME" setup-env.log
 command -v cygpath > /dev/null && home=$(cygpath -u "$home")
 wix="$home/registry/data/xpkgs/xim-x-wix/5.0.2-1/tool/tools/net6.0/any/wix.exe"
 [ -f "$wix" ] || fail "no wix.exe of xim:wix 5.0.2-1 at $wix"
-out="$PWD/setup-extract"
+out="$PWD/target/setup-extract"
 rm -rf "$out"
 "$wix" burn extract "$(cygpath -w "$bundle")" -o "$(cygpath -w "$out")" > setup-extract.log 2>&1 \
     || fail "wix burn extract refused the bundle" setup-extract.log

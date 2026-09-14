@@ -32,9 +32,9 @@ fail() { echo "FAIL: $1"; shift; for f in "$@"; do echo "--- $f ---"; cat "$f" 2
 # The path of the artifact a pack reports on its `Packed` line.
 packed() { sed -n 's/^ *Packed //p' "$1" | tail -1; }
 
-"$MCPP" self env > mcpp-env.txt
-MCPP_HOME_DIR=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' mcpp-env.txt)
-[ -n "$MCPP_HOME_DIR" ] || fail "could not read MCPP_HOME" mcpp-env.txt
+"$MCPP" self env > closure-env.log
+MCPP_HOME_DIR=$(awk -F'= *' '/^MCPP_HOME/{print $2; exit}' closure-env.log)
+[ -n "$MCPP_HOME_DIR" ] || fail "could not read MCPP_HOME" closure-env.log
 XPKGS="$MCPP_HOME_DIR/registry/data/xpkgs"
 
 # tool <package> <path under the package> : the file in whichever installed
