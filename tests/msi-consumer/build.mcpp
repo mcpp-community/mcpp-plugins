@@ -10,6 +10,12 @@ int main() {
     // reach the `setup.exe` refusal without a second fixture.
     if (const char* out = std::getenv("MSI_CONSUMER_BUNDLE_OUTPUT"); out && *out)
         opt.bundle_output = out;
+    // ... and the extra inputs a project's own definitions would name, which
+    // must reach the actions' declared inputs.
+    if (const char* in = std::getenv("MSI_CONSUMER_INPUT"); in && *in)
+        opt.inputs.push_back(in);
+    if (const char* in = std::getenv("MSI_CONSUMER_BUNDLE_INPUT"); in && *in)
+        opt.bundle_inputs.push_back(in);
     // The version, the manufacturer and the upgrade code all come from
     // `[package]`: an installer that restated them would carry a copy that
     // drifts from the manifest with nothing able to detect it.
