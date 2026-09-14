@@ -1,0 +1,37 @@
+# Fixture: a macOS program whose dependency is a SHARED library, packed as a
+# bundle and as a disk image by dist-apple (mcpp#634, B1 to B3).
+#
+# The engine reads the program's closure and stages the dependency's dylib
+# beside the program (mcpp 2026.9.14.2+); `dist-apple` then carries it in
+# `Contents/Frameworks/`, gives the program the rpath that finds it there,
+# signs the bundle ad hoc, supplies the runner named `app`, and writes a
+# `.dmg`. The program exits 7, so that a runner which loses the program's exit
+# status is visible.
+#
+# Built for real on the macOS runner (`rules-cross-platform`), and checked at
+# the plan level on Linux by `check-apple-plan.sh`, which runs the compiled
+# build program under the environment the engine sets for a macOS pack.
+[package]
+name        = "app-framework-consumer"
+version     = "0.1.0"
+description = "Fixture: a bundle that carries its dependency as a framework"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-apple"], host-module = true }
+
+[dependencies]
+mcpp.app-framework-dep = { path = "dep", linkage = "shared" }
+
+[targets.app-framework-consumer]
+kind = "bin"
+main = "src/main.cpp"
+
+[runtime]
+deploy = [ { from = "share/greeting.txt", to = "data" } ]

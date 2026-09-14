@@ -1,0 +1,13 @@
+// No `identity`: the bundle is signed ad hoc on macOS, and the fixture
+// declares no runner, so `mcpp run --format app` reaches the bundle through the
+// runner `dist-apple` supplies.
+import std;
+import mcpp;
+import mcpp.dist.apple;
+
+int main() {
+    mcpp::dist::apple::options opt;
+    opt.target   = "app-framework-consumer";
+    opt.app_name = "AppFrameworkConsumer";
+    return mcpp::dist::apple::generate(opt) ? 0 : 1;
+}

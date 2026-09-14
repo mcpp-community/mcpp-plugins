@@ -391,9 +391,18 @@ implies           = ["surface"]
 [target.windows.feature-xlings.dist-wix]
 "xim:wix" = "5.0.2"
 
-# `dist-apple` declares no payload for `codesign`: it is part of Xcode, which is
-# not redistributable, so the member locates it and says where it looked. The
-# open-source `rcodesign` is the package that would replace that lookup.
+# `dist-apple` declares no payload for `codesign`, `ditto` or `hdiutil`: they are
+# part of macOS and Xcode, which are not redistributable, so the member runs the
+# system's. The open-source `rcodesign` is the package that would replace the
+# `codesign` lookup.
+#
+# THE RUNNER IS A PAYLOAD, AND ONLY `mcpp run` NEEDS IT. `mcpp run --format app`
+# on macOS reaches the bundle through the runner named `app` this member
+# supplies, `macapp-run`, which executes the bundle's executable in the
+# foreground so that its output and exit status are the program's. `when =
+# "run"` keeps a build or a pack from installing it.
+[target.'cfg(os = "macos")'.feature-xlings.dist-apple]
+"xim:macapp-run" = { version = "0.1.0", when = "run" }
 
 # ── The environment `dist-apk` needs ───────────────────────────────────────
 #
