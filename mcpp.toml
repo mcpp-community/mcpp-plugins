@@ -388,8 +388,15 @@ implies           = ["surface"]
 # The per-host table stays the right shape only at the top level, where
 # platform keys select the HOST rather than restating a predicate the
 # section has already applied.
+#
+# 5.0.2-1, NOT 5.0.2, BECAUSE `--format setup` NEEDS THE EXTENSION. The recipe
+# revision adds `WixToolset.BootstrapperApplications.wixext` beside the tool,
+# and a bundle with WiX's stock bootstrapper application is refused without it
+# (WIX0200). An installation made under 5.0.2 keeps the payloads it fetched,
+# because xlings does not re-run the install hook of an installed version, so
+# the pin names the revision rather than the release.
 [target.windows.feature-xlings.dist-wix]
-"xim:wix" = "5.0.2"
+"xim:wix" = "5.0.2-1"
 
 # `dist-apple` declares no payload for `codesign`, `ditto` or `hdiutil`: they are
 # part of macOS and Xcode, which are not redistributable, so the member runs the

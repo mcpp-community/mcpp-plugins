@@ -77,6 +77,18 @@
 // A host lookup therefore exists only where nothing can be shipped, and WiX is
 // no longer such a case. `options::tool` remains for a project that builds the
 // tool itself.
+//
+// `--format setup` IS A BURN BUNDLE THAT CHAINS THE MSI. Two actions: the MSI
+// above, and a second `wix build` over a bundle definition whose `<Chain>` holds
+// that MSI and whose user interface is WiX's stock bootstrapper application
+// (`bal:WixStandardBootstrapperApplication`). The stock application is an
+// extension, `WixToolset.BootstrapperApplications.wixext`, which `xim:wix`
+// carries from 5.0.2-1 and which `wix build` loads by path (`-ext`); without it
+// the bundle is refused (WIX0200, measured on windows-2022 by xim-pkgindex's
+// install check). The bundle is written as `<product_name>-<arch>.exe` and never
+// as `setup.exe`, a name `wix` refuses (WIX0388: Windows loads compatibility
+// shims into an executable named like an installer). A project with its own
+// bootstrapper application supplies its own bundle definition.
 
 module;
 #include <cstdio>
@@ -154,6 +166,19 @@ struct options {
     // Where the produced file lands. Empty means
     // `<out_dir>/<product_name>-<arch>.msi`.
     std::string output;
+
+    // `--format setup`. `bundle_wxs` is a project-supplied bundle definition
+    // that wins over the generated one; it receives the MSI's path as the
+    // preprocessor variable `$(Msi)`. `license_url` is the stock application's
+    // `LicenseUrl`; empty hides the licence link. `extension` names the
+    // `WixToolset.BootstrapperApplications.wixext.dll` to load, and empty means
+    // the one `xim:wix` carries. `bundle_output` is where the bundle lands;
+    // empty means `<out_dir>/<product_name>-<arch>.exe`.
+    std::string bundle_wxs;
+    std::string license_url;
+    std::string extension;
+    std::string bundle_output;
+
     std::string out_dir = std::string(mcpp::out_dir());
 };
 
@@ -176,6 +201,12 @@ struct plan {
     std::string              target_name; // for the opportunistic size probe below
     std::vector<std::string> argv;
     std::vector<std::string> inputs;
+    // `--format setup` only: the bundle that chains the MSI above. Empty
+    // otherwise.
+    std::string              bundle_output;
+    std::string              bundle_wxs_path;
+    std::vector<std::string> bundle_argv;
+    std::vector<std::string> bundle_inputs;
     explicit operator bool() const { return applies; }
 };
 
@@ -203,6 +234,31 @@ inline bool write_if_different(const std::filesystem::path& path,
     if (!out) return false;
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     return static_cast<bool>(out);
+}
+
+// Records a refusal on stderr and as a `mcpp::warning`. A member that refuses
+// submits no action and its build program exits 0, and the engine discards the
+// output of a build program that succeeded; its own error, "no action claimed
+// --format 'msi'", names no reason. The warning channel is one line per
+// directive, so line breaks are folded into spaces.
+inline plan& refuse(plan& p, std::string reason, const std::string& message) {
+    std::cerr << message << '\n';
+    std::string folded;
+    folded.reserve(message.size());
+    bool space = false;
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        const char c = message[i];
+        if (c == '\n' || c == '\r') { space = true; continue; }
+        if (space) {
+            if (c == ' ') continue;
+            folded += ' ';
+            space = false;
+        }
+        folded += c;
+    }
+    mcpp::warning(folded.c_str());
+    p.reason = std::move(reason);
+    return p;
 }
 
 inline std::string target_for(const options& opt) {
@@ -409,6 +465,47 @@ inline std::string discover_tool(const options& opt) {
     return wix_payload_exe();
 }
 
+// The stock bootstrapper application's extension: what the project named, else
+// the one `xim:wix` carries beside its tool (5.0.2-1 and later).
+inline std::string discover_bal_extension(const options& opt) {
+    if (!opt.extension.empty()) return opt.extension;
+    const std::string dir = mcpp::xpkg_dir("xim", "wix");
+    if (dir.empty()) return {};
+    const auto dll = std::filesystem::path(dir) / "bal" / "wixext5"
+                   / "WixToolset.BootstrapperApplications.wixext.dll";
+    return is_file(dll.string()) ? dll.string() : std::string();
+}
+
+// A Burn bundle with WiX's stock bootstrapper application and one package, the
+// MSI, named through `$(Msi)` for the reason `$(Executable)` is (the header's
+// two substitution passes). The bundle carries its own UpgradeCode, derived
+// from the product's identity and distinct from the MSI's: a bundle and the
+// package it installs are two products to Windows.
+inline std::string bundle_document(const std::string& name, const std::string& manufacturer,
+                                   const std::string& version, const std::string& upgrade_code,
+                                   const std::string& license_url) {
+    return std::format(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\"\n"
+        "     xmlns:bal=\"http://wixtoolset.org/schemas/v4/wxs/bal\">\n"
+        "  <!-- Generated by mcpp.dist.wix for --format setup. A project with its\n"
+        "       own bootstrapper application supplies options::bundle_wxs, which\n"
+        "       receives the MSI as $(Msi). -->\n"
+        "  <Bundle Name=\"{0}\" Manufacturer=\"{1}\" Version=\"{2}\" "
+        "UpgradeCode=\"{3}\">\n"
+        "    <BootstrapperApplication>\n"
+        "      <bal:WixStandardBootstrapperApplication Theme=\"hyperlinkLicense\" "
+        "LicenseUrl=\"{4}\" />\n"
+        "    </BootstrapperApplication>\n"
+        "    <Chain>\n"
+        "      <MsiPackage SourceFile=\"$(Msi)\" />\n"
+        "    </Chain>\n"
+        "  </Bundle>\n"
+        "</Wix>\n",
+        xml_escape(name), xml_escape(manufacturer), xml_escape(version), upgrade_code,
+        xml_escape(license_url));
+}
+
 // A minimal WiX v4/v5/v6 definition: one `Package`, one `Component` carrying
 // the single file this member wraps, one `Feature` referencing it. WiX can
 // derive a stable Component GUID from the component's own target path by
@@ -459,38 +556,35 @@ inline plan plan_for(options opt = {}) {
     // `pack_format()` is what says so -- see `generate` for why the
     // DECLARATION must not be gated the same way.
     const std::string requested = mcpp::pack_format();
-    if (requested != "msi") {
+    if (requested != "msi" && requested != "setup") {
         p.reason = requested.empty()
             ? "this build is not packaging"
-            : std::format("--format {} was requested, not msi", requested);
+            : std::format("--format {} was requested, not msi or setup", requested);
         return p;
     }
+    const bool setup = requested == "setup";
 
     // Windows only, and this is a refusal rather than a silent skip: a user
     // who typed `--format msi` on Linux asked for something that does not
     // exist there, and the engine has already accepted the value because the
     // graph declared it.
     if (const std::string os = mcpp::target_os(); os != "windows") {
-        std::cerr << std::format(
+        return refuse(p, "not a Windows target", std::format(
             "mcpp.dist.wix: an MSI is a Windows format, and this build targets "
             "'{}'.\n"
             "  use: --format tar, or build for a Windows target",
-            os.empty() ? "unknown" : os) << '\n';
-        p.reason = "not a Windows target";
-        return p;
+            os.empty() ? "unknown" : os));
     }
 
     const std::string target = target_for(opt);
     if (target.empty()) {
-        std::cerr << "mcpp.dist.wix: no target to package. Set "
-                     "`options::target` to the program target's name.\n";
-        p.reason = "no target";
-        return p;
+        return refuse(p, "no target", "mcpp.dist.wix: no target to package. Set "
+                     "`options::target` to the program target's name.");
     }
 
     const std::string tool = discover_tool(opt);
     if (tool.empty()) {
-        std::cerr << std::format(
+        return refuse(p, "wix not found", std::format(
             "mcpp.dist.wix: the wix CLI was not found.\n"
             "  xpkg_dir(\"xim\", \"wix\") answered \"{}\"; the payload's tool is "
             "tool/tools/net6.0/any/wix.exe beneath it.\n"
@@ -499,63 +593,62 @@ inline plan plan_for(options opt = {}) {
             "the payload is not installed for this build (mcpp provisions it "
             "when the feature is active on a Windows target)\n"
             "  or set `options::tool` to name one explicitly.",
-            mcpp::xpkg_dir("xim", "wix")) << '\n';
-        p.reason = "wix not found";
-        return p;
+            mcpp::xpkg_dir("xim", "wix")));
     }
 
     const std::string hostArch = mcpp::target_arch();
     const std::string arch     = wix_arch_for(hostArch);
     if (arch.empty()) {
-        std::cerr << std::format(
+        return refuse(p, "unknown architecture", std::format(
             "mcpp.dist.wix: WiX has no architecture spelling this member "
             "knows for '{}'. Known: x86_64 -> x64, aarch64 -> arm64.",
-            hostArch.empty() ? "unknown" : hostArch) << '\n';
-        p.reason = "unknown architecture";
-        return p;
+            hostArch.empty() ? "unknown" : hostArch));
     }
 
     const std::string name = product_name_for(opt);
-    std::string wxsPath;
-    if (!opt.wxs.empty()) {
-        if (!is_file(opt.wxs)) {
-            std::cerr << std::format(
-                "mcpp.dist.wix: the definition file {} was not found", opt.wxs) << '\n';
-            p.reason = "definition file not found";
-            return p;
-        }
-        wxsPath = opt.wxs;
-    } else {
+
+    // THE PRODUCT'S METADATA, read once for whichever definition this member
+    // generates: the MSI's when the project supplies none, the bundle's under
+    // `--format setup` when the project supplies none.
+    const bool generatesMsi    = opt.wxs.empty();
+    const bool generatesBundle = setup && opt.bundle_wxs.empty();
+    std::string version, manufacturer, identity;
+    if (generatesMsi || generatesBundle) {
         const char* pv = mcpp::package_version();
         const std::string rawVersion = !opt.version.empty() ? opt.version
                                       : (pv && *pv ? std::string(pv) : std::string());
         if (rawVersion.empty()) {
-            std::cerr << "mcpp.dist.wix: no version to state. Set "
-                         "`[package] version` or `options::version`.\n";
-            p.reason = "no version";
-            return p;
+            return refuse(p, "no version", "mcpp.dist.wix: no version to state. Set "
+                         "`[package] version` or `options::version`.");
         }
         const auto mv = msi_version_from(rawVersion);
         if (!mv.ok) {
-            std::cerr << std::format(
+            return refuse(p, "version not numeric", std::format(
                 "mcpp.dist.wix: '{}' is not a purely numeric, dot-separated "
                 "version, which is what an MSI's Version attribute requires.",
-                rawVersion) << '\n';
-            p.reason = "version not numeric";
-            return p;
+                rawVersion));
         }
-        const std::string manufacturer = manufacturer_for(opt);
+        version      = mv.text;
+        manufacturer = manufacturer_for(opt);
         const char* nsC = mcpp::package_namespace();
         const char* nmC = mcpp::package_name();
-        const std::string identity = (nsC && *nsC ? std::string(nsC) : std::string())
-                                    + "/" + (nmC && *nmC ? std::string(nmC) : std::string());
+        identity = (nsC && *nsC ? std::string(nsC) : std::string())
+                 + "/" + (nmC && *nmC ? std::string(nmC) : std::string());
+    }
+
+    std::string wxsPath;
+    if (!generatesMsi) {
+        if (!is_file(opt.wxs)) {
+            return refuse(p, "definition file not found", std::format(
+                "mcpp.dist.wix: the definition file {} was not found", opt.wxs));
+        }
+        wxsPath = opt.wxs;
+    } else {
         const std::string upgradeCode = !opt.upgrade_code.empty() ? opt.upgrade_code
                                        : upgrade_code_for(identity);
         wxsPath = (std::filesystem::path(opt.out_dir) / (name + ".wxs")).string();
-        if (!write_if_different(wxsPath, wxs_document(name, manufacturer, mv.text, upgradeCode))) {
-            std::cerr << std::format("mcpp.dist.wix: cannot write {}", wxsPath) << '\n';
-            p.reason = "cannot write definition";
-            return p;
+        if (!write_if_different(wxsPath, wxs_document(name, manufacturer, version, upgradeCode))) {
+            return refuse(p, "cannot write definition", std::format("mcpp.dist.wix: cannot write {}", wxsPath));
         }
     }
 
@@ -581,6 +674,64 @@ inline plan plan_for(options opt = {}) {
     // reads, so editing the `.wxs` rebuilds the MSI and a dependency's shared
     // library -- which the MSI's one `File` row never names -- does not.
     p.inputs = { targetFile, wxsPath };
+
+    // `--format setup`: the bundle that chains the MSI above.
+    if (setup) {
+        const std::string extension = discover_bal_extension(opt);
+        if (extension.empty()) {
+            return refuse(p, "bootstrapper application extension not found", std::format(
+                "mcpp.dist.wix: a bundle with WiX's stock bootstrapper application "
+                "needs WixToolset.BootstrapperApplications.wixext, and none was found "
+                "beneath xpkg_dir(\"xim\", \"wix\") = \"{}\" at "
+                "bal/wixext5/WixToolset.BootstrapperApplications.wixext.dll. "
+                "xim:wix carries it from 5.0.2-1; or set `options::extension`.",
+                mcpp::xpkg_dir("xim", "wix")));
+        }
+        std::string bundleWxs;
+        if (!generatesBundle) {
+            if (!is_file(opt.bundle_wxs)) {
+                return refuse(p, "bundle definition file not found", std::format(
+                    "mcpp.dist.wix: the bundle definition file {} was not found",
+                    opt.bundle_wxs));
+            }
+            bundleWxs = opt.bundle_wxs;
+        } else {
+            bundleWxs = (std::filesystem::path(opt.out_dir) / (name + "-bundle.wxs")).string();
+            const std::string doc = bundle_document(name, manufacturer, version,
+                                                    upgrade_code_for(identity + "#bundle"),
+                                                    opt.license_url);
+            if (!write_if_different(bundleWxs, doc)) {
+                return refuse(p, "cannot write bundle definition", std::format("mcpp.dist.wix: cannot write {}", bundleWxs));
+            }
+        }
+        p.bundle_output = !opt.bundle_output.empty() ? opt.bundle_output
+            : (std::filesystem::path(opt.out_dir)
+               / std::format("{}-{}.exe", name, arch)).string();
+        {
+            std::string leaf = std::filesystem::path(p.bundle_output).filename().string();
+            for (std::size_t i = 0; i < leaf.size(); ++i)
+                if (leaf[i] >= 'A' && leaf[i] <= 'Z') leaf[i] = static_cast<char>(leaf[i] - 'A' + 'a');
+            if (leaf == "setup.exe") {
+                return refuse(p, "bundle named setup.exe", "mcpp.dist.wix: a bundle named setup.exe is refused by wix "
+                             "(WIX0388: Windows loads compatibility shims into an "
+                             "executable named like an installer). Choose another "
+                             "`options::bundle_output`.");
+            }
+        }
+        p.bundle_wxs_path = bundleWxs;
+        p.bundle_argv = {
+            tool, "build",
+            "-arch", arch,
+            "-ext", extension,
+            "-d", "Msi=" + p.output,
+            "-o", p.bundle_output,
+            bundleWxs,
+        };
+        // The MSI is an input, which is what orders the bundle after it and
+        // makes the bundle the request's one terminal artifact.
+        p.bundle_inputs = { p.output, bundleWxs, extension };
+    }
+
     p.applies = true;
     return p;
 }
@@ -597,6 +748,17 @@ inline bool submit(const plan& p) {
     for (auto const& in  : p.inputs) a.input(in.c_str());
     a.output(p.output.c_str());
     a.submit();
+
+    if (!p.bundle_argv.empty()) {
+        mcpp::action b;
+        b.id          = "mcpp.dist.wix.bundle";
+        b.role        = "artifact";
+        b.description = "BURN BUNDLE";
+        for (auto const& tok : p.bundle_argv)   b.arg(tok.c_str());
+        for (auto const& in  : p.bundle_inputs) b.input(in.c_str());
+        b.output(p.bundle_output.c_str());
+        b.submit();
+    }
 
     // A FLOOR ON THIS MEMBER'S OWN OUTPUT, ON THE SUCCESS PATH -- IN TWO
     // HALVES, BECAUSE ONE THING IS ALWAYS MEASURABLE AND THE OTHER IS NOT.
@@ -670,6 +832,7 @@ inline bool submit(const plan& p) {
 // format -- and makes the set unknowable for everyone else.
 inline bool generate(options opt = {}) {
     mcpp::provides_pack_format("msi");
+    mcpp::provides_pack_format("setup");
     return submit(plan_for(std::move(opt)));
 }
 
