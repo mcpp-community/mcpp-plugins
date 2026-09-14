@@ -80,9 +80,11 @@ runner = ["simctl-run"]
 
 # Declared beside the row that uses it, as every other cross-target fixture in
 # this ecosystem declares its runner's payload. `xim:apple-simulator-tools`
-# 0.2.0 is the release whose `simctl-run` installs and launches a `.app` when
-# the operand is a bundle (see this repository's README and CHANGELOG) --
-# `mcpp pack --format app` is what this fixture's macOS lane runs, so the
-# 0.1.0 bare-executable branch is not enough.
+# 0.3.0 is the release whose `simctl-run` installs a `.app` and, when its
+# executable does not load UIKit, runs the installed executable with `simctl
+# spawn`, which returns the program's own status and output (measured on
+# macos-15, mcpp#634's triage record, section 7.2). 0.2.0 launched the bundle
+# with `simctl launch --console-pty`, which returned 0 for a program that exits
+# 7 and lost the output once in twenty launches.
 [target.aarch64-ios-sim.xlings.workspace]
-"xim:apple-simulator-tools" = "0.2.0"
+"xim:apple-simulator-tools" = "0.3.0"

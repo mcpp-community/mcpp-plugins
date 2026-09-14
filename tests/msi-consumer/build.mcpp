@@ -6,6 +6,10 @@ int main() {
     mcpp::dist::wix::options opt;
     opt.target       = "msi-consumer";
     opt.product_name = "MsiConsumer";
+    // `check-wix-plan.sh` names the bundle's file through this variable to
+    // reach the `setup.exe` refusal without a second fixture.
+    if (const char* out = std::getenv("MSI_CONSUMER_BUNDLE_OUTPUT"); out && *out)
+        opt.bundle_output = out;
     // The version, the manufacturer and the upgrade code all come from
     // `[package]`: an installer that restated them would carry a copy that
     // drifts from the manifest with nothing able to detect it.

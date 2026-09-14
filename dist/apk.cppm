@@ -1,5 +1,5 @@
 // mcpp.dist.apk -- an application target becomes an installable, signed
-// `.apk`, with or without a Java host.
+// `.apk`, or a signed Android App Bundle (`.aab`), with or without a Java host.
 //
 // WHY THIS IS NEITHER A RULE NOR A TOOL. A rule states how a translation unit
 // is compiled by a compiler mcpp does not drive. A tool states something the
@@ -16,50 +16,41 @@
 // code from a Java/Kotlin activity. Both tiers share every step below except
 // the two that compile and dex Java sources, which level 0 never submits.
 //
-// FIVE ACTIONS, level 0, always in this order and under these ids -- `apk:
-// manifest` (resource compilation, submitted only when `options::resources`
-// names a directory -- there is nothing else this step could do without one),
-// `apk:link` (aapt2 turns the generated manifest, `-I android.jar` and the
-// optional compiled resources into an unsigned, unaligned `base.apk`),
-// `apk:libs` (the native library and the deployed assets join the archive --
-// aapt2 has no flag for this, so this step is `jar`, not aapt2), `apk:align`
-// (`zipalign`), `apk:sign` (`apksigner`). Level 1 adds `apk:javac` and
-// `apk:d8` between `apk:link` and `apk:libs`, and `apk:libs`'s own command
-// grows one more `-C` pair for `classes.dex`.
+// THE STEPS, under these ids and in this order. `apk:manifest` compiles
+// `options::resources` with aapt2 and is submitted only when that option names
+// a directory. `apk:link` links the generated manifest, `-I android.jar` and
+// the compiled resources into an unsigned, unaligned `base.apk`. Level 1 adds
+// `apk:javac` and `apk:d8`. `apk:libs` adds the native libraries, the deployed
+// assets and the dex with `jar` (aapt2 has no flag for native libraries),
+// `apk:align` runs `zipalign` and `apk:sign` runs `apksigner`.
 //
-// WHAT `mcpp pack`'S OWN CLOSURE DOES NOT DO FOR THIS ROW, MEASURED. Android's
-// `run_shared_program` (mcpp.pack) stages the linked `.so` under the staged
-// tree's `lib/` and stops there -- no dependency closure (the object cannot be
-// executed on this host to ask it, `mcpp.pack.pack`'s own comment on that
-// function says so) and, unlike every other row's `run()`, no call to
-// `stage_runtime_files`: `mcpp::deploy`'s destinations are computed into
-// `opts.runtimeFiles` on every row (`mcpp.pack.pipeline`) but the Android
-// branch never consumes that vector. So a project's deployed resources exist
-// only in the ORDINARY build output -- `${mcpp.out_dir}/bin/<to>/...`, beside
-// the linked `.so` there, exactly where `mcpp::deploy`'s own contract puts
-// them ("relative to the executable's directory") -- and never in
-// `${mcpp.pack_stage_dir()}`'s `lib/`. This member therefore reads the
-// program's own native library from the STAGED tree (`lib/*.so`, which is
-// where a future closure would add more) and everything deployed from the
-// BUILD tree's `bin/` (every subdirectory there that is not the link output
-// itself), rather than from one single source the way `dist-appimage` and
-// `dist-apple` can. Measured 2026-09-12 against this exact engine revision
-// with a throwaway fixture; recorded here because the design record's own
-// table row ("`.apk` | `assets/myapp.resources/`") reads as though the staged
-// tree carried them, and it does not.
+// `--format aab` SHARES EVERYTHING BUT THE LAST THREE STEPS. `aab:link` asks
+// aapt2 for the protocol-buffer form bundletool reads (`--proto-format`);
+// `aab:module` lays the linked archive out as a bundle's base module
+// (`manifest/`, `dex/`, `lib/<abi>/`, `assets/`); `aab:bundle` runs `bundletool
+// build-bundle`; and `aab:sign` signs the bundle with `jarsigner`, because an
+// App Bundle carries a JAR signature and not an APK signature scheme.
 //
-// THE C++ RUNTIME IS SHARED, MEASURED. `readelf -d` of a NativeActivity
-// `.so` built by this exact NDK payload (30.0.16248370, the one `xim:
-// android-ndk` resolves for `*-linux-android` today) names `NEEDED
-// libc++_shared.so` -- confirmed by the same warning `mcpp pack` itself
-// prints on this row ("this toolchain ships no libc++.a/libc++abi.a; using
-// toolchain-coupled"). The file is never in `${mcpp.pack_stage_dir()}`'s
-// `lib/` (Android's closure does not walk it, see above), so this member
-// takes it from the ACTIVE toolchain's own sysroot -- `mcpp::toolchain_dir()`
-// resolves to `<ndk>/toolchains/llvm/prebuilt/<host>` for this row already,
-// with no separate `xim:android-ndk` declaration needed on this member's own
-// table, because the NDK is the toolchain building the project, not a tool
-// this member wraps -- at `sysroot/usr/lib/<abi-triple>/libc++_shared.so`.
+// THE NATIVE CLOSURE COMES FROM THE STAGED TREE (mcpp 2026.9.14.2+). The engine
+// reads the application object's closure from the files and stages it: the
+// object, every library the graph built for it, and the NDK's
+// `libc++_shared.so` when the object needs it, under `lib/` for one triple or
+// under `lib/<abi>/` for several, with one `needs` line per name in the stage
+// manifest (mcpp's docs/50, "The stage manifest"). This member copies those
+// files into the package and reads the manifest to refuse a tree it cannot
+// trust: an incomplete closure, a `needs` line whose staged file is absent,
+// and a manifest with no `needs` line, which only an engine older than
+// 2026.9.14.2 writes. Before that release the member walked `DT_NEEDED` itself
+// at command time and recorded the walk in a stamp outside the staged tree, so
+// a second pack of an unchanged project found the stamp current and produced a
+// package without the dependency's library (measured on 0.9.3). The deployed
+// files are staged under the tree's `bin/` on this row as on every other, and
+// become `assets/`.
+//
+// EVERY REFUSAL IS ALSO A `mcpp::warning`. A member that refuses submits no
+// action and its build program exits 0, and the engine discards the output of
+// a build program that succeeded; its own error, "no action claimed --format
+// 'apk'", then named no reason (measured on 0.9.3 with two triples).
 //
 // SIGNING, THROUGH THE PACKAGE MODEL. The default keystore is
 // `xim:android-debug-keystore`'s one `debug.keystore`, whose alias
@@ -68,9 +59,9 @@
 // release -- publishing them discloses nothing (see that package's own
 // header). A project that names `options::keystore` as a package (never a
 // path) is signing with a key it keeps out of every public index; the
-// password reaches `apksigner` as `env:<NAME>`, a token `apksigner` itself
-// resolves against its own environment at run time, so this member never
-// reads the secret.
+// password reaches `apksigner` as `env:<NAME>` and `jarsigner` as
+// `-storepass:env <NAME>`, tokens each tool resolves against its own
+// environment at run time, so this member never reads the secret.
 //
 // WHAT THIS MEMBER DOES NOT DO. It does not run `mcpp run --format apk` --
 // that is `adb-run`, a session `xim:android-platform-tools` registers, and
@@ -172,7 +163,8 @@ struct options {
     // the tool does, at run time, in its own process.
     std::string keystore_password_env;
 
-    // Where the produced file lands. Empty means `<out_dir>/<target>.apk`.
+    // Where the produced file lands. Empty means `<out_dir>/<target>.apk`, or
+    // `<out_dir>/<target>.aab` for `--format aab`.
     std::string output;
     std::string out_dir = std::string(mcpp::out_dir());
 };
@@ -273,55 +265,6 @@ inline std::string abi_for() {
     if (a == "aarch64") return "arm64-v8a";
     if (a == "x86_64")  return "x86_64";
     return {};
-}
-
-// The NDK triple directory under `sysroot/usr/lib/`, which spells arm64
-// differently from the ABI name above (`aarch64-linux-android`, not
-// `arm64-v8a`) -- two vocabularies for the one row, read from two different
-// places upstream, not a choice this member makes.
-inline std::string ndk_lib_triple_for() {
-    const std::string a = mcpp::target_arch();
-    if (a == "aarch64") return "aarch64-linux-android";
-    if (a == "x86_64")  return "x86_64-linux-android";
-    return {};
-}
-
-// Does `so` NEED `libc++_shared.so`? Read from the dynamic section with
-// `llvm-readelf -d`, from the SAME toolchain that linked it -- the one
-// `mcpp::toolchain_dir()` names for this build, not a host `readelf` this
-// project never declared. Measured against this exact NDK (30.0.16248370):
-// an ordinary `import std;` link NEEDs it (`readelf -d` on the fixture's own
-// `.so` lists `NEEDED libc++_shared.so`, and `mcpp pack`'s own warning on
-// this row -- "this toolchain ships no libc++.a/libc++abi.a; using
-// toolchain-coupled" -- says the same thing from the flags side), so this
-// is asked per file rather than assumed true for every build: a project
-// that links `-static-libstdc++` or carries no C++ translation unit at all
-// needs nothing extra, and copying the runtime in unconditionally would
-// carry a library nothing in the APK opens.
-inline bool needs_libcxx_shared(const std::string& toolchainDir, const std::string& so) {
-    const std::string readelf = (fs::path(toolchainDir) / "bin" / "llvm-readelf").string();
-    if (!is_file(readelf) || !is_file(so)) return false;
-    const std::string cmd = "\"" + readelf + "\" -d \"" + so + "\" 2>/dev/null";
-    // `popen` is POSIX and Windows spells it `_popen` -- this module compiles
-    // on every host (`tests/all-rules-compile`), even though `plan_for`
-    // refuses before reaching this call on every row but Android.
-#if defined(_WIN32)
-    FILE* p = ::_popen(cmd.c_str(), "r");
-#else
-    FILE* p = ::popen(cmd.c_str(), "r");
-#endif
-    if (!p) return false;
-    bool found = false;
-    char line[512];
-    while (std::fgets(line, sizeof line, p)) {
-        if (std::strstr(line, "libc++_shared.so")) { found = true; break; }
-    }
-#if defined(_WIN32)
-    ::_pclose(p);
-#else
-    ::pclose(p);
-#endif
-    return found;
 }
 
 // Index loop, not a range-for: GCC 16.1.0 refuses to inline
@@ -489,7 +432,8 @@ inline std::string default_manifest_template(bool has_code) {
 }
 
 // Checks a manifest template and substitutes it, or refuses (returning
-// `false` with `reason` set) naming exactly what is wrong.
+// `false` with `reason` and `message` set) naming exactly what is wrong; the
+// caller reports `message` (see `refuse`).
 //
 // THIS CHECK IS `dist-apk`'S OWN, DELIBERATELY NOT `dist-web`'S. A manifest
 // has a closed, six-token vocabulary this member itself defines; a web page
@@ -505,24 +449,24 @@ inline bool render_manifest(const std::string& templateText, bool has_code,
                             const std::string& activityName, const std::string& libName,
                             const std::string& minSdk, const std::string& targetSdk,
                             const std::string& versionName, const std::string& versionCode,
-                            std::string& out, std::string& reason) {
+                            std::string& out, std::string& reason,
+                            std::string& message) {
     for (auto const& tok : tokens_in(templateText)) {
         if (std::ranges::find(manifest_tokens(), tok) == manifest_tokens().end()) {
-            std::cerr << "mcpp.dist.apk: the manifest template names an unknown "
-                         "token '{{" << tok << "}}' -- expected one of "
-                         "application_id, label, activity, lib_name, min_sdk, "
-                         "target_sdk, version_name, version_code\n";
+            message = "mcpp.dist.apk: the manifest template names an unknown "
+                      "token '{{" + tok + "}}'; expected one of application_id, "
+                      "label, activity, lib_name, min_sdk, target_sdk, "
+                      "version_name, version_code.";
             reason = "unknown manifest template token '" + tok + "'";
             return false;
         }
     }
     for (auto const& tok : required_manifest_tokens(has_code)) {
         if (templateText.find("{{" + tok + "}}") == std::string::npos) {
-            std::cerr << "mcpp.dist.apk: the manifest template does not use "
-                         "'{{" << tok << "}}', and assets/mcpp-run.json -- "
-                         "which adb-run starts the application from -- is "
-                         "written from the same value: add {{" << tok
-                      << "}} to the template.\n";
+            message = "mcpp.dist.apk: the manifest template does not use '{{" + tok
+                    + "}}', and assets/mcpp-run.json, which adb-run starts the "
+                      "application from, is written from the same value: add {{"
+                    + tok + "}} to the template.";
             reason = "manifest template missing required token '" + tok + "'";
             return false;
         }
@@ -573,78 +517,179 @@ inline void collect_tree(const fs::path& src, const fs::path& dst,
     }
 }
 
+// ─── The staged tree ───────────────────────────────────────────────────────
+
+// Records a refusal three ways, because each reaches a different reader. The
+// short `reason` is for a caller that inspects the plan; stderr is for a
+// build program that exits non-zero; `mcpp::warning` is for the ordinary case,
+// a member that refuses, submits nothing and lets the program exit 0 -- the
+// engine discards the output of a build program that succeeded, and then
+// reports only "no action claimed --format 'apk'" (measured on 0.9.3 with two
+// triples). The warning channel is one line per directive, so line breaks in
+// the message are folded into spaces.
+inline plan& refuse(plan& p, std::string reason, const std::string& message) {
+    std::cerr << message << '\n';
+    std::string folded;
+    folded.reserve(message.size());
+    bool space = false;
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        const char c = message[i];
+        if (c == '\n' || c == '\r') { space = true; continue; }
+        if (space) {
+            if (c == ' ') continue;
+            folded += ' ';
+            space = false;
+        }
+        folded += c;
+    }
+    mcpp::warning(folded.c_str());
+    p.reason = std::move(reason);
+    return p;
+}
+
+// Android's own ABI names, the directory names a several-triple tree stages
+// under (`lib/<abi>/`) and an APK stores its native libraries under.
+inline bool is_android_abi(std::string_view name) {
+    return name == "arm64-v8a" || name == "x86_64" || name == "armeabi-v7a" || name == "x86";
+}
+
+// One ABI's native libraries, as the staged tree carries them.
+struct native_leg {
+    std::string              abi;
+    std::vector<std::string> libraries;   // absolute paths, sorted
+};
+
+inline std::vector<std::string> shared_objects_in(const fs::path& dir) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (e.is_regular_file(ec) && e.path().extension() == ".so")
+            out.push_back(e.path().string());
+    }
+    std::ranges::sort(out);
+    return out;
+}
+
 // ─── Plan ──────────────────────────────────────────────────────────────────
 
 inline plan plan_for(options opt = {}) {
     plan p;
 
     const std::string requested = mcpp::pack_format();
-    if (requested != "apk") {
+    if (requested != "apk" && requested != "aab") {
         p.reason = requested.empty()
             ? "this build is not packaging"
-            : std::format("--format {} was requested, not apk", requested);
+            : std::format("--format {} was requested, not apk or aab", requested);
         return p;
     }
+    const bool bundle = requested == "aab";
+    // Step ids name the format, so a build log says which package a step made.
+    const auto id = [&](const char* apkId, const char* aabId) { return bundle ? aabId : apkId; };
 
     if (const std::string env = mcpp::target_env(); env != "android") {
-        std::cerr << std::format(
-            "mcpp.dist.apk: an APK is an Android format, and this build's "
-            "target environment is '{}'.\n"
-            "  build for a *-linux-android target",
-            env.empty() ? "unknown" : env) << '\n';
-        p.reason = "not an Android target";
-        return p;
+        return refuse(p, "not an Android target", std::format(
+            "mcpp.dist.apk: an {} is an Android format, and this build's "
+            "target environment is '{}'. Build for a *-linux-android target.",
+            bundle ? "AAB" : "APK", env.empty() ? "unknown" : env));
     }
 
     const std::string stage = mcpp::pack_stage_dir();
     if (stage.empty()) {
-        std::cerr << "mcpp.dist.apk: mcpp reported no staged tree. This "
-                     "member needs mcpp 2026.9.11.1 or newer.\n";
-        p.reason = "no staged tree";
-        return p;
+        return refuse(p, "no staged tree",
+            "mcpp.dist.apk: mcpp reported no staged tree. This member needs "
+            "mcpp 2026.9.14.2 or newer.");
     }
 
     const std::string target = target_for(opt);
     if (target.empty()) {
-        std::cerr << "mcpp.dist.apk: no target to package. Set "
-                     "`options::target` to the app target's name.\n";
-        p.reason = "no target";
-        return p;
+        return refuse(p, "no target",
+            "mcpp.dist.apk: no target to package. Set `options::target` to the "
+            "app target's name.");
     }
 
-    const std::string abi = abi_for();
-    if (abi.empty()) {
-        std::cerr << std::format(
-            "mcpp.dist.apk: '{}' is not an Android ABI this member knows -- "
-            "expected aarch64 or x86_64 (mcpp::target_arch())",
-            mcpp::target_arch()) << '\n';
-        p.reason = "unsupported ABI";
-        return p;
+    // ── the native closure, read from the staged tree ─────────────────────
+    //
+    // The engine states the closure it staged in the stage manifest. A
+    // manifest without a single `needs` line comes from an engine that staged
+    // the application object alone, and packing that tree would produce a
+    // package whose object cannot load, so it is refused rather than packed.
+    const auto manifest = mcpp::plugins::stage::read_manifest(stage);
+    if (!manifest.found) {
+        return refuse(p, "no stage manifest", std::format(
+            "mcpp.dist.apk: the staged tree {} has no stage manifest beside it. "
+            "This member reads the native closure the engine staged, which needs "
+            "mcpp 2026.9.14.2 or newer.", stage));
+    }
+    if (manifest.needs.empty()) {
+        return refuse(p, "stage manifest without needs lines", std::format(
+            "mcpp.dist.apk: the stage manifest of {} states no `needs` line, so "
+            "the engine that staged it did not read the application's native "
+            "closure: its libraries would be missing from the package. This "
+            "member needs mcpp 2026.9.14.2 or newer, which stages the closure "
+            "under lib/ and states it in the manifest.", stage));
+    }
+    if (!manifest.walked) {
+        std::string names;
+        for (auto const& n : manifest.needs)
+            if (n.where == "unresolved") names += (names.empty() ? "" : ", ") + n.name;
+        return refuse(p, "incomplete native closure", std::format(
+            "mcpp.dist.apk: the application's native closure is incomplete ({}), "
+            "so a package built from this tree would not load: {}",
+            names.empty() ? std::string("no name given") : names,
+            manifest.reason.empty() ? std::string("the stage manifest gives no reason")
+                                    : manifest.reason));
+    }
+    for (auto const& n : manifest.needs) {
+        if (n.where == "platform") continue;
+        if (!is_file((fs::path(stage) / n.where).string())) {
+            return refuse(p, "a staged library is missing", std::format(
+                "mcpp.dist.apk: the stage manifest names {} for {}, and the "
+                "staged tree {} does not carry that file.", n.where, n.name, stage));
+        }
     }
 
-    // ── the app's own shared object, from the staged tree's lib/ ──────────
-    const std::string stageLib = (fs::path(stage) / "lib").string();
-    if (!is_dir(stageLib)) {
-        std::cerr << std::format(
-            "mcpp.dist.apk: the staged tree at {} carries no lib/ -- expected "
-            "the app target's shared object there ({})", stage, stageLib) << '\n';
-        p.reason = "no lib/ in the staged tree";
-        return p;
+    // One flat `lib/` for one triple, `lib/<abi>/` for several.
+    const fs::path stageLib = fs::path(stage) / "lib";
+    if (!is_dir(stageLib.string())) {
+        return refuse(p, "no lib/ in the staged tree", std::format(
+            "mcpp.dist.apk: the staged tree {} carries no lib/, where the engine "
+            "stages the app target's shared object and its closure.", stage));
     }
-    std::vector<std::string> soFiles;
-    { std::error_code ec;
-      for (auto& e : fs::directory_iterator(stageLib, ec)) {
-          if (ec) break;
-          if (e.is_regular_file(ec) && e.path().extension() == ".so")
-              soFiles.push_back(e.path().string());
-      }
+    std::vector<native_leg> legs;
+    {
+        std::vector<std::string> abis;
+        std::error_code ec;
+        for (auto& e : fs::directory_iterator(stageLib, ec)) {
+            if (ec) break;
+            if (e.is_directory(ec) && is_android_abi(e.path().filename().string()))
+                abis.push_back(e.path().filename().string());
+        }
+        std::ranges::sort(abis);
+        for (auto const& abi : abis)
+            legs.push_back({ abi, shared_objects_in(stageLib / abi) });
+        if (legs.empty()) {
+            const std::string abi = abi_for();
+            if (abi.empty()) {
+                return refuse(p, "unsupported ABI", std::format(
+                    "mcpp.dist.apk: '{}' is not an Android ABI this member knows; "
+                    "expected aarch64 or x86_64 (mcpp::target_arch()).",
+                    mcpp::target_arch()));
+            }
+            legs.push_back({ abi, shared_objects_in(stageLib) });
+        }
     }
-    if (soFiles.empty()) {
-        std::cerr << std::format(
-            "mcpp.dist.apk: {} carries no .so at all -- expected the app "
-            "target's own shared object", stageLib) << '\n';
-        p.reason = "no shared object in the staged tree";
-        return p;
+    const std::string objectName = "lib" + target + ".so";
+    for (auto const& leg : legs) {
+        const bool hasObject = std::ranges::any_of(leg.libraries, [&](const std::string& f) {
+            return fs::path(f).filename().string() == objectName;
+        });
+        if (!hasObject) {
+            return refuse(p, "no application object in the staged tree", std::format(
+                "mcpp.dist.apk: the staged tree carries no {} for the {} ABI. "
+                "`options::target` names '{}', and the engine stages that "
+                "target's shared object under lib/.", objectName, leg.abi, target));
+        }
     }
 
     if (opt.java_sources.empty() && !opt.activity.empty()) {
@@ -656,57 +701,44 @@ inline plan plan_for(options opt = {}) {
                       "android.app.NativeActivity and ignores it");
     }
     if (!opt.java_sources.empty() && opt.activity.empty()) {
-        std::cerr << "mcpp.dist.apk: options::java_sources is set, so this "
-                     "is a level-1 (Java-hosted) package, and options::"
-                     "activity is required: the manifest has no other way "
-                     "to name the launchable activity.\n";
-        p.reason = "java_sources without activity";
-        return p;
+        return refuse(p, "java_sources without activity",
+            "mcpp.dist.apk: options::java_sources is set, so this is a level-1 "
+            "(Java-hosted) package, and options::activity is required: the "
+            "manifest has no other way to name the launchable activity.");
     }
     const bool hasCode = !opt.java_sources.empty();
 
     // ── the payloads this member declared ──────────────────────────────
     const std::string buildTools = mcpp::xpkg_dir("xim", "android-build-tools");
     if (buildTools.empty()) {
-        std::cerr << std::format(
-            "mcpp.dist.apk: xim:android-build-tools was not found.\n"
-            "  declare it under [target.'cfg(env = \"android\")'."
-            "feature-xlings.dist-apk] in the consuming project, or install "
-            "it directly.") << '\n';
-        p.reason = "android-build-tools not found";
-        return p;
+        return refuse(p, "android-build-tools not found",
+            "mcpp.dist.apk: xim:android-build-tools was not found. Declare it "
+            "under [target.'cfg(env = \"android\")'.feature-xlings.dist-apk] in "
+            "the consuming project, or install it directly.");
     }
     const std::string platformDir = mcpp::xpkg_dir("xim", "android-platform");
     if (platformDir.empty()) {
-        std::cerr << "mcpp.dist.apk: xim:android-platform was not found "
-                     "(declare it under [target.'cfg(env = \"android\")'."
-                     "feature-xlings.dist-apk]).\n";
-        p.reason = "android-platform not found";
-        return p;
+        return refuse(p, "android-platform not found",
+            "mcpp.dist.apk: xim:android-platform was not found (declare it under "
+            "[target.'cfg(env = \"android\")'.feature-xlings.dist-apk]).");
     }
     const std::string androidJar = (fs::path(platformDir) / "android.jar").string();
     if (!is_file(androidJar)) {
-        std::cerr << std::format(
-            "mcpp.dist.apk: {} does not exist -- {} does not look like an "
-            "Android platform payload", androidJar, platformDir) << '\n';
-        p.reason = "android.jar not found";
-        return p;
+        return refuse(p, "android.jar not found", std::format(
+            "mcpp.dist.apk: {} does not exist; {} does not look like an Android "
+            "platform payload.", androidJar, platformDir));
     }
     const std::string targetSdk = api_level_from_platform_dir(platformDir);
     if (targetSdk.empty()) {
-        std::cerr << std::format(
+        return refuse(p, "no API level", std::format(
             "mcpp.dist.apk: could not read an API level from the resolved "
-            "xim:android-platform directory '{}'", platformDir) << '\n';
-        p.reason = "no API level";
-        return p;
+            "xim:android-platform directory '{}'.", platformDir));
     }
     const std::string minSdk = mcpp::min_platform_version();
     if (minSdk.empty()) {
-        std::cerr << "mcpp.dist.apk: mcpp::min_platform_version() is empty "
-                     "on an Android target; this member needs mcpp "
-                     "2026.9.12.2 or newer.\n";
-        p.reason = "no min platform version";
-        return p;
+        return refuse(p, "no min platform version",
+            "mcpp.dist.apk: mcpp::min_platform_version() is empty on an Android "
+            "target; this member needs mcpp 2026.9.12.2 or newer.");
     }
 
     // `apksigner`/`d8`: the JAVA_HOME/PATH wrapper `xim:android-build-tools`
@@ -723,72 +755,85 @@ inline plan plan_for(options opt = {}) {
              std::pair{"aapt2", aapt2}, std::pair{"zipalign", zipalign},
              std::pair{"apksigner", apksigner}, std::pair{"d8", d8}}) {
         if (!is_file(path)) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: {} was not found at {} -- {} does not look "
-                "like the xim:android-build-tools payload",
-                name, path, buildTools) << '\n';
-            p.reason = std::format("{} not found", name);
-            return p;
+            return refuse(p, std::format("{} not found", name), std::format(
+                "mcpp.dist.apk: {} was not found at {}; {} does not look like the "
+                "xim:android-build-tools payload.", name, path, buildTools));
         }
     }
 
-    // `javac`/`jar`: NEITHER is part of `xim:android-build-tools` (only
-    // `apksigner` and `d8` are wrapped there, see that package's header) --
-    // both come from `xim:jdk-temurin` directly, declared on this member's
-    // own table rather than assumed reachable through android-build-tools'
-    // runtime dependency, which provisions the JDK for ITS OWN wrappers and
-    // does not make it visible to a consumer's build program (docs/31,
-    // "declare the tool where it will be looked up").
+    // `javac`/`jar`/`jarsigner`: NONE is part of `xim:android-build-tools`
+    // (only `apksigner` and `d8` are wrapped there, see that package's header)
+    // -- all three come from `xim:jdk-temurin` directly, declared on this
+    // member's own table rather than assumed reachable through
+    // android-build-tools' runtime dependency, which provisions the JDK for
+    // ITS OWN wrappers and does not make it visible to a consumer's build
+    // program (docs/31, "declare the tool where it will be looked up").
     const std::string jdkHome = mcpp::xpkg_dir("xim", "jdk-temurin");
     if (jdkHome.empty()) {
-        std::cerr << "mcpp.dist.apk: xim:jdk-temurin was not found "
-                     "(declare it under [target.'cfg(env = \"android\")'."
-                     "feature-xlings.dist-apk]).\n";
-        p.reason = "jdk-temurin not found";
-        return p;
+        return refuse(p, "jdk-temurin not found",
+            "mcpp.dist.apk: xim:jdk-temurin was not found (declare it under "
+            "[target.'cfg(env = \"android\")'.feature-xlings.dist-apk]).");
     }
-    const std::string javac = (fs::path(jdkHome) / "bin" / "javac").string();
-    const std::string jar   = (fs::path(jdkHome) / "bin" / "jar").string();
-    for (auto const& [name, path] : {std::pair{"javac", javac}, std::pair{"jar", jar}}) {
+    const std::string javac     = (fs::path(jdkHome) / "bin" / "javac").string();
+    const std::string jar       = (fs::path(jdkHome) / "bin" / "jar").string();
+    const std::string jarsigner = (fs::path(jdkHome) / "bin" / "jarsigner").string();
+    for (auto const& [name, path] : {std::pair{"javac", javac}, std::pair{"jar", jar},
+                                     std::pair{"jarsigner", jarsigner}}) {
         if (!is_file(path)) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: {} was not found at {} -- {} does not look "
-                "like a JDK payload", name, path, jdkHome) << '\n';
-            p.reason = std::format("{} not found", name);
-            return p;
+            return refuse(p, std::format("{} not found", name), std::format(
+                "mcpp.dist.apk: {} was not found at {}; {} does not look like a "
+                "JDK payload.", name, path, jdkHome));
+        }
+    }
+
+    // `bundletool`: only an App Bundle needs it. The launcher `xim:bundletool`
+    // writes runs the JDK it was installed against.
+    std::string bundletool;
+    if (bundle) {
+        const std::string btDir = mcpp::xpkg_dir("xim", "bundletool");
+        bundletool = btDir.empty() ? std::string()
+                                   : (fs::path(btDir) / "bin" / "bundletool").string();
+        if (!is_file(bundletool)) {
+            return refuse(p, "bundletool not found", std::format(
+                "mcpp.dist.apk: an Android App Bundle is built by bundletool, and "
+                "xim:bundletool was not found{}. It is declared under "
+                "[target.'cfg(env = \"android\")'.feature-xlings.dist-apk].",
+                btDir.empty() ? std::string() : std::format(" at {}", bundletool)));
         }
     }
 
     // ── signing: a keystore, an alias and a password ───────────────────
+    //
+    // `apksigner` takes a password as `pass:<value>` or `env:<NAME>`;
+    // `jarsigner` takes the same two as `-storepass <value>` or
+    // `-storepass:env <NAME>`. Both spellings are derived from one decision.
     std::string keystoreFile, keystoreAlias, keystorePassArg;
+    std::vector<std::string> jarsignerPass;
     if (opt.keystore.empty()) {
         const std::string ksDir = mcpp::xpkg_dir("xim", "android-debug-keystore");
         if (ksDir.empty()) {
-            std::cerr << "mcpp.dist.apk: xim:android-debug-keystore was not "
-                         "found (declare it under [target.'cfg(env = "
-                         "\"android\")'.feature-xlings.dist-apk], or set "
-                         "options::keystore).\n";
-            p.reason = "android-debug-keystore not found";
-            return p;
+            return refuse(p, "android-debug-keystore not found",
+                "mcpp.dist.apk: xim:android-debug-keystore was not found (declare "
+                "it under [target.'cfg(env = \"android\")'.feature-xlings.dist-apk], "
+                "or set options::keystore).");
         }
         keystoreFile = (fs::path(ksDir) / "debug.keystore").string();
         // The exact, published Android debug-signing convention -- not a
         // secret; see this member's header and `xim:android-debug-keystore`'s
         // own.
-        keystoreAlias  = "androiddebugkey";
+        keystoreAlias   = "androiddebugkey";
         keystorePassArg = "pass:android";
+        jarsignerPass   = { "-storepass", "android", "-keypass", "android" };
     } else {
         auto colon = opt.keystore.find(':');
         const std::string ns   = colon == std::string::npos ? "" : opt.keystore.substr(0, colon);
         const std::string name = colon == std::string::npos ? opt.keystore : opt.keystore.substr(colon + 1);
         const std::string ksDir = mcpp::xpkg_dir(ns.c_str(), name.c_str());
         if (ksDir.empty()) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: keystore package '{}' was not found. Declare "
-                "it under [target.'cfg(env = \"android\")'.xlings.workspace] "
-                "in the consuming project.", opt.keystore) << '\n';
-            p.reason = "keystore package not found";
-            return p;
+            return refuse(p, "keystore package not found", std::format(
+                "mcpp.dist.apk: keystore package '{}' was not found. Declare it "
+                "under [target.'cfg(env = \"android\")'.xlings.workspace] in the "
+                "consuming project.", opt.keystore));
         }
         std::vector<std::string> candidates;
         { std::error_code ec;
@@ -800,24 +845,22 @@ inline plan plan_for(options opt = {}) {
           }
         }
         if (candidates.size() != 1) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: expected exactly one *.keystore/*.jks file in "
-                "{}, found {}", ksDir, candidates.size()) << '\n';
-            p.reason = "ambiguous keystore package";
-            return p;
+            return refuse(p, "ambiguous keystore package", std::format(
+                "mcpp.dist.apk: expected exactly one *.keystore/*.jks file in {}, "
+                "found {}.", ksDir, candidates.size()));
         }
         keystoreFile = candidates.front();
         if (opt.keystore_alias.empty() || opt.keystore_password_env.empty()) {
-            std::cerr << "mcpp.dist.apk: options::keystore names a package, "
-                         "so options::keystore_alias and options::"
-                         "keystore_password_env are both required -- a "
-                         "private key has no convention this member may "
-                         "assume.\n";
-            p.reason = "keystore alias/password not given";
-            return p;
+            return refuse(p, "keystore alias/password not given",
+                "mcpp.dist.apk: options::keystore names a package, so "
+                "options::keystore_alias and options::keystore_password_env are "
+                "both required: a private key has no convention this member may "
+                "assume.");
         }
         keystoreAlias   = opt.keystore_alias;
         keystorePassArg = "env:" + opt.keystore_password_env;
+        jarsignerPass   = { "-storepass:env", opt.keystore_password_env,
+                            "-keypass:env", opt.keystore_password_env };
     }
 
     // ── the manifest and the run sidecar, written now (plan time) ─────────
@@ -830,10 +873,8 @@ inline plan plan_for(options opt = {}) {
         const std::string tplPath =
             (fs::path(mcpp::manifest_dir()) / opt.manifest_template).string();
         if (!is_file(tplPath)) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: the manifest template {} was not found", tplPath) << '\n';
-            p.reason = "manifest template not found";
-            return p;
+            return refuse(p, "manifest template not found", std::format(
+                "mcpp.dist.apk: the manifest template {} was not found.", tplPath));
         }
         // The template is declared so an edit to it reaches the graph -- the
         // one thing the ask's workaround (overwriting the manifest after
@@ -849,83 +890,39 @@ inline plan plan_for(options opt = {}) {
 
     const std::string versionName = mcpp::package_version() ? mcpp::package_version() : "";
     const std::string versionCode = version_code_for(versionName);
-    std::string manifestBytes;
+    std::string manifestBytes, manifestReason, manifestMessage;
     if (!render_manifest(manifestTemplateText, hasCode, appId, label, activityName,
                          target, minSdk, targetSdk, versionName, versionCode,
-                         manifestBytes, p.reason)) {
-        return p;
+                         manifestBytes, manifestReason, manifestMessage)) {
+        return refuse(p, manifestReason, manifestMessage);
     }
 
-    const std::string manifestPath = (fs::path(opt.out_dir) / "dist-apk" / "AndroidManifest.xml").string();
+    const fs::path outDir = fs::path(opt.out_dir) / (bundle ? "dist-aab" : "dist-apk");
+    const std::string manifestPath = (outDir / "AndroidManifest.xml").string();
     if (!write_if_different(manifestPath, manifestBytes)) {
-        std::cerr << std::format("mcpp.dist.apk: cannot write {}", manifestPath) << '\n';
-        p.reason = "cannot write AndroidManifest.xml";
-        return p;
+        return refuse(p, "cannot write AndroidManifest.xml", std::format(
+            "mcpp.dist.apk: cannot write {}.", manifestPath));
     }
 
     // ── the temporary staging tree: lib/<abi>/, assets/ ─────────────────
     //
-    // ASSETS, READ AT PLAN TIME AGAINST `pack_stage_dir()`, THE SAME WAY
-    // EVERY OTHER MEMBER READS ITS STAGED TREE (`dist-appimage`'s `is_file`,
-    // `dist-apple`'s identical reads). docs/30 ("Producing a distributable")
-    // and e2e 651/649 in the mcpp tree both show `mcpp::deploy`'s `to`
-    // landing at `<staged tree>/bin/<to>/...`, beside the packed executable
-    // -- the second pass of `mcpp pack --format apk` runs `plan_for` AFTER
-    // the tree is staged, so those files already exist on disk when this
-    // program reads them, exactly as `dist-appimage` reads `${mcpp.stage_
-    // dir}`'s `AppRun` candidates.
-    //
-    // MEASURED ON THIS ROW, 2026-09-12, AGAINST THE ENGINE REVISION THIS
-    // MEMBER IS BUILT AGAINST: `*-linux-android`'s own staged tree carries
-    // `lib/<name>.so` and NOTHING ELSE -- `run_shared_program` (mcpp.pack)
-    // stages the app's own object and stops, calling neither the ELF
-    // closure walk nor `stage_runtime_files` the way every other row's
-    // `run()` does (see this member's header, "WHAT `mcpp pack`'S OWN
-    // CLOSURE DOES NOT DO FOR THIS ROW"). So the loop below is written to
-    // the documented, cross-row contract and DOES fire wherever the engine
-    // actually stages `bin/<to>/...` beside the executable; on THIS row,
-    // today, `bin/` does not exist in the staged tree at all, and the loop
-    // is a no-op -- a deployed file is declared correctly and staged
-    // nowhere, which is the honest report of a gap in `run_shared_program`
-    // rather than in this member. See this member's own report for the
-    // measurement that found it.
-    const fs::path work = fs::path(opt.out_dir) / "dist-apk" / "stage";
+    // Populated at plan time from the engine's staged tree, which the second
+    // pass of `mcpp pack` runs this program after. It is emptied first, so a
+    // library the graph no longer builds does not survive into the next
+    // package, and every file copied here is an input of the step that adds
+    // it to the archive.
+    const fs::path work = outDir / "stage";
     { std::error_code ec; fs::remove_all(work, ec); }
     std::vector<std::string> libInputs;
-    const fs::path libAbiDir = work / "lib" / abi;
-    for (auto const& so : soFiles) collect_tree(so, libAbiDir / fs::path(so).filename(), libInputs);
-
-    // `libc++_shared.so`, WHEN THE CLOSURE NEEDS IT. See `needs_libcxx_shared`
-    // for the measurement. Not in `${mcpp.pack_stage_dir()}`'s `lib/` --
-    // Android's own closure does not walk dependencies onto that tree at all
-    // (this member's header) -- so it comes from the ACTIVE toolchain's own
-    // sysroot, the same one that linked every `.so` this member just staged.
-    {
-        const std::string toolchainDir = mcpp::toolchain_dir();
-        const std::string triple = ndk_lib_triple_for();
-        if (!toolchainDir.empty() && !triple.empty()) {
-            const std::string libcxx =
-                (fs::path(toolchainDir) / "sysroot" / "usr" / "lib" / triple
-                 / "libc++_shared.so").string();
-            bool needed = false;
-            for (auto const& so : soFiles)
-                if (needs_libcxx_shared(toolchainDir, so)) { needed = true; break; }
-            if (needed) {
-                if (is_file(libcxx))
-                    collect_tree(libcxx, libAbiDir / "libc++_shared.so", libInputs);
-                else
-                    mcpp::warning(std::format(
-                        "mcpp.dist.apk: the closure NEEDs libc++_shared.so but "
-                        "{} does not exist -- the apk will fail to load",
-                        libcxx).c_str());
-            }
-        }
-    }
+    for (auto const& leg : legs)
+        for (auto const& so : leg.libraries)
+            collect_tree(so, work / "lib" / leg.abi / fs::path(so).filename(), libInputs);
 
     const fs::path assetsDir = work / "assets";
     std::vector<std::string> assetInputs;
-    { // every deploy'd file, `<stage>/bin/<rel>` -> `assets/<rel>` -- see the
-      // long comment above for what this loop finds on this row today.
+    { // every deploy'd file, `<stage>/bin/<rel>` -> `assets/<rel>`: the engine
+      // stages `mcpp::deploy`'s destinations under `bin/` on this row as on
+      // every other.
       const fs::path stageBin = fs::path(stage) / "bin";
       std::error_code ec;
       if (fs::is_directory(stageBin, ec)) {
@@ -939,87 +936,46 @@ inline plan plan_for(options opt = {}) {
     }
     const std::string runJsonPath = (assetsDir / "mcpp-run.json").string();
     if (!write_if_different(runJsonPath, run_json(appId, activityName))) {
-        std::cerr << std::format("mcpp.dist.apk: cannot write {}", runJsonPath) << '\n';
-        p.reason = "cannot write mcpp-run.json";
-        return p;
+        return refuse(p, "cannot write mcpp-run.json", std::format(
+            "mcpp.dist.apk: cannot write {}.", runJsonPath));
     }
     assetInputs.push_back(runJsonPath);
 
-    // ── the small helper script this pipeline needs (argv only, no
-    // shell): copies the archive and hands the result to `jar`. The
-    // staging tree it copies from (`work`) is fully populated by the time
-    // this runs -- native libraries and deployed assets alike are read
-    // above, at plan time, not discovered by this script -- so, unlike an
-    // earlier revision of this member, it takes no `bindir` argument at
-    // all ─────────────────────────────────────────────────────────────
-    const fs::path helpersDir = fs::path(opt.out_dir) / "dist-apk";
-    const std::string copyThenJar = (helpersDir / "copy-then-jar.sh").string();
-    write_if_different(copyThenJar,
+    // ── the small helper scripts this pipeline needs (argv only, no shell
+    // between the engine and the tool). Each is written at plan time, only
+    // when its bytes differ, and is marked executable. ─────────────────────
+    auto helper = [&](const char* name, std::string_view body) {
+        const std::string path = (outDir / name).string();
+        write_if_different(path, body);
+        std::error_code ec;
+        fs::permissions(path,
+            fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+            fs::perm_options::add, ec);
+        return path;
+    };
+    // Copies the linked archive and adds the staged `lib/`, `assets/` and the
+    // dex with `jar`: aapt2 has no flag for native libraries.
+    const std::string copyThenJar = helper("copy-then-jar.sh",
         "#!/bin/sh\n"
         "# mcpp.dist.apk helper. Do not edit.\n"
         "set -e\n"
         "src=\"$1\"; dst=\"$2\"; jar=\"$3\"; shift 3\n"
         "cp \"$src\" \"$dst\"\n"
         "\"$jar\" uf \"$dst\" \"$@\"\n");
-    { std::error_code ec; fs::permissions(copyThenJar,
-        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-        fs::perm_options::add, ec); }
-    // THE SHARED LIBRARIES THE GRAPH BUILT, WHICH THE STAGED TREE DOES NOT
-    // CARRY. A dependency declared `linkage = "shared"` is linked as its own
-    // `lib<dep>.so` beside the app's in the ordinary build's `bin/`, and the
-    // app's dynamic section NEEDs it by name. The engine stages the app's
-    // own object and the deployed files, but on this row the closure is
-    // `not-walked` (a host cannot run an Android artifact), so nothing else
-    // reaches `lib/` -- and an APK without `lib<dep>.so` installs and dies
-    // at `dlopen` (measured: HuxerUI's framework as a shared library,
-    // `NEEDED libhuxerui.so`, 2026.9.13.2 + 0.9.2). This helper walks NEEDED
-    // from the app's own object at command time -- the set is not knowable
-    // at plan time without the closure -- and copies every name that exists
-    // beside the object, recursively, into `lib/<abi>/`; names that live
-    // nowhere beside it (the platform's `libandroid.so`, `libc.so`) are
-    // skipped, and `libc++_shared.so` is the plan-time copy above.
-    const std::string collectNeeded = (helpersDir / "collect-needed.sh").string();
-    write_if_different(collectNeeded,
-        "#!/bin/sh\n"
-        "# mcpp.dist.apk helper. Do not edit.\n"
-        "set -e\n"
-        "readelf=\"$1\"; so=\"$2\"; dst=\"$3\"; stamp=\"$4\"\n"
-        "dir=$(dirname \"$so\")\n"
-        "mkdir -p \"$dst\"\n"
-        "copy_needed() {\n"
-        "  \"$readelf\" -d \"$1\" | sed -n 's/.*(NEEDED).*\\[\\(.*\\)\\].*/\\1/p' | while IFS= read -r n; do\n"
-        "    if [ -f \"$dir/$n\" ] && [ ! -f \"$dst/$n\" ]; then\n"
-        "      cp \"$dir/$n\" \"$dst/$n\"\n"
-        "      copy_needed \"$dir/$n\"\n"
-        "    fi\n"
-        "  done\n"
-        "}\n"
-        "copy_needed \"$so\"\n"
-        "mkdir -p \"$(dirname \"$stamp\")\"\n"
-        ": > \"$stamp\"\n");
-    { std::error_code ec; fs::permissions(collectNeeded,
-        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-        fs::perm_options::add, ec); }
-    const std::string runAndStamp = (helpersDir / "run-and-stamp.sh").string();
-    write_if_different(runAndStamp,
+    const std::string runAndStamp = helper("run-and-stamp.sh",
         "#!/bin/sh\n"
         "set -e\n"
         "stamp=\"$1\"; shift\n"
         "\"$@\"\n"
         "mkdir -p \"$(dirname \"$stamp\")\"\n"
         "touch \"$stamp\"\n");
-    { std::error_code ec; fs::permissions(runAndStamp,
-        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-        fs::perm_options::add, ec); }
     // `d8` DOES NOT ACCEPT A DIRECTORY, MEASURED (2026-09-12, d8 9.2.4,
     // `xim:android-build-tools` 37.0.0): `d8 --output <dir> <classesDir>`
     // fails in the tool itself, `Unsupported source file type`, one frame
     // into `BaseCommand$Builder.addProgramFiles`. javac's own output set is
-    // not knowable at plan time (see above), so this wrapper finds the
-    // `.class` files `d8`'s command line needs at COMMAND time instead --
-    // the identical "find" this member already had to reach for `assets/`.
-    const std::string runD8 = (helpersDir / "run-d8.sh").string();
-    write_if_different(runD8,
+    // not knowable at plan time, so this wrapper finds the `.class` files
+    // `d8`'s command line needs at COMMAND time instead.
+    const std::string runD8 = helper("run-d8.sh",
         "#!/bin/sh\n"
         "# mcpp.dist.apk helper. Do not edit.\n"
         "set -e\n"
@@ -1030,24 +986,38 @@ inline plan plan_for(options opt = {}) {
         "    exit 1\n"
         "fi\n"
         "\"$d8\" \"$@\" $classes\n");
-    { std::error_code ec; fs::permissions(runD8,
-        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-        fs::perm_options::add, ec); }
+    // THE BASE MODULE OF AN APP BUNDLE. `aapt2 link --proto-format` writes the
+    // manifest at the archive's root beside `resources.pb` and `res/`;
+    // bundletool reads a module whose manifest is under `manifest/`, whose dex
+    // is under `dex/` and whose native libraries and assets are under `lib/`
+    // and `assets/`. This lays the linked archive out that way. A level-0
+    // package has no dex, which the fourth argument states as `-`: an empty
+    // argument does not survive the action's argv.
+    const std::string makeModule = bundle ? helper("make-module.sh",
+        "#!/bin/sh\n"
+        "# mcpp.dist.apk helper. Do not edit.\n"
+        "set -e\n"
+        "proto=\"$1\"; module=\"$2\"; work=\"$3\"; dex=\"$4\"; jar=\"$5\"; out=\"$6\"\n"
+        "rm -rf \"$module\" \"$out\"\n"
+        "mkdir -p \"$module/manifest\"\n"
+        "(cd \"$module\" && \"$jar\" xf \"$proto\")\n"
+        "mv \"$module/AndroidManifest.xml\" \"$module/manifest/AndroidManifest.xml\"\n"
+        "if [ -d \"$work/lib\" ]; then cp -R \"$work/lib\" \"$module/lib\"; fi\n"
+        "if [ -d \"$work/assets\" ]; then cp -R \"$work/assets\" \"$module/assets\"; fi\n"
+        "if [ \"$dex\" != - ]; then mkdir -p \"$module/dex\"; cp \"$dex\" \"$module/dex/classes.dex\"; fi\n"
+        "\"$jar\" cfM \"$out\" -C \"$module\" .\n") : std::string();
 
     // ── the pipeline ────────────────────────────────────────────────────
-    const fs::path outDir = fs::path(opt.out_dir) / "dist-apk";
     std::vector<std::string> assembled; // every step's own output, for later inputs
 
     if (!opt.resources.empty()) {
         if (!is_dir(opt.resources)) {
-            std::cerr << std::format(
-                "mcpp.dist.apk: options::resources '{}' is not a directory",
-                opt.resources) << '\n';
-            p.reason = "resources directory not found";
-            return p;
+            return refuse(p, "resources directory not found", std::format(
+                "mcpp.dist.apk: options::resources '{}' is not a directory.",
+                opt.resources));
         }
         step compile;
-        compile.id = "apk:manifest";
+        compile.id = id("apk:manifest", "aab:manifest");
         compile.role = "artifact";
         compile.description = "AAPT2 COMPILE";
         compile.output = (outDir / "compiled.zip").string();
@@ -1058,12 +1028,25 @@ inline plan plan_for(options opt = {}) {
     }
 
     step link;
-    link.id = "apk:link";
+    link.id = id("apk:link", "aab:link");
     link.role = "artifact";
-    link.description = "AAPT2 LINK";
-    link.output = (outDir / "base.apk").string();
+    link.description = bundle ? "AAPT2 LINK (PROTO)" : "AAPT2 LINK";
+    link.output = (outDir / (bundle ? "base-proto.zip" : "base.apk")).string();
     link.argv = { aapt2, "link", "-I", androidJar, "--manifest", manifestPath,
                  "--min-sdk-version", minSdk, "--target-sdk-version", targetSdk };
+    // The protocol-buffer form is the one bundletool reads; an APK is the
+    // binary form a device installs. A bundle also needs a version code, which
+    // bundletool refuses the base module without ("Version code not found in
+    // manifest", measured with 1.18.3) and the built-in manifest does not
+    // write: aapt2 injects the package version's into a manifest that states
+    // none, and leaves a template's own value alone.
+    if (bundle) {
+        link.argv.push_back("--proto-format");
+        link.argv.push_back("--version-code"); link.argv.push_back(versionCode);
+        if (!versionName.empty()) {
+            link.argv.push_back("--version-name"); link.argv.push_back(versionName);
+        }
+    }
     // POSITIONAL, NOT `-R`. `-R` is aapt2's overlay: a compilation unit whose
     // resources must each override one the base already defines, and a
     // project's `res/` IS the base -- linked with `-R`, its first colour
@@ -1075,7 +1058,6 @@ inline plan plan_for(options opt = {}) {
     link.inputs = { manifestPath, androidJar };
     if (!assembled.empty()) link.inputs.push_back(assembled.back());
     p.steps.push_back(link);
-    std::string apkPath = link.output;
 
     std::vector<std::string> javaOutputs; // classes.dex, when level 1
     if (hasCode) {
@@ -1087,11 +1069,9 @@ inline plan plan_for(options opt = {}) {
         std::vector<std::string> javaFiles;
         for (auto const& root : opt.java_sources) {
             if (!is_dir(root)) {
-                std::cerr << std::format(
+                return refuse(p, "java_sources directory not found", std::format(
                     "mcpp.dist.apk: options::java_sources root '{}' is not a "
-                    "directory", root) << '\n';
-                p.reason = "java_sources directory not found";
-                return p;
+                    "directory.", root));
             }
             const std::size_t before = javaFiles.size();
             { std::error_code ec;
@@ -1102,11 +1082,9 @@ inline plan plan_for(options opt = {}) {
               }
             }
             if (javaFiles.size() == before) {
-                std::cerr << std::format(
-                    "mcpp.dist.apk: options::java_sources root '{}' carries "
-                    "no .java file", root) << '\n';
-                p.reason = "no .java sources";
-                return p;
+                return refuse(p, "no .java sources", std::format(
+                    "mcpp.dist.apk: options::java_sources root '{}' carries no "
+                    ".java file.", root));
             }
             // THE RE-RUN QUESTION (design record §3.3). `glob_fingerprint`
             // walks the PACKAGE ROOT and matches paths relative to it; a
@@ -1131,7 +1109,7 @@ inline plan plan_for(options opt = {}) {
 
         const std::string classesDir = (outDir / "classes").string();
         step javacStep;
-        javacStep.id = "apk:javac";
+        javacStep.id = id("apk:javac", "aab:javac");
         javacStep.role = "artifact";
         javacStep.description = "JAVAC";
         javacStep.output = classesDir + "/.stamp";
@@ -1145,7 +1123,7 @@ inline plan plan_for(options opt = {}) {
 
         const std::string dexDir = (outDir / "dex").string();
         step d8Step;
-        d8Step.id = "apk:d8";
+        d8Step.id = id("apk:d8", "aab:d8");
         d8Step.role = "artifact";
         d8Step.description = "D8";
         d8Step.output = dexDir + "/classes.dex";
@@ -1156,28 +1134,58 @@ inline plan plan_for(options opt = {}) {
         javaOutputs.push_back(d8Step.output);
     }
 
-    // ── the graph's shared libraries, walked from the app's NEEDED ────────
-    step needed;
-    needed.id = "apk:needed";
-    needed.role = "artifact";
-    needed.description = "APK NEEDED";
-    needed.output = (outDir / "needed.stamp").string();
-    {
-        const std::string toolchainDir = mcpp::toolchain_dir();
-        const std::string readelf = (fs::path(toolchainDir) / "bin" / "llvm-readelf").string();
-        const std::string targetFile = std::format("${{mcpp.target_file:{}}}", target);
-        needed.argv = { collectNeeded, readelf, targetFile, libAbiDir.string(), needed.output };
-        needed.inputs = { targetFile };
-    }
-    p.steps.push_back(needed);
+    if (bundle) {
+        // ── an Android App Bundle: the base module, the bundle, the signature ─
+        step baseModule;
+        baseModule.id = "aab:module";
+        baseModule.role = "artifact";
+        baseModule.description = "AAB BASE MODULE";
+        baseModule.output = (outDir / "base.zip").string();
+        baseModule.argv = { makeModule, link.output, (outDir / "module").string(), work.string(),
+                        javaOutputs.empty() ? std::string("-") : javaOutputs.front(),
+                        jar, baseModule.output };
+        baseModule.inputs = { link.output };
+        for (auto const& f : libInputs)   baseModule.inputs.push_back(f);
+        for (auto const& f : assetInputs) baseModule.inputs.push_back(f);
+        for (auto const& f : javaOutputs) baseModule.inputs.push_back(f);
+        p.steps.push_back(baseModule);
 
-    // ── native library and assets join the archive ─────────────────────
+        step build;
+        build.id = "aab:bundle";
+        build.role = "artifact";
+        build.description = "BUNDLETOOL BUILD-BUNDLE";
+        build.output = (outDir / "unsigned.aab").string();
+        build.argv = { bundletool, "build-bundle", "--modules=" + baseModule.output,
+                       "--output=" + build.output, "--overwrite" };
+        build.inputs = { baseModule.output };
+        p.steps.push_back(build);
+
+        step sign;
+        sign.id = "aab:sign";
+        sign.role = "artifact";
+        sign.description = "JARSIGNER";
+        p.output = !opt.output.empty() ? opt.output
+                 : (fs::path(opt.out_dir) / (target + ".aab")).string();
+        sign.output = p.output;
+        sign.argv = { jarsigner, "-keystore", keystoreFile };
+        for (auto const& a : jarsignerPass) sign.argv.push_back(a);
+        sign.argv.push_back("-signedjar"); sign.argv.push_back(sign.output);
+        sign.argv.push_back(build.output);
+        sign.argv.push_back(keystoreAlias);
+        sign.inputs = { build.output, keystoreFile };
+        p.steps.push_back(sign);
+
+        p.applies = true;
+        return p;
+    }
+
+    // ── native libraries, assets and dex join the archive ──────────────
     step libs;
     libs.id = "apk:libs";
     libs.role = "artifact";
     libs.description = "APK LIBS+ASSETS";
     libs.output = (outDir / "withlibs.apk").string();
-    libs.argv = { copyThenJar, apkPath, libs.output, jar,
+    libs.argv = { copyThenJar, link.output, libs.output, jar,
                  "-C", work.string(), "lib",
                  "-C", work.string(), "assets" };
     if (!javaOutputs.empty()) {
@@ -1185,8 +1193,8 @@ inline plan plan_for(options opt = {}) {
         libs.argv.push_back((outDir / "dex").string());
         libs.argv.push_back("classes.dex");
     }
-    libs.inputs = { apkPath, needed.output };
-    for (auto const& f : libInputs) libs.inputs.push_back(f);
+    libs.inputs = { link.output };
+    for (auto const& f : libInputs)   libs.inputs.push_back(f);
     for (auto const& f : assetInputs) libs.inputs.push_back(f);
     for (auto const& f : javaOutputs) libs.inputs.push_back(f);
     p.steps.push_back(libs);
@@ -1238,12 +1246,10 @@ inline bool submit(const plan& p) {
         a.submit();
     }
 
-    // A FLOOR ON THIS MEMBER'S OWN OUTPUT, ON THE SUCCESS PATH. Nothing here
-    // reads the SIGNED apk (the tools have not run yet, only been declared --
-    // see `dist/appimage.cppm`'s identical reasoning) so this checks what
-    // this program itself built into the staging tree: at least one native
-    // library besides bookkeeping. An APK that installs and starts nothing
-    // is the failure this whole category exists to catch.
+    // No floor on the output here: the signed package does not exist while
+    // this program runs (the tools have been declared, not run), and what an
+    // empty package would lack -- the application object -- is refused by
+    // `plan_for` before any step is planned.
     return true;
 }
 
@@ -1251,6 +1257,7 @@ inline bool submit(const plan& p) {
 
 inline bool generate(options opt = {}) {
     mcpp::provides_pack_format("apk");
+    mcpp::provides_pack_format("aab");
     return submit(plan_for(std::move(opt)));
 }
 

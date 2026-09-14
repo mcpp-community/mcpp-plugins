@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.9.3"
+version     = "0.10.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -83,6 +83,16 @@ sources           = ["rules/cuda.cppm"]
 implies           = ["surface"]
 rule_module       = "mcpp.rules.cuda"
 device_extensions = [".cu"]
+
+# `.metal` shaders become Metal libraries through `xcrun metal` and `xcrun
+# metallib`, the toolchain Xcode carries. No payload is declared, for the reason
+# `dist-apple` gives for `codesign`: Xcode is not redistributable, so the rule
+# locates the toolchain and refuses naming the command that found nothing.
+[features.rules-metal]
+sources           = ["rules/metal.cppm"]
+implies           = ["surface"]
+rule_module       = "mcpp.rules.metal"
+device_extensions = [".metal"]
 
 [features.rules-hip]
 sources           = ["rules/hip.cppm"]
@@ -388,12 +398,28 @@ implies           = ["surface"]
 # The per-host table stays the right shape only at the top level, where
 # platform keys select the HOST rather than restating a predicate the
 # section has already applied.
+#
+# 5.0.2-1, NOT 5.0.2, BECAUSE `--format setup` NEEDS THE EXTENSION. The recipe
+# revision adds `WixToolset.BootstrapperApplications.wixext` beside the tool,
+# and a bundle with WiX's stock bootstrapper application is refused without it
+# (WIX0200). An installation made under 5.0.2 keeps the payloads it fetched,
+# because xlings does not re-run the install hook of an installed version, so
+# the pin names the revision rather than the release.
 [target.windows.feature-xlings.dist-wix]
-"xim:wix" = "5.0.2"
+"xim:wix" = "5.0.2-1"
 
-# `dist-apple` declares no payload for `codesign`: it is part of Xcode, which is
-# not redistributable, so the member locates it and says where it looked. The
-# open-source `rcodesign` is the package that would replace that lookup.
+# `dist-apple` declares no payload for `codesign`, `ditto` or `hdiutil`: they are
+# part of macOS and Xcode, which are not redistributable, so the member runs the
+# system's. The open-source `rcodesign` is the package that would replace the
+# `codesign` lookup.
+#
+# THE RUNNER IS A PAYLOAD, AND ONLY `mcpp run` NEEDS IT. `mcpp run --format app`
+# on macOS reaches the bundle through the runner named `app` this member
+# supplies, `macapp-run`, which executes the bundle's executable in the
+# foreground so that its output and exit status are the program's. `when =
+# "run"` keeps a build or a pack from installing it.
+[target.'cfg(os = "macos")'.feature-xlings.dist-apple]
+"xim:macapp-run" = { version = "0.1.0", when = "run" }
 
 # ── The environment `dist-apk` needs ───────────────────────────────────────
 #
@@ -405,7 +431,7 @@ implies           = ["surface"]
 # is downloaded" shape the accelerator rules use, applied to the target axis
 # instead.
 #
-# FOUR PACKAGES, EACH OWNED BY A DIFFERENT HALF OF THE PIPELINE. `aapt2`,
+# FOUR OF THE FIVE PACKAGES, EACH OWNED BY A DIFFERENT HALF OF THE PIPELINE. `aapt2`,
 # `zipalign`, and the `apksigner`/`d8` wrappers all live in one archive
 # (`xim:android-build-tools`); `android.jar` is versioned by API level on its
 # own (`xim:android-platform`) because that is the number a project pins, not
@@ -430,11 +456,17 @@ implies           = ["surface"]
 # directory this entry resolves to (`api_level_from_platform_dir`), so an
 # alias that silently failed to resolve would surface as a build-time
 # refusal rather than a wrong number, but there is no reason to court it.
+#
+# `xim:bundletool` BUILDS `--format aab`. It is installed with the other four
+# for the reason `dist-appimage` gives above: provisioning runs before the
+# build program learns `--format`, so the format cannot gate a download. Its
+# launcher runs the JDK it was installed against, which is the one pinned here.
 [target.'cfg(env = "android")'.feature-xlings.dist-apk]
 "xim:android-build-tools"     = ">=37.0.0"
 "xim:android-platform"        = "36-r2"
 "xim:jdk-temurin"             = "25.0.4+7"
 "xim:android-debug-keystore"  = "1.0.0"
+"xim:bundletool"              = "1.18.3"
 
 [targets.plugins]
 kind = "lib"

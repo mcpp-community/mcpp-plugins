@@ -1,10 +1,11 @@
 # Fixture: an app target whose dependency is a SHARED object on the Android
 # row -- the shape a framework takes there (the Java host loads it by name),
-# and the one `dist-apk` used to lose: the engine stages the app's own object
-# and the deployed files, the closure on this row is `not-walked`, and
-# `lib<dep>.so` reached neither `lib/` nor the APK (0.9.2). From 0.9.3 the
-# member walks the app's NEEDED at command time and copies what it finds
-# beside the object.
+# and the one `dist-apk` used to lose. Under 0.9.2 `lib<dep>.so` reached
+# neither `lib/` nor the APK; 0.9.3 walked the app's NEEDED at command time,
+# behind a stamp that lost the library on a second pack. From mcpp 2026.9.14.2
+# the engine stages the closure under `lib/` (`lib/<abi>/` for several targets)
+# and names it in the stage manifest, and 0.10.0 packs that tree.
+# `check-apk-closure.sh` states the criteria.
 [package]
 name        = "apk-consumer-shared"
 version     = "0.2.0"

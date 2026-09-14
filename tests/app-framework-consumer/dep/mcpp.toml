@@ -1,0 +1,19 @@
+# Fixture: the dependency `app-framework-consumer` links as a shared library,
+# which `dist-apple` carries in the bundle's framework directory.
+[package]
+name        = "app-framework-dep"
+namespace   = "mcpp"
+version     = "0.1.0"
+description = "Fixture: a dependency that becomes a framework in a bundle"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard = "c++23"
+
+[targets.app-framework-dep]
+kind = "lib"
+
+[build]
+sources      = ["src/dep.cpp"]
+include_dirs = ["include"]

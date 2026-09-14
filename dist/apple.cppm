@@ -43,34 +43,39 @@
 // and no `options::tool` the way `wix` does in `dist/wix.cppm` -- there is
 // exactly one `ditto`, at a fixed path, on every Mac this can run on.
 //
-// HOW MANY ACTIONS, AND WHY EACH IS SEPARATE. Up to five:
+// HOW MANY ACTIONS, AND WHY EACH IS SEPARATE:
 //
 //   1. install `Info.plist`         (always)
-//   2. lay out the staged tree      (always)
-//   3. install the icon             (only when `options::icon` is set)
-//   4. codesign the bundle          (only when `options::identity` is set)
-//   5. the bundle itself            (always, last)
+//   2. lay out the program          (always)
+//   3. one per deployed resource    (one per entry the staged tree carries)
+//   4. one per closure dylib        (copied to the framework directory, signed)
+//   5. install the icon             (only when `options::icon` is set)
+//   6. codesign the bundle          (always on macOS; on an iOS device row only
+//                                    when `options::identity` is set)
+//   7. the bundle itself            (always, last)
+//   8. two for `--format dmg`       (stage the bundle beside an `Applications`
+//                                    link, then `hdiutil create`)
 //
-// 1 and 3 are separate from 2 because they have different INPUTS: `Info.plist`
-// is regenerated whenever package metadata changes, the icon only when the
-// project's icon file changes, and the staged tree only when the program or
-// its closure changes. One action for all three would make every one of those
-// changes re-run the multi-hundred-megabyte copy. 4 is last of the CONTENT
-// steps and depends on the OUTPUTS of whichever of 1 to 3 actually ran,
-// because a code signature covers the bundle's content at signing time --
-// signing before the content is in place is either a failure (an incomplete
-// bundle) or a signature that the next file added invalidates.
+// 1, 3 and 5 are separate from 2 because they have different INPUTS:
+// `Info.plist` is regenerated whenever package metadata changes, the icon only
+// when the project's icon file changes, and the program only when it is
+// relinked. One action for all of them would make every one of those changes
+// re-run every copy. 6 is last of the CONTENT steps and depends on the OUTPUTS
+// of every step before it, because a code signature covers the bundle's content
+// at signing time -- signing before the content is in place is either a failure
+// (an incomplete bundle) or a signature that the next file added invalidates.
 //
-// 5 EXISTS BECAUSE 1 THROUGH 4 ARE PARALLEL, AND `mcpp run` NEEDS ONE
+// 7 EXISTS BECAUSE THE CONTENT STEPS ARE PARALLEL, AND `mcpp run` NEEDS ONE
 // OPERAND. Each of them writes a file inside the bundle and consumes none of
-// the others' outputs, so a request that submits only this plan has as many
-// terminal artifacts (outputs nothing else consumes) as steps actually ran --
-// up to four, never one. `mcpp run --format app` resolves to THE terminal
+// the others' outputs, so a request that submits only those has as many
+// terminal artifacts (outputs nothing else consumes) as steps actually ran,
+// never one. `mcpp run --format app` resolves to THE terminal
 // artifact, so a plan with more than one has none it can hand the runner.
-// Step 5's output is the bundle DIRECTORY -- the actual distributable of this
+// Step 7's output is the bundle DIRECTORY -- the actual distributable of this
 // format -- and its inputs are every other step's output, so it is always
 // the plan's sole terminal, in both the `Contents/`-shaped and flat-iOS
-// layouts.
+// layouts. Under `--format dmg` the bundle is an input of the image, and the
+// `.dmg` is the terminal instead.
 //
 // `Info.plist` IS WRITTEN AT PLAN TIME, BUT NOT DIRECTLY TO ITS FINAL PATH,
 // AND THE DIFFERENCE MATTERS. It is configuration, so `write_if_different`
@@ -85,15 +90,47 @@
 // [artifact] in place, reported as up to date." Declaring the plan-time file
 // as this action's input is what makes a version bump reach the bundle.
 //
-// CODESIGN IS OFF BY DEFAULT. An unsigned `.app` builds and runs locally on
-// the machine that built it; a member that signed by default would fail
-// every build on a machine with no identity in its keychain, which is most
-// of them. Notarisation is out of scope entirely, and not merely deferred:
-// it requires uploading the bundle to Apple over the network and waiting on
-// a ticket, and a build must not reach the network -- the same rule
-// `dist/appimage.cppm` states for appimagetool's runtime-stub download,
-// here applying to a step this member does not attempt at all rather than
-// one it works around.
+// ON macOS THE BUNDLE IS SIGNED AD HOC UNLESS AN IDENTITY IS GIVEN. A bundle
+// that carries a framework and no signature fails `codesign --verify --deep
+// --strict` ("code has no resources but signature indicates they must be
+// present", measured on macos-15, mcpp#635 run 2): the program the linker
+// signed is sealed, and the bundle around it is not. Signing ad hoc needs no
+// identity and no keychain, so it is the default, dylibs first and the bundle
+// second (the same run measured that order verifying). `options::identity`
+// signs with that identity instead, with `--timestamp`. Notarisation is out of
+// scope entirely, and not merely deferred: it requires uploading the bundle to
+// Apple over the network and waiting on a ticket, and a build must not reach
+// the network -- the same rule `dist/appimage.cppm` states for appimagetool's
+// runtime-stub download, here applying to a step this member does not attempt.
+//
+// THE CLOSURE'S DYLIBS GO TO THE FRAMEWORK DIRECTORY (mcpp 2026.9.14.2+). The
+// engine reads a Mach-O program's closure and stages the dylibs it resolves
+// beside the program in `bin/`, naming each in the stage manifest's `needs`
+// lines. This member copies those into `Contents/Frameworks/` (`Frameworks/` on
+// iOS), keeps them out of the resource directory, and gives the program the
+// rpath that finds them there -- `@executable_path/../Frameworks`, or
+// `@executable_path/Frameworks` on iOS -- through `mcpp::link_flag` at link
+// time, so no file is edited after it is linked and no load command is
+// rewritten. An rpath edit after the link was measured and not taken: it fails
+// on a program linked without header padding ("larger updated load commands do
+// not fit") and invalidates the linker's signature (mcpp#635 run 4). The rpath
+// is added to every link of a macOS or iOS program whose build program calls
+// `generate()`, packed or not, because the link happens before the pass that
+// learns `--format`.
+//
+// `mcpp run --format app` REACHES THE BUNDLE THROUGH `macapp-run` ON macOS.
+// This member supplies the runner named `app` (`xim:macapp-run`, which executes
+// the bundle's `CFBundleExecutable` in the foreground, so its output and exit
+// status are the program's), and mcpp uses the runner named after a format for
+// that format (mcpp 2026.9.14.2+). A project that declares its own
+// `[target.<triple>.runners] app` keeps it. The iOS rows keep the runner their
+// manifests name (`simctl-run`).
+//
+// `--format dmg` IS A DISK IMAGE OF THE BUNDLE. The bundle and a link to
+// `/Applications` are staged in one directory and `hdiutil create -format UDZO`
+// writes the image, the layout a user drags from. Measured on macos-15
+// (mcpp#635 run 2): the image is created, `hdiutil verify` accepts it, and it
+// attaches read-only with the bundle and the link. macOS only.
 //
 // iOS IS THE SAME SHAPE, A FLAT LAYOUT INSTEAD OF `Contents/`, AND THREE
 // KEYS `-format app` NEVER WROTE (#622 B1). The target row and the SDK
@@ -122,8 +159,9 @@
 // unsigned -- `simctl install` does not check a signature -- so
 // `options::identity` is ignored there rather than attempted and left to
 // fail inside `codesign`, which cannot produce a device-shaped signature
-// for a simulator binary in any case. The device row's `codesign` step is
-// byte-for-byte the macOS one: same argv shape, same opt-in, same
+// for a simulator binary in any case. The device row signs only with an
+// identity, because a device refuses an ad-hoc signature; its `codesign`
+// step is the macOS one with an identity: same argv shape, same
 // hardened-runtime and entitlements flags.
 //
 // ICONS TAKE A DIRECTORY ON THIS ROW, A FILE ON THE OTHER. macOS names one
@@ -217,11 +255,10 @@ struct options {
     std::string minimum_system_version;
 
     // A `codesign` identity -- a name or hash `security find-identity` would
-    // list. Empty means unsigned, which is the default; see the header
-    // comment for why signing is opt-in rather than automatic. Ignored on
-    // the iOS Simulator row regardless of this value -- see the header
-    // comment's signing paragraph -- and a non-empty value there produces a
-    // `mcpp::warning` naming why rather than a signature.
+    // list. Empty means an ad-hoc signature on macOS and no signature on the
+    // iOS rows; see the header comment's signing paragraphs. Ignored on the
+    // iOS Simulator row regardless of this value, and a non-empty value there
+    // produces a `mcpp::warning` naming why rather than a signature.
     std::string identity;
 
     // `--options runtime`, the hardened runtime, only meaningful together
@@ -235,6 +272,12 @@ struct options {
 
     // Where the produced bundle lands. Empty means `<out_dir>/<app_name>.app`.
     std::string output;
+
+    // `--format dmg`: the volume's name, and where the image lands. Empty
+    // means `app_name` and `<out_dir>/<app_name>.dmg`.
+    std::string volume_name;
+    std::string dmg;
+
     std::string out_dir = std::string(mcpp::out_dir());
 };
 
@@ -267,6 +310,7 @@ struct plan {
     bool              applies = false;
     std::string       reason;
     std::string       bundle_path; // the <Name>.app directory
+    std::string       dmg_path;    // the .dmg, under --format dmg
     std::string       appdir;      // pack_stage_dir(), kept for the floor check
     std::vector<step> steps;
     explicit operator bool() const { return applies; }
@@ -298,6 +342,40 @@ inline bool write_if_different(const std::filesystem::path& path,
     return static_cast<bool>(out);
 }
 
+// Records a refusal on stderr and as a `mcpp::warning`. A member that refuses
+// submits no action and its build program exits 0, and the engine discards the
+// output of a build program that succeeded; its own error, "no action claimed
+// --format 'app'", names no reason. The warning channel is one line per
+// directive, so line breaks are folded into spaces.
+inline plan& refuse(plan& p, std::string reason, const std::string& message) {
+    std::cerr << message << '\n';
+    std::string folded;
+    folded.reserve(message.size());
+    bool space = false;
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        const char c = message[i];
+        if (c == '\n' || c == '\r') { space = true; continue; }
+        if (space) {
+            if (c == ' ') continue;
+            folded += ' ';
+            space = false;
+        }
+        folded += c;
+    }
+    mcpp::warning(folded.c_str());
+    p.reason = std::move(reason);
+    return p;
+}
+
+// A helper script, written into `<out_dir>/dist-apple/` at plan time when its
+// bytes differ, and run by `/bin/sh` so that no permission bit is needed.
+inline std::string helper_script(const std::string& out_dir, const char* name,
+                                 std::string_view body) {
+    const auto path = std::filesystem::path(out_dir) / "dist-apple" / name;
+    write_if_different(path, body);
+    return path.string();
+}
+
 inline std::string target_for(const options& opt) {
     if (!opt.target.empty()) return opt.target;
     const char* n = mcpp::package_name();
@@ -311,13 +389,24 @@ inline std::string app_name_for(const options& opt) {
     return (n && *n) ? std::string(n) : std::string("app");
 }
 
-// The staged tree's top-level launcher -- the same search
-// `dist/appimage.cppm` performs, and for the same reason: `mcpp pack` writes
-// one per mode and names it after the binary, so this member states no
-// convention mcpp has not already put on disk.
+// The program a bundle executes, found in the staged tree: `bin/<target>`
+// first, then the tree's top-level entry, then `run.sh`.
+//
+// THE PROGRAM, NOT THE TREE'S ENTRY SCRIPT. From the release that reads a
+// Mach-O program's closure (mcpp 2026.9.14.2), the engine also writes
+// `<tree>/<target>`, a shell script that executes `bin/<target>` from the
+// tree's root. The search used to take that root entry first, which is the
+// order `dist/appimage.cppm` needs, and a bundle then executed the script,
+// which executed `Contents/MacOS/bin/<target>` -- a file no bundle carries:
+// "cannot execute: No such file or directory", exit 126 (macos-15, run
+// 34821164486). The script has no work to do inside a bundle, where
+// `CFBundleExecutable` names the program directly, and the framework rpath
+// `@executable_path/../Frameworks` resolves against the program's own
+// directory, which has to be `Contents/MacOS/`. The root entry and `run.sh`
+// remain for a tree that carries no `bin/<target>`.
 inline std::string launcher_in(const std::string& stage, const std::string& target) {
-    for (auto candidate : {stage + "/" + target,
-                           stage + "/bin/" + target,
+    for (auto candidate : {stage + "/bin/" + target,
+                           stage + "/" + target,
                            stage + "/run.sh"})
         if (is_file(candidate)) return candidate;
     return {};
@@ -329,15 +418,9 @@ inline std::string launcher_in(const std::string& stage, const std::string& targ
 // within `Contents/MacOS/`, and real-world bundle tooling has hit this
 // directly enough to be a filed CMake defect: "CFBundleExecutable path in a
 // bundle should not be a relative path into bundle." So this member takes
-// only the basename of whatever `launcher_in` finds. That is exactly correct
-// when the staged tree's launcher sits at the tree's ROOT, which is the
-// default `--mode vendored` shape `dist/appimage.cppm`'s own header comment
-// describes ("a top-level launcher"). A staged tree whose launcher were
-// nested under `bin/` instead would still copy correctly by the layout step
-// below, but the resulting bundle would name an executable that is not at
-// the top of `Contents/MacOS/`, and this member does not flatten that case --
-// it is not exercised by the default staging mode, and nothing here can
-// exercise it on Linux to find out how macOS actually responds.
+// only the basename of whatever `launcher_in` finds, and the layout step
+// copies that file to the top of the executable directory under that name, so
+// the name and the file agree wherever in the staged tree it was found.
 inline std::string bundle_executable_name(const std::string& launcher_path) {
     return std::filesystem::path(launcher_path).filename().string();
 }
@@ -483,12 +566,13 @@ inline plan plan_for(options opt = {}) {
     // `pack_format()` is what says so -- see `generate` for why the
     // DECLARATION must not be gated the same way.
     const std::string requested = mcpp::pack_format();
-    if (requested != "app") {
+    if (requested != "app" && requested != "dmg") {
         p.reason = requested.empty()
             ? "this build is not packaging"
-            : std::format("--format {} was requested, not app", requested);
+            : std::format("--format {} was requested, not app or dmg", requested);
         return p;
     }
+    const bool dmg = requested == "dmg";
 
     // macOS or iOS only, and this is a refusal rather than a silent skip: a
     // user who typed `--format app` on Linux asked for something that does
@@ -497,13 +581,16 @@ inline plan plan_for(options opt = {}) {
     const std::string os = mcpp::target_os();
     const bool isIos = (os == "ios");
     if (os != "macos" && !isIos) {
-        std::cerr << std::format(
+        return refuse(p, "not a macOS or iOS target", std::format(
             "mcpp.dist.apple: a .app bundle is a macOS or iOS format, and "
             "this build targets '{}'.\n"
             "  use: --format tar, or build for a macOS or iOS target",
-            os.empty() ? "unknown" : os) << '\n';
-        p.reason = "not a macOS or iOS target";
-        return p;
+            os.empty() ? "unknown" : os));
+    }
+    if (dmg && isIos) {
+        return refuse(p, "a disk image on an iOS target",
+            "mcpp.dist.apple: a .dmg is a macOS disk image, and this build "
+            "targets iOS. Use --format app for an iOS bundle.");
     }
     // `aarch64-ios-sim` and `aarch64-ios` share one OS and diverge only in
     // `env` (triple.cppm's own words: "the simulator is deliberately not a
@@ -537,23 +624,19 @@ inline plan plan_for(options opt = {}) {
 
     const std::string target = target_for(opt);
     if (target.empty()) {
-        std::cerr << "mcpp.dist.apple: no target to bundle. Set "
-                     "`options::target` to the program target's name.\n";
-        p.reason = "no target";
-        return p;
+        return refuse(p, "no target", "mcpp.dist.apple: no target to bundle. Set "
+                     "`options::target` to the program target's name.");
     }
 
     const std::string launcher = stage.empty()
         ? std::format("${{mcpp.target_file:{}}}", target)
         : launcher_in(stage, target);
     if (launcher.empty()) {
-        std::cerr << std::format(
+        return refuse(p, "no launcher in the staged tree", std::format(
             "mcpp.dist.apple: the staged tree at {0} carries no launcher for "
             "target '{1}'.\n"
-            "  expected one of: {0}/{1}, {0}/bin/{1}, {0}/run.sh",
-            stage, target) << '\n';
-        p.reason = "no launcher in the staged tree";
-        return p;
+            "  expected one of: {0}/bin/{1}, {0}/{1}, {0}/run.sh",
+            stage, target));
     }
     // CFBundleExecutable is a bare filename (see the note above). With no
     // staged tree the launcher is a PLACEHOLDER the engine expands later, so
@@ -600,14 +683,12 @@ inline plan plan_for(options opt = {}) {
         if (isIos) {
             std::error_code ec;
             if (!std::filesystem::is_directory(opt.icon, ec)) {
-                std::cerr << std::format(
+                return refuse(p, "icon is not a directory", std::format(
                     "mcpp.dist.apple: `options::icon` ({}) is not a "
                     "directory. Set it to a directory of flat PNGs "
                     "(one per size Apple's Home Screen and Settings need); "
                     "this member lists their stems under `CFBundleIcons` "
-                    "and does not generate sizes itself.", opt.icon) << '\n';
-                p.reason = "icon is not a directory";
-                return p;
+                    "and does not generate sizes itself.", opt.icon));
             }
             for (auto const& e : std::filesystem::directory_iterator(opt.icon, ec)) {
                 if (ec) break;
@@ -616,35 +697,27 @@ inline plan plan_for(options opt = {}) {
             }
             std::sort(iosIconStems.begin(), iosIconStems.end());
             if (iosIconStems.empty()) {
-                std::cerr << std::format(
+                return refuse(p, "icon directory carries no PNGs", std::format(
                     "mcpp.dist.apple: `options::icon` ({}) carries no "
-                    "*.png files.", opt.icon) << '\n';
-                p.reason = "icon directory carries no PNGs";
-                return p;
+                    "*.png files.", opt.icon));
             }
         } else if (!is_file(opt.icon)) {
-            std::cerr << std::format(
+            return refuse(p, "icon not found", std::format(
                 "mcpp.dist.apple: `options::icon` ({}) was not found",
-                opt.icon) << '\n';
-            p.reason = "icon not found";
-            return p;
+                opt.icon));
         }
     }
     if (!opt.entitlements.empty() && !is_file(opt.entitlements)) {
-        std::cerr << std::format(
-            "mcpp.dist.apple: the entitlements file {} was not found", opt.entitlements) << '\n';
-        p.reason = "entitlements not found";
-        return p;
+        return refuse(p, "entitlements not found", std::format(
+            "mcpp.dist.apple: the entitlements file {} was not found", opt.entitlements));
     }
 
     const char* pv = mcpp::package_version();
     const std::string version = !opt.version.empty() ? opt.version
                                : (pv && *pv ? std::string(pv) : std::string());
     if (version.empty()) {
-        std::cerr << "mcpp.dist.apple: no version to state. Set "
-                     "`[package] version` or `options::version`.\n";
-        p.reason = "no version";
-        return p;
+        return refuse(p, "no version", "mcpp.dist.apple: no version to state. Set "
+                     "`[package] version` or `options::version`.");
     }
 
     const std::string name       = app_name_for(opt);
@@ -674,13 +747,43 @@ inline plan plan_for(options opt = {}) {
                                                   macIconName, iosIconStems);
     const std::string plistSrc = (std::filesystem::path(opt.out_dir) / (name + "-Info.plist")).string();
     if (!write_if_different(plistSrc, plistBytes)) {
-        std::cerr << std::format("mcpp.dist.apple: cannot write {}", plistSrc) << '\n';
-        p.reason = "cannot write Info.plist";
-        return p;
+        return refuse(p, "cannot write Info.plist", std::format("mcpp.dist.apple: cannot write {}", plistSrc));
     }
 
     p.bundle_path = bundlePath;
     p.appdir      = stage;
+
+    // THE CLOSURE THE ENGINE STAGED (mcpp 2026.9.14.2+). Every `needs` line
+    // whose staged path is under `bin/` is a dylib the engine placed beside
+    // the program; it goes to the framework directory and not to the
+    // resources. An incomplete closure is reported, not refused: a bundle
+    // without one of its libraries is the project's to judge, and the message
+    // names what is missing.
+    std::vector<std::string> frameworks;   // staged paths relative to `bin/`
+    if (!stage.empty()) {
+        const auto staged = mcpp::plugins::stage::read_manifest(stage);
+        for (auto const& n : staged.needs)
+            if (n.where.size() > 4 && n.where.starts_with("bin/"))
+                frameworks.push_back(n.where.substr(4));
+        std::ranges::sort(frameworks);
+        frameworks.erase(std::unique(frameworks.begin(), frameworks.end()), frameworks.end());
+        if (staged.found && !staged.walked) {
+            std::string names;
+            for (auto const& n : staged.needs)
+                if (n.where == "unresolved") names += (names.empty() ? "" : ", ") + n.name;
+            mcpp::warning(std::format(
+                "mcpp.dist.apple: the program's closure is incomplete{}, so the "
+                "bundle does not carry every library the program loads: {}",
+                names.empty() ? std::string() : " (" + names + ")",
+                staged.reason.empty() ? std::string("no reason was given") : staged.reason).c_str());
+        }
+    }
+    const std::string frameworksDir = isIos ? bundlePath + "/Frameworks"
+                                            : bundlePath + "/Contents/Frameworks";
+    // WHO SIGNS WHAT. macOS signs every bundle, ad hoc without an identity;
+    // an iOS device row signs only with one; the simulator row never signs.
+    const bool signs = !isSim && (!isIos || !opt.identity.empty());
+    const std::string signingIdentity = opt.identity.empty() ? std::string("-") : opt.identity;
 
     // Every action's output that later steps may need to depend on, gathered
     // as they are declared so the final, conditional codesign step can name
@@ -764,6 +867,11 @@ inline plan plan_for(options opt = {}) {
         std::ranges::sort(entries);
         for (auto const& e : entries) {
             const std::string rel = e.filename().string();
+            // A dylib of the closure is a framework, not a resource. A
+            // directory is copied whole, so a dylib staged inside one (an
+            // `@executable_path/<dir>/<file>` install name) is copied to the
+            // framework directory as well.
+            if (std::ranges::find(frameworks, rel) != frameworks.end()) continue;
             step res;
             res.id          = "mcpp.dist.apple.resource." + rel;
             res.role        = "artifact";
@@ -773,6 +881,42 @@ inline plan plan_for(options opt = {}) {
             res.outputs     = { resourceDir + "/" + rel };
             p.steps.push_back(res);
             assembled.push_back(resourceDir + "/" + rel);
+        }
+    }
+
+    // THE FRAMEWORKS: each copied from the staged tree and, when the bundle is
+    // signed, signed before the bundle is -- a bundle signature seals nested
+    // code that is already signed.
+    if (!frameworks.empty()) {
+        const std::string copyFramework = helper_script(opt.out_dir, "copy-framework.sh",
+            "#!/bin/sh\n"
+            "# mcpp.dist.apple helper. Do not edit.\n"
+            "# copy-framework.sh <source> <destination> sign|nosign [identity]\n"
+            "set -e\n"
+            "src=\"$1\"; dst=\"$2\"; mode=\"$3\"; identity=\"$4\"\n"
+            "mkdir -p \"$(dirname \"$dst\")\"\n"
+            "ditto \"$src\" \"$dst\"\n"
+            "if [ \"$mode\" = sign ]; then\n"
+            "    if [ \"$identity\" = - ]; then\n"
+            "        codesign --force --sign - \"$dst\"\n"
+            "    else\n"
+            "        codesign --force --sign \"$identity\" --timestamp \"$dst\"\n"
+            "    fi\n"
+            "fi\n");
+        for (auto const& rel : frameworks) {
+            const std::string source = (std::filesystem::path(stage) / "bin" / rel).string();
+            const std::string dest   = frameworksDir + "/" + rel;
+            step fw;
+            fw.id          = "mcpp.dist.apple.framework." + rel;
+            fw.role        = "artifact";
+            fw.description = "APP FRAMEWORK " + rel;
+            fw.argv        = { "/bin/sh", copyFramework, source, dest };
+            if (signs) { fw.argv.push_back("sign"); fw.argv.push_back(signingIdentity); }
+            else       { fw.argv.push_back("nosign"); }
+            fw.inputs      = { source, "${mcpp.stage_dir}" };
+            fw.outputs     = { dest };
+            p.steps.push_back(fw);
+            assembled.push_back(dest);
         }
     }
 
@@ -812,22 +956,30 @@ inline plan plan_for(options opt = {}) {
             "Simulator row -- simulator bundles install unsigned, and "
             "codesign cannot produce a device-shaped signature for one. Set "
             "identity for a device build (aarch64-ios) instead.");
-    } else if (!opt.identity.empty()) {
+    } else if (signs) {
         step sign;
         sign.id          = "mcpp.dist.apple.codesign";
         sign.role        = "artifact";
-        sign.description = "CODESIGN";
-        sign.argv = { "codesign", "--force", "--sign", opt.identity, "--timestamp" };
-        if (opt.hardened_runtime) { sign.argv.push_back("--options"); sign.argv.push_back("runtime"); }
-        if (!opt.entitlements.empty()) {
-            sign.argv.push_back("--entitlements");
-            sign.argv.push_back(opt.entitlements);
+        sign.description = opt.identity.empty() ? "CODESIGN (AD HOC)" : "CODESIGN";
+        // AD HOC TAKES NO TIMESTAMP AND NO RUNTIME OPTIONS: a timestamp is a
+        // statement by Apple's service about an identity, and the hardened
+        // runtime and entitlements are this option set's, which states them
+        // together with an identity.
+        sign.argv = { "codesign", "--force", "--sign", signingIdentity };
+        if (!opt.identity.empty()) {
+            sign.argv.push_back("--timestamp");
+            if (opt.hardened_runtime) { sign.argv.push_back("--options"); sign.argv.push_back("runtime"); }
+            if (!opt.entitlements.empty()) {
+                sign.argv.push_back("--entitlements");
+                sign.argv.push_back(opt.entitlements);
+            }
         }
         sign.argv.push_back(bundlePath);
         // Depends on every other step's output, because codesign covers the
         // bundle's content at signing time -- see the header comment.
         sign.inputs = assembled;
-        if (!opt.entitlements.empty()) sign.inputs.push_back(opt.entitlements);
+        if (!opt.identity.empty() && !opt.entitlements.empty())
+            sign.inputs.push_back(opt.entitlements);
         // codesign has no flag to write a receipt to an arbitrary path, so
         // this names the one file signing a BUNDLE (rather than a flat
         // Mach-O) is documented to write as part of embedding the signature:
@@ -869,6 +1021,48 @@ inline plan plan_for(options opt = {}) {
     bundle.inputs        = assembled;
     bundle.outputs       = { bundlePath };
     p.steps.push_back(bundle);
+
+    // `--format dmg`: the bundle beside an `Applications` link, then the image.
+    // The staging directory is emptied and refilled by its own step, so a file
+    // removed from the bundle does not survive into the next image; `-ov`
+    // replaces an image a previous pack wrote.
+    if (dmg) {
+        const std::string volume = !opt.volume_name.empty() ? opt.volume_name : name;
+        const std::string dmgPath = !opt.dmg.empty() ? opt.dmg
+            : (std::filesystem::path(opt.out_dir) / (name + ".dmg")).string();
+        const std::string dmgStage = (std::filesystem::path(opt.out_dir) / "dist-apple" / "dmg").string();
+        const std::string stageDmg = helper_script(opt.out_dir, "stage-dmg.sh",
+            "#!/bin/sh\n"
+            "# mcpp.dist.apple helper. Do not edit.\n"
+            "# stage-dmg.sh <bundle> <staging directory> <bundle name>\n"
+            "set -e\n"
+            "bundle=\"$1\"; stage=\"$2\"; name=\"$3\"\n"
+            "rm -rf \"$stage\"\n"
+            "mkdir -p \"$stage\"\n"
+            "ditto \"$bundle\" \"$stage/$name\"\n"
+            "ln -s /Applications \"$stage/Applications\"\n");
+
+        step staging;
+        staging.id          = "mcpp.dist.apple.dmg-stage";
+        staging.role        = "artifact";
+        staging.description = "DMG STAGE";
+        staging.argv        = { "/bin/sh", stageDmg, bundlePath, dmgStage,
+                                std::filesystem::path(bundlePath).filename().string() };
+        staging.inputs      = { bundlePath };
+        staging.outputs     = { dmgStage };
+        p.steps.push_back(staging);
+
+        step image;
+        image.id          = "mcpp.dist.apple.dmg";
+        image.role        = "artifact";
+        image.description = "HDIUTIL CREATE";
+        image.argv        = { "hdiutil", "create", "-volname", volume, "-srcfolder", dmgStage,
+                              "-format", "UDZO", "-ov", dmgPath };
+        image.inputs      = { dmgStage };
+        image.outputs     = { dmgPath };
+        p.steps.push_back(image);
+        p.dmg_path = dmgPath;
+    }
 
     p.applies = true;
     return p;
@@ -948,8 +1142,22 @@ inline bool submit(const plan& p) {
 // collected from a pass that asked for nothing. A member that declared only
 // when asked still works for its author -- they always pass their own
 // format -- and makes the set unknowable for everyone else.
+//
+// THE FRAMEWORK RPATH AND THE `app` RUNNER ARE DECLARED ON EVERY PASS, TOO. The
+// program is linked before the pass that learns `--format`, so the rpath that
+// finds `Contents/Frameworks/` has to reach every link; and `mcpp run --format
+// app` looks the runner up in the pass that runs the bundle, which is not a
+// packaging pass.
 inline bool generate(options opt = {}) {
     mcpp::provides_pack_format("app");
+    mcpp::provides_pack_format("dmg");
+    const std::string os = mcpp::target_os();
+    if (os == "macos") {
+        mcpp::link_flag("-Wl,-rpath,@executable_path/../Frameworks");
+        mcpp::runner("app", "macapp-run");
+    } else if (os == "ios") {
+        mcpp::link_flag("-Wl,-rpath,@executable_path/Frameworks");
+    }
     return submit(plan_for(std::move(opt)));
 }
 

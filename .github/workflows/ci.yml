@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      mcpp_source_ref:
+        description: "A branch or tag of mcpp-community/mcpp to build and run in place of the release MCPP_VERSION names"
+        required: false
+        default: ""
 
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
@@ -29,7 +34,27 @@ env:
   # every dispatched format was unreachable on macOS, including one that never
   # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
   # and `dist-apple` has been unreachable, not broken, since it was written.
-  MCPP_VERSION: 2026.9.13.2
+  #
+  # 2026.9.14.2 IS THE RELEASE THAT STAGES THE CLOSURES `dist-apk` AND
+  # `dist-apple` READ (mcpp#634). It stages an Android application's native
+  # libraries under `lib/` (`lib/<abi>/` for several targets) and a Mach-O
+  # program's dylibs beside it, naming each in the stage manifest's `needs`
+  # lines; it leaves an rpath that begins with `@executable_path` as written,
+  # which `dist-apple`'s framework rpath needs; and it runs a distributable
+  # through the runner named after its format, which is how `mcpp run --format
+  # app` reaches `macapp-run`. An engine below it stages no `needs` lines, and
+  # `dist-apk` refuses its tree naming this release.
+  MCPP_VERSION: 2026.9.14.2
+  # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
+  #
+  # Empty on every push and pull request, so the steps run the release above.
+  # A dispatch that names a branch or tag of mcpp-community/mcpp through the
+  # `mcpp_source_ref` input has `.github/scripts/mcpp-under-review.sh` build
+  # that reference with the release above and point `$MCPP` at the result, in
+  # each job that fetches mcpp, and the step after it checks that the steps run
+  # what it built. This is how a change to the engine is measured against this
+  # collection before either is released.
+  MCPP_SOURCE_REF: ${{ inputs.mcpp_source_ref || '' }}
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -55,7 +80,10 @@ jobs:
     # (319 MB) -- and a cold cache downloads all of them before the first
     # compile. The cache key includes the fixtures' manifests, so a run that
     # changes one of them is always the cold case.
-    timeout-minutes: 90
+    #
+    # 150, which leaves room for the source build a dispatch naming
+    # `mcpp_source_ref` adds ahead of every step.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
 
@@ -86,6 +114,31 @@ jobs:
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      # THE ENGINE THE STEPS BELOW RUN: the release fetched above, or mcpp built
+      # from `MCPP_SOURCE_REF` (see the workflow's `env`). A cold build of mcpp
+      # is the longest step of the job, which is what its timeout is sized for.
+      - name: the mcpp under review, built from MCPP_SOURCE_REF when it is set
+        timeout-minutes: 45
+        run: bash .github/scripts/mcpp-under-review.sh
+
+      # THE CRITERION FOR THE STEP ABOVE, IN A LATER STEP, because what that step
+      # writes to `GITHUB_ENV` governs only the steps after it.
+      - name: the steps below run the mcpp under review
+        if: env.MCPP_SOURCE_REF != ''
+        timeout-minutes: 5
+        run: |
+          set -eu
+          [ "$MCPP" = "$MCPP_UNDER_REVIEW" ] || {
+            echo "::error::the steps run $MCPP, and the mcpp built from $MCPP_SOURCE_REF is $MCPP_UNDER_REVIEW"; exit 1; }
+          version=$("$MCPP" --version | head -1)
+          [ "$version" = "$MCPP_UNDER_REVIEW_VERSION" ] || {
+            echo "::error::$MCPP prints '$version', and the build printed '$MCPP_UNDER_REVIEW_VERSION'"; exit 1; }
+          # A reading, not a criterion: the two engines' versions, which may be
+          # equal when the reference has not moved the version yet, so the
+          # criterion above is the path and not the version.
+          echo "READING released: $("$MCPP_RELEASED" --version | head -1); under review: $version"
+          echo "ok: the steps run $version, built from $MCPP_SOURCE_REF"
 
       # The rule's output is a header holding the SPIR-V module; the program
       # checks the magic number in its first word, so no Vulkan runtime is
@@ -1123,6 +1176,23 @@ jobs:
         working-directory: tests/ios-app-consumer
         run: MCPP="$MCPP" ./check-ios-plan.sh
 
+      # dist-apple's framework directory, signature, runner and disk image, as
+      # planned for the macOS and iOS rows (mcpp#634, B1 to B3). The same
+      # fixture is built, signed, run and imaged on the macOS runner.
+      - name: dist-apple's framework, signature, runner and disk image, checked at the plan level
+        timeout-minutes: 15
+        working-directory: tests/app-framework-consumer
+        run: MCPP="$MCPP" ./check-apple-plan.sh
+
+      # dist-wix's `setup` format, as planned for a Windows target (mcpp#634,
+      # B4): the bundle follows the MSI, both generated documents are
+      # well-formed XML, and `setup.exe` is refused. The bundle itself is built
+      # on the Windows runner.
+      - name: dist-wix's MSI and Burn bundle, checked at the plan level
+        timeout-minutes: 15
+        working-directory: tests/msi-consumer
+        run: MCPP="$MCPP" ./check-wix-plan.sh
+
       # dist-web (#622 B3), end to end, the real `mcpp pack --format web
       # --target wasm32-emscripten` -- see `tests/web-consumer/
       # check-web-plan.sh`'s own header for the host-toolchain defect this
@@ -1223,23 +1293,20 @@ jobs:
         working-directory: tests/apk-consumer
         run: MCPP="$MCPP" ./check-apk-features.sh
 
-      # A dependency linked as a shared object on the Android row reaches
-      # `lib/<abi>/` beside the app's own: walked from the app's NEEDED at
-      # command time, because the closure on this row is `not-walked` and the
-      # engine stages the app's object and the deployed files only (0.9.3).
-      - name: dist-apk carries the graph's shared libraries
+      # THE CLOSURE THE ENGINE STAGED (mcpp#634, B5). A dependency linked as a
+      # shared object on the Android row reaches `lib/<abi>/` beside the app's
+      # own because the engine stages the closure and names it in the stage
+      # manifest (2026.9.14.2+), and the member reads that tree. Five criteria:
+      # two packs in a row carry the dependency's library both times; two
+      # triples give one signed APK listing both ABIs; `--format aab` gives an
+      # App Bundle bundletool validates and jarsigner verifies, and a universal
+      # APK built from it; a refusal prints its reason; and a stage manifest
+      # without `needs` lines is refused naming the engine floor. The script's
+      # header records what 0.9.3 did for each.
+      - name: dist-apk reads the staged closure, packs two ABIs into one APK, and builds an App Bundle
+        timeout-minutes: 30
         working-directory: tests/apk-consumer-shared
-        run: |
-          "$MCPP" build --target x86_64-linux-android
-          "$MCPP" pack --format apk --target x86_64-linux-android | tee pack.log
-          apk=$(find target -name 'apk-consumer-shared.apk' | head -1)
-          test -n "$apk" || { cat pack.log; echo "FAIL: no apk-consumer-shared.apk"; exit 1; }
-          JDK=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-jdk-temurin" -mindepth 1 -maxdepth 1 -type d | head -1)
-          "$JDK/bin/jar" tf "$apk" | tee listing.log
-          for f in "lib/x86_64/libapk-consumer-shared.so" "lib/x86_64/libapk-consumer-dep.so"; do
-            grep -qxF "$f" listing.log || { echo "FAIL: the apk does not list $f"; exit 1; }
-          done
-          echo "ok: the dependency's shared object is in the apk beside the app's"
+        run: MCPP="$MCPP" ./check-apk-closure.sh
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
@@ -1498,7 +1565,9 @@ jobs:
   rules-cross-platform:
     name: rules (${{ matrix.name }})
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 60
+    # 150, which leaves room for the source build a dispatch naming
+    # `mcpp_source_ref` adds ahead of every step.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -1592,6 +1661,31 @@ jobs:
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      # THE ENGINE THE STEPS BELOW RUN: the release fetched above, or mcpp built
+      # from `MCPP_SOURCE_REF` (see the workflow's `env`). A cold build of mcpp
+      # is the longest step of the job, which is what its timeout is sized for.
+      - name: the mcpp under review, built from MCPP_SOURCE_REF when it is set
+        timeout-minutes: 45
+        run: bash .github/scripts/mcpp-under-review.sh
+
+      # THE CRITERION FOR THE STEP ABOVE, IN A LATER STEP, because what that step
+      # writes to `GITHUB_ENV` governs only the steps after it.
+      - name: the steps below run the mcpp under review
+        if: env.MCPP_SOURCE_REF != ''
+        timeout-minutes: 5
+        run: |
+          set -eu
+          [ "$MCPP" = "$MCPP_UNDER_REVIEW" ] || {
+            echo "::error::the steps run $MCPP, and the mcpp built from $MCPP_SOURCE_REF is $MCPP_UNDER_REVIEW"; exit 1; }
+          version=$("$MCPP" --version | head -1)
+          [ "$version" = "$MCPP_UNDER_REVIEW_VERSION" ] || {
+            echo "::error::$MCPP prints '$version', and the build printed '$MCPP_UNDER_REVIEW_VERSION'"; exit 1; }
+          # A reading, not a criterion: the two engines' versions, which may be
+          # equal when the reference has not moved the version yet, so the
+          # criterion above is the path and not the version.
+          echo "READING released: $("$MCPP_RELEASED" --version | head -1); under review: $version"
+          echo "ok: the steps run $version, built from $MCPP_SOURCE_REF"
 
       # FIRST, BECAUSE IT IS THE CHEAPER QUESTION AND THE MORE INFORMATIVE
       # ANSWER. Every other step here drives one rule end to end and needs
@@ -1787,6 +1881,15 @@ jobs:
             exit 1; }
           echo "ok: the MSI installs msi-consumer.exe, $insidesize bytes, byte-for-byte the linked program"
 
+      # `--format setup` (mcpp#634, B4): a Burn bundle with WiX's stock
+      # bootstrapper application, chaining the MSI the step above measured, and
+      # built through the extension `xim:wix` 5.0.2-1 carries.
+      - name: dist-wix produces a Burn bundle that chains the MSI
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        timeout-minutes: 20
+        working-directory: tests/msi-consumer
+        run: MCPP="$MCPP" ./check-setup.sh
+
       - name: dist-apple produces a bundle that launches
         if: runner.os == 'macOS'
         working-directory: tests/app-consumer
@@ -1834,6 +1937,29 @@ jobs:
           grep -q 'closure = not-walked' pack.log || echo "note: the stage manifest's closure line was not echoed by pack"
           echo "ok: one bundle, a valid plist, it launches, and the resource is where NSBundle looks"
 
+      # THE CLOSURE AS A FRAMEWORK, ON THE BUNDLE (mcpp#634, B1 to B3). The
+      # plan-level half runs on Linux. This step, the Metal step and the iOS
+      # step measure independent things, so each runs when an earlier step of
+      # the job failed and the job reports every reading it can take. This half reads the linked program's
+      # load commands, verifies the bundle's ad-hoc signature, runs the program
+      # with and without its framework, runs the bundle through `mcpp run
+      # --format app` with no runner in the manifest, and attaches the image.
+      - name: dist-apple carries the closure as a signed framework, runs through macapp-run, and writes a disk image
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        timeout-minutes: 30
+        working-directory: tests/app-framework-consumer
+        run: MCPP="$MCPP" ./check-apple-bundle.sh
+
+      # rules-metal (mcpp#634, B6): three Metal libraries from two shaders, and
+      # the compiler's dependency file in the graph. On a runner without the
+      # Metal toolchain the script asserts the rule's refusal and annotates the
+      # run with a warning that the two criteria are unmeasured.
+      - name: rules-metal compiles Metal libraries, or records that this runner has no Metal toolchain
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        timeout-minutes: 20
+        working-directory: tests/metal-consumer
+        run: MCPP="$MCPP" ./check-metal.sh
+
       # THE iOS ROW, FOR REAL (#622 B1's other half). `tests/ios-app-consumer`
       # is the same fixture the Linux `consumers` job checks at the plan
       # level (see that fixture's own header); here it is built, packed and
@@ -1852,7 +1978,7 @@ jobs:
       # gives: "a machine without Xcode should not download a compiler before
       # being told the compiler is not what is missing."
       - name: dist-apple's iOS row produces a bundle the simulator launches
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         working-directory: tests/ios-app-consumer
         shell: bash
         run: |
@@ -1908,22 +2034,28 @@ jobs:
 
           # THE SIMULATOR, THROUGH THE DECLARED RUNNER. `mcpp run --format
           # app` hands the packaged bundle to `runner = ["simctl-run"]`
-          # (`xim:apple-simulator-tools` 0.2.0, declared on this target row),
-          # which installs and launches it rather than spawning a bare
-          # executable -- the branch that package's 0.2.0 header records as
-          # needed for an installed bundle. This is the same path a
-          # consumer's own `mcpp run --target aarch64-ios-sim --format app`
-          # takes, not a bare `simctl spawn` this step could call directly.
+          # (`xim:apple-simulator-tools` 0.3.0, declared on this target row),
+          # which installs the bundle and, because its executable does not
+          # load UIKit, runs the installed executable with `simctl spawn`. This
+          # is the same path a consumer's own `mcpp run --target aarch64-ios-sim
+          # --format app` takes, not a bare `simctl spawn` this step could call
+          # directly.
+          #
+          # THE PROGRAM EXITS 7, AND 7 IS THE CRITERION. `simctl launch`, which
+          # 0.2.0 used, returns 0 for an application that exits 7, so a fixture
+          # that exited 0 could not tell a runner that returns the status from
+          # one that loses it (mcpp#634's triage record, section 7.2).
           out=$("$MCPP" run --target aarch64-ios-sim --format app 2>&1) && rc=0 || rc=$?
           printf '%s\n' "$out" | tail -20
-          [ "$rc" -eq 0 ] \
-            || { echo "FAIL: mcpp run --target aarch64-ios-sim --format app exited $rc"; exit 1; }
-          # `simctl launch --console-pty` returns the program's output through
-          # a pty, so a line may end in a carriage return; the marker is asserted
-          # as a line after that is stripped.
+          [ "$rc" -eq 7 ] \
+            || { echo "FAIL: mcpp run --target aarch64-ios-sim --format app exited $rc, and the program exits 7"; exit 1; }
+          # A line may end in a carriage return when the output passes through
+          # a pty, so the marker is asserted as a line after that is stripped.
+          # The diagnostic uses `od -c`, which BSD and GNU both accept; BSD
+          # `cat` refuses `-A`.
           tr -d '\r' <<<"$out" | grep -Eq '^[[:space:]]*1-2-3[[:space:]]*$' \
-            || { echo "FAIL: the program's output line '1-2-3' is absent"; printf '%s\n' "$out" | cat -A | tail -8; exit 1; }
-          echo "ok: a flat iOS Simulator bundle, MinimumOSVersion 17.0, and the simulator ran it"
+            || { echo "FAIL: the program's output line '1-2-3' is absent"; printf '%s\n' "$out" | tail -8 | od -c; exit 1; }
+          echo "ok: a flat iOS Simulator bundle, MinimumOSVersion 17.0, and the simulator ran it and returned its status 7"
 
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
