@@ -389,13 +389,24 @@ inline std::string app_name_for(const options& opt) {
     return (n && *n) ? std::string(n) : std::string("app");
 }
 
-// The staged tree's top-level launcher -- the same search
-// `dist/appimage.cppm` performs, and for the same reason: `mcpp pack` writes
-// one per mode and names it after the binary, so this member states no
-// convention mcpp has not already put on disk.
+// The program a bundle executes, found in the staged tree: `bin/<target>`
+// first, then the tree's top-level entry, then `run.sh`.
+//
+// THE PROGRAM, NOT THE TREE'S ENTRY SCRIPT. From the release that reads a
+// Mach-O program's closure (mcpp 2026.9.14.2), the engine also writes
+// `<tree>/<target>`, a shell script that executes `bin/<target>` from the
+// tree's root. The search used to take that root entry first, which is the
+// order `dist/appimage.cppm` needs, and a bundle then executed the script,
+// which executed `Contents/MacOS/bin/<target>` -- a file no bundle carries:
+// "cannot execute: No such file or directory", exit 126 (macos-15, run
+// 34821164486). The script has no work to do inside a bundle, where
+// `CFBundleExecutable` names the program directly, and the framework rpath
+// `@executable_path/../Frameworks` resolves against the program's own
+// directory, which has to be `Contents/MacOS/`. The root entry and `run.sh`
+// remain for a tree that carries no `bin/<target>`.
 inline std::string launcher_in(const std::string& stage, const std::string& target) {
-    for (auto candidate : {stage + "/" + target,
-                           stage + "/bin/" + target,
+    for (auto candidate : {stage + "/bin/" + target,
+                           stage + "/" + target,
                            stage + "/run.sh"})
         if (is_file(candidate)) return candidate;
     return {};
@@ -407,15 +418,9 @@ inline std::string launcher_in(const std::string& stage, const std::string& targ
 // within `Contents/MacOS/`, and real-world bundle tooling has hit this
 // directly enough to be a filed CMake defect: "CFBundleExecutable path in a
 // bundle should not be a relative path into bundle." So this member takes
-// only the basename of whatever `launcher_in` finds. That is exactly correct
-// when the staged tree's launcher sits at the tree's ROOT, which is the
-// default `--mode vendored` shape `dist/appimage.cppm`'s own header comment
-// describes ("a top-level launcher"). A staged tree whose launcher were
-// nested under `bin/` instead would still copy correctly by the layout step
-// below, but the resulting bundle would name an executable that is not at
-// the top of `Contents/MacOS/`, and this member does not flatten that case --
-// it is not exercised by the default staging mode, and nothing here can
-// exercise it on Linux to find out how macOS actually responds.
+// only the basename of whatever `launcher_in` finds, and the layout step
+// copies that file to the top of the executable directory under that name, so
+// the name and the file agree wherever in the staged tree it was found.
 inline std::string bundle_executable_name(const std::string& launcher_path) {
     return std::filesystem::path(launcher_path).filename().string();
 }
@@ -630,7 +635,7 @@ inline plan plan_for(options opt = {}) {
         return refuse(p, "no launcher in the staged tree", std::format(
             "mcpp.dist.apple: the staged tree at {0} carries no launcher for "
             "target '{1}'.\n"
-            "  expected one of: {0}/{1}, {0}/bin/{1}, {0}/run.sh",
+            "  expected one of: {0}/bin/{1}, {0}/{1}, {0}/run.sh",
             stage, target));
     }
     // CFBundleExecutable is a bare filename (see the note above). With no

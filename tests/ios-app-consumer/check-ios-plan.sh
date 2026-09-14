@@ -102,6 +102,10 @@ run_row() {
         stage=$(mktemp -d)
         mkdir -p "$stage/bin"
         head -c 5000 /dev/urandom > "$stage/bin/ios-app-consumer"
+        # The entry script the engine writes at the tree's root beside a Mach-O
+        # program (mcpp 2026.9.14.2+), which a bundle must not execute.
+        printf '#!/bin/sh\nhere=$(cd "$(dirname "$0")" && pwd)\nexec "$here/bin/ios-app-consumer" "$@"\n' \
+            > "$stage/ios-app-consumer"
     fi
     out=$(mktemp -d)
     env -i PATH="$PATH" \
@@ -147,9 +151,11 @@ grep -q 'AppIcon76x76@2x~ipad</string>' "$plist" || fail "the icon list is missi
 # bytes in it to stay quiet.
 grep 'mcpp.dist.apple.layout' "$log" | grep -q '\${mcpp\.stage_dir}' \
     || fail "the layout step did not name \${mcpp.stage_dir} for a non-empty staged tree" "$log"
+grep 'mcpp.dist.apple.layout' "$log" | grep -q '"command":\["ditto","[^"]*/bin/ios-app-consumer",' \
+    || fail "the bundle executable is not the staged program bin/ios-app-consumer" "$log"
 grep -q 'holds only' "$log" \
     && fail "a non-empty staged tree still produced the 0-byte staged-tree warning" "$log"
-echo "ok: flat layout, no codesign, a named warning, and every iOS-only plist key"
+echo "ok: flat layout, the staged program as the executable, no codesign, a named warning, and every iOS-only plist key"
 check_terminal_bundle "$log"
 
 echo "== iOS Simulator row, an empty pack_stage_dir (#622 B2 defect 1) =="

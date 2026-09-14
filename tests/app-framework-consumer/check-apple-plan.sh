@@ -22,13 +22,16 @@ rm -rf target
 BIN=target/.build-mcpp/build.mcpp.bin
 [ -x "$BIN" ] || fail "no compiled build.mcpp.bin at $BIN" build.log
 
-# stage_tree <closure> : a staged tree with the program, its dylib and a
-# deployed resource, and the stage manifest the engine writes for it.
+# stage_tree <closure> : a staged tree with the program, its dylib, a deployed
+# resource and the entry script the engine writes at the tree's root, and the
+# stage manifest the engine writes for it.
 stage_tree() {
     local stage
     stage=$(mktemp -d)
     mkdir -p "$stage/bin/data"
     head -c 5000 /dev/urandom > "$stage/bin/app-framework-consumer"
+    printf '#!/bin/sh\nhere=$(cd "$(dirname "$0")" && pwd)\nexec "$here/bin/app-framework-consumer" "$@"\n' \
+        > "$stage/app-framework-consumer"
     head -c 4000 /dev/urandom > "$stage/bin/libapp-framework-dep.dylib"
     echo hello > "$stage/bin/data/greeting.txt"
     {
@@ -83,6 +86,11 @@ echo "== --format app on macOS, with a staged dylib =="
 stage=$(stage_tree walked)
 run_program app macos "" "$stage" /tmp/apple-plan-app.log
 check /tmp/apple-plan-app.log '
+layout = actions.get("mcpp.dist.apple.layout")
+if not layout: fail("no layout step")
+if not layout["command"][1].endswith("/bin/app-framework-consumer") or \
+        not layout["command"][2].endswith("/AppFrameworkConsumer.app/Contents/MacOS/app-framework-consumer"):
+    fail("the bundle executable is not the staged program bin/app-framework-consumer: " + repr(layout["command"]))
 fw = actions.get("mcpp.dist.apple.framework.libapp-framework-dep.dylib")
 if not fw: fail("no framework step for the staged dylib")
 if not fw["outputs"] or not fw["outputs"][0].endswith("/AppFrameworkConsumer.app/Contents/Frameworks/libapp-framework-dep.dylib"):
@@ -109,7 +117,7 @@ if "mcpp:link-flag=-Wl,-rpath,@executable_path/../Frameworks" not in lines:
 if "mcpp:runner-named=app:macapp-run" not in lines:
     fail("the app runner was not supplied")
 '
-echo "ok: the dylib is a framework signed ad hoc, not a resource; the bundle is signed after it; the rpath and the runner are declared"
+echo "ok: the program, not the tree's entry script, is the bundle executable; the dylib is a framework signed ad hoc, not a resource; the bundle is signed after it; the rpath and the runner are declared"
 
 echo "== --format dmg on macOS =="
 run_program dmg macos "" "$stage" /tmp/apple-plan-dmg.log
