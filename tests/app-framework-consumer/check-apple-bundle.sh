@@ -115,10 +115,13 @@ mcpp_run() {
     local variant="$1"; shift
     rc=0
     "$MCPP" run "$@" > "bundle-mcpp-run-$variant.log" 2>&1 || rc=$?
-    reading "mcpp-run-$variant" "exit=$rc $(grep -m1 'Running' "bundle-mcpp-run-$variant.log" || echo 'no Running line')"
+    reading "mcpp-run-$variant" "exit=$rc $(grep -m1 '`macapp-run' "bundle-mcpp-run-$variant.log" || echo 'no status line names macapp-run')"
     [ "$rc" -eq 7 ] || fail "mcpp run $* exited $rc, not 7" "bundle-mcpp-run-$variant.log"
-    grep -q 'Running `.*macapp-run' "bundle-mcpp-run-$variant.log" \
-        || fail "the status line does not name macapp-run" "bundle-mcpp-run-$variant.log"
+    # The status line's verb is `Running` when the format selects the runner
+    # and the runner's own name (`App`) when `--runner` does (macos-15, run
+    # 34825033706), so the criterion is the command the line names.
+    grep -qE '^ *[A-Z][A-Za-z-]* `macapp-run ' "bundle-mcpp-run-$variant.log" \
+        || fail "no status line names macapp-run" "bundle-mcpp-run-$variant.log"
     grep -qx 'framework-1-2-3 argc=2' "bundle-mcpp-run-$variant.log" \
         || fail "the program's output with one argument is missing" "bundle-mcpp-run-$variant.log"
 }
