@@ -1,0 +1,34 @@
+# Fixture: rules-metal (mcpp#634, B6).
+#
+# Two libraries from the shaders the project names, one per shader, and a
+# variant compiled from one of those sources with a definition of its own, the
+# shape a renderer takes when it compiles one fragment shader per blend mode.
+# The program opens each library it expects beside itself and checks the Metal
+# library magic, so no GPU is involved.
+#
+# The shaders are sources on the macOS row only: a `.metal` file is a device
+# source, and a row that names none plans nothing.
+[package]
+name        = "metal-consumer"
+version     = "0.1.0"
+description = "Fixture: Metal shaders compiled to Metal libraries by rules-metal"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-metal"], host-module = true }
+
+[build]
+sources = ["src/*.cpp"]
+
+[target.'cfg(os = "macos")'.build]
+sources = ["shaders/*.metal"]
+
+[targets.metal-consumer]
+kind = "bin"
+main = "src/main.cpp"

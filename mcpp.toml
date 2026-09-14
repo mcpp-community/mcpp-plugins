@@ -84,6 +84,16 @@ implies           = ["surface"]
 rule_module       = "mcpp.rules.cuda"
 device_extensions = [".cu"]
 
+# `.metal` shaders become Metal libraries through `xcrun metal` and `xcrun
+# metallib`, the toolchain Xcode carries. No payload is declared, for the reason
+# `dist-apple` gives for `codesign`: Xcode is not redistributable, so the rule
+# locates the toolchain and refuses naming the command that found nothing.
+[features.rules-metal]
+sources           = ["rules/metal.cppm"]
+implies           = ["surface"]
+rule_module       = "mcpp.rules.metal"
+device_extensions = [".metal"]
+
 [features.rules-hip]
 sources           = ["rules/hip.cppm"]
 implies           = ["surface"]
