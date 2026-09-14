@@ -23,3 +23,10 @@ plugins = { path = "../..", features = ["dist-wix"], host-module = true }
 [targets.msi-consumer]
 kind = "bin"
 main = "src/main.cpp"
+
+# A deployed file, which the MSI must install beside the program
+# (`data/greeting.txt` under the install folder). The engine stages it at
+# `bin/data/greeting.txt` beside the program, and `dist-wix` names every staged
+# file in the `StagedFiles` component group from 0.10.1.
+[runtime]
+deploy = [ { from = "share/greeting.txt", to = "data" } ]

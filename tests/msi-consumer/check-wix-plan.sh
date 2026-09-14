@@ -15,6 +15,10 @@
 #      an XML parser refuses the same document on every host.
 #   3. `--format msi` plans no bundle.
 #   4. A bundle named `setup.exe` is refused before `wix` runs, as a warning.
+#   5. Every file staged beside the program is named, file by file, in the
+#      `StagedFiles` component group the generated definition references; the
+#      program itself is not, and each file is an input of the MSI action, as
+#      are `options::inputs` (MSI) and `options::bundle_inputs` (bundle).
 #
 # Usage: MCPP=<mcpp> ./check-wix-plan.sh   (run from this directory)
 set -eu
@@ -35,14 +39,17 @@ mkdir -p "$wix/tool/tools/net6.0/any" "$wix/bal/wixext5"
 : > "$wix/bal/wixext5/WixToolset.BootstrapperApplications.wixext.dll"
 
 # run_program <format> <out dir> <log> [bundle output]
+# STAGE, INPUT and BUNDLE_INPUT, when set, are the staged tree and the extra
+# inputs the fixture passes through `options::inputs` / `bundle_inputs`.
 run_program() {
     mkdir -p "$2"
     env -i PATH="$PATH" \
         MCPP_PACK_FORMAT="$1" MCPP_TARGET_OS=windows MCPP_TARGET_ARCH=x86_64 \
-        MCPP_TARGET_ENV=msvc MCPP_PACK_STAGE_DIR="" MCPP_MANIFEST_DIR="$PWD" \
+        MCPP_TARGET_ENV=msvc MCPP_PACK_STAGE_DIR="${STAGE:-}" MCPP_MANIFEST_DIR="$PWD" \
         MCPP_PKG_NAME=msi-consumer MCPP_PKG_NAMESPACE= MCPP_PKG_VERSION=0.3.0 \
         MCPP_PKG_AUTHORS=mcpp-community MCPP_OUT_DIR="$2" \
         MCPP_XPKG_XIM_WIX_DIR="$wix" MSI_CONSUMER_BUNDLE_OUTPUT="${4:-}" \
+        MSI_CONSUMER_INPUT="${INPUT:-}" MSI_CONSUMER_BUNDLE_INPUT="${BUNDLE_INPUT:-}" \
         "$BIN" > "$3" 2>&1 || true
 }
 
@@ -112,5 +119,51 @@ if not any(l.startswith("mcpp:warning=") and "WIX0388" in l for l in lines):
     fail("the refusal is not a warning naming WIX0388")
 '
 echo "ok: refused as a warning, before wix runs"
+
+echo "== 5. the staged tree =="
+stage="$work/stage"
+mkdir -p "$stage/bin/data" "$stage/bin/locale/zh & tw"
+printf 'program' > "$stage/bin/msi-consumer.exe"
+printf 'greeting' > "$stage/bin/data/greeting.txt"
+printf 'dll' > "$stage/bin/runtime.dll"
+printf 'strings' > "$stage/bin/locale/zh & tw/strings.properties"
+printf 'readme' > "$stage/README.md"
+STAGE="$stage" INPUT="$work/app.ico" BUNDLE_INPUT="$work/theme.xml" \
+    run_program setup "$work/staged" "$work/staged.log"
+check "$work/staged.log" "$work/staged" '
+import xml.dom.minidom, os
+msi = actions.get("mcpp.dist.wix")
+bundle = actions.get("mcpp.dist.wix.bundle")
+if not msi or not bundle: fail("the MSI and the bundle are not both planned: " + repr(sorted(actions)))
+fragment = os.path.join(out, "MsiConsumer-staged.wxs")
+if not os.path.isfile(fragment): fail("no generated MsiConsumer-staged.wxs")
+if fragment not in msi["command"]: fail("the MSI command does not compile the staged fragment: " + repr(msi["command"]))
+doc = xml.dom.minidom.parse(fragment)
+groups = doc.getElementsByTagName("ComponentGroup")
+if len(groups) != 1 or groups[0].getAttribute("Id") != "StagedFiles" or groups[0].getAttribute("Directory") != "INSTALLFOLDER":
+    fail("the fragment is not one StagedFiles group under INSTALLFOLDER")
+named = {}
+for c in doc.getElementsByTagName("Component"):
+    files = c.getElementsByTagName("File")
+    if len(files) != 1: fail("a staged component does not carry exactly one file")
+    named[os.path.basename(files[0].getAttribute("Source"))] = (c.getAttribute("Subdirectory"), files[0].getAttribute("Source"))
+expected = {
+    "greeting.txt": "data",
+    "runtime.dll": "",
+    "strings.properties": "locale\\zh & tw",
+}
+if set(named) != set(expected): fail("the staged files named are " + repr(sorted(named)) + ", not " + repr(sorted(expected)))
+for base, sub in expected.items():
+    if named[base][0] != sub: fail(base + " is placed under " + repr(named[base][0]) + ", not " + repr(sub))
+    if not os.path.isfile(named[base][1]): fail(base + " names a source that does not exist: " + named[base][1])
+    if named[base][1] not in msi["inputs"]: fail(base + " is not an input of the MSI action")
+if fragment not in msi["inputs"]: fail("the staged fragment is not an input of the MSI action")
+if not any(i.endswith("app.ico") for i in msi["inputs"]): fail("options::inputs did not reach the MSI action: " + repr(msi["inputs"]))
+if not any(i.endswith("theme.xml") for i in bundle["inputs"]): fail("options::bundle_inputs did not reach the bundle action: " + repr(bundle["inputs"]))
+if any(i.endswith("theme.xml") for i in msi["inputs"]): fail("options::bundle_inputs reached the MSI action")
+definition = open(os.path.join(out, "MsiConsumer.wxs")).read()
+if "<ComponentGroupRef Id=\"StagedFiles\" />" not in definition: fail("the generated definition does not install the StagedFiles group")
+'
+echo "ok: the staged files are named one by one, placed as staged, and are inputs of the MSI"
 
 echo "PASS: dist-wix plans the MSI and the bundle, and writes well-formed documents"

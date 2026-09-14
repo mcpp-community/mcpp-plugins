@@ -33,10 +33,13 @@
 // it to an empty string -- so the program arrives as that placeholder and
 // never as a directory this member goes looking through.
 //
-// THIS MEMBER NEVER READS THE STAGED TREE, AND THAT IS THE POINT OF ITS
-// SHAPE. `mcpp pack --format msi` reports as the distributable whatever
-// artifact action the REQUEST introduced, so a member that names one program
-// and no directory needs nothing extra to be recognised. An earlier engine
+// THE STAGED TREE IS READ, BUT NEVER HARVESTED. The program arrives as the
+// placeholder above; the files `mcpp pack` staged beside it -- deployed data,
+// resolved DLLs -- are enumerated while the tree exists and named one by one
+// (`staged_files_for`), so the rule above keeps holding for them too.
+// `mcpp pack --format msi` reports as the distributable whatever artifact
+// action the REQUEST introduced, so a member that names its files and no
+// directory needs nothing extra to be recognised. An earlier engine
 // revision asked the narrower question -- which action named
 // `${mcpp.stage_dir}` -- and refused this member for following section 6's
 // guidance, which is why the engine's criterion is presence in the dispatch
@@ -157,6 +160,13 @@ struct options {
     // Source="$(Executable)" ...>`, against the same `-d Executable=` argv
     // this member builds. Neither spelling could be run here, so the one with
     // a measurement behind it is the one shipped.
+    //
+    // The rest of the staged tree reaches a project definition the same way it
+    // reaches the generated one: `wix` always compiles the `StagedFiles`
+    // component group this member writes beside the definition
+    // (`staged_document`), and a definition that declares a directory with the
+    // Id `INSTALLFOLDER` installs those files with
+    // `<ComponentGroupRef Id="StagedFiles" />`.
     std::string wxs;
 
     // An explicit `wix` wins over the declared payload. Set it to pin a build
@@ -178,6 +188,15 @@ struct options {
     std::string license_url;
     std::string extension;
     std::string bundle_output;
+
+    // The files a project-supplied `wxs` (`inputs`) or `bundle_wxs`
+    // (`bundle_inputs`) names beyond what this member passes it -- an icon, a
+    // bootstrapper application and its payloads -- declared as inputs of the
+    // action that reads them, so a change to one rebuilds the installer. WiX
+    // reads what the definition names whether or not it is declared here; an
+    // undeclared file is only missing from the build graph.
+    std::vector<std::string> inputs;
+    std::vector<std::string> bundle_inputs;
 
     std::string out_dir = std::string(mcpp::out_dir());
 };
@@ -207,6 +226,11 @@ struct plan {
     std::string              bundle_wxs_path;
     std::vector<std::string> bundle_argv;
     std::vector<std::string> bundle_inputs;
+    // `<out_dir>/<product_name>-staged.wxs`: the `StagedFiles` component group
+    // naming every file `mcpp pack` staged beside the program, one entry per
+    // file (see `staged_files_for`).
+    std::string              staged_wxs_path;
+    std::vector<std::string> staged_files;
     explicit operator bool() const { return applies; }
 };
 
@@ -512,8 +536,70 @@ inline std::string bundle_document(const std::string& name, const std::string& m
         xml_escape(license_url));
 }
 
+// THE REST OF THE STAGED TREE, NAMED FILE BY FILE. `mcpp pack` stages the
+// program and, beside it under `bin/`, everything the program needs at run
+// time: the files a build program deploys (`mcpp::deploy`, `[runtime] deploy`)
+// and the DLLs its closure resolved. An installer that carried the program
+// alone installs something that cannot find its own data. The header's rule
+// still holds -- a directory is never handed to WiX's harvester, which turns a
+// path resolving to nothing into a valid empty installer -- so each file is
+// enumerated here, while the staged tree exists, and named as a
+// `<File Source>`, which is an error when it is missing.
+//
+// Returned as (absolute source, install path relative to INSTALLFOLDER),
+// sorted, the program itself excluded: `$(Executable)` already names it.
+inline std::vector<std::pair<std::string, std::string>>
+staged_files_for(const std::string& stage, const std::string& target) {
+    std::vector<std::pair<std::string, std::string>> files;
+    if (stage.empty()) return files;
+    const std::filesystem::path bin = std::filesystem::path(stage) / "bin";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(bin, ec)) return files;
+    for (auto it = std::filesystem::recursive_directory_iterator(bin, ec);
+         it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec)) continue;
+        const std::string relative = std::filesystem::relative(it->path(), bin, ec).generic_string();
+        if (ec || relative.empty()) continue;
+        if (relative == target || relative == target + ".exe") continue;
+        files.emplace_back(it->path().string(), relative);
+    }
+    std::sort(files.begin(), files.end(),
+              [](const auto& a, const auto& b) { return a.second < b.second; });
+    return files;
+}
+
+// The `StagedFiles` component group, always written so a definition can
+// reference it whether or not anything was staged. One component per file,
+// placed by `Subdirectory` under INSTALLFOLDER, so the installed tree is the
+// staged one. A definition that does not reference the group leaves it out of
+// the link, as WiX does with any unreferenced fragment.
+inline std::string staged_document(const std::vector<std::pair<std::string, std::string>>& files) {
+    std::string doc =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\">\n"
+        "  <!-- Generated by mcpp.dist.wix: every file mcpp pack staged beside the\n"
+        "       program, installed at the same path under INSTALLFOLDER. A\n"
+        "       definition installs them with <ComponentGroupRef Id=\"StagedFiles\" />. -->\n"
+        "  <Fragment>\n"
+        "    <ComponentGroup Id=\"StagedFiles\" Directory=\"INSTALLFOLDER\">\n";
+    for (const auto& [source, relative] : files) {
+        std::string subdirectory = std::filesystem::path(relative).parent_path().generic_string();
+        for (std::size_t i = 0; i < subdirectory.size(); ++i)
+            if (subdirectory[i] == '/') subdirectory[i] = '\\';
+        doc += "      <Component";
+        if (!subdirectory.empty()) doc += " Subdirectory=\"" + xml_escape(subdirectory) + "\"";
+        doc += "><File Source=\"" + xml_escape(source) + "\" /></Component>\n";
+    }
+    doc += "    </ComponentGroup>\n"
+           "  </Fragment>\n"
+           "</Wix>\n";
+    return doc;
+}
+
 // A minimal WiX v4/v5/v6 definition: one `Package`, one `Component` carrying
-// the single file this member wraps, one `Feature` referencing it. WiX can
+// the program this member wraps, one `Feature` referencing it and the
+// `StagedFiles` group beside it (`staged_document`). WiX can
 // derive a stable Component GUID from the component's own target path by
 // itself when `Component/@Guid` is omitted -- that is why only one GUID is
 // minted here rather than two: `UpgradeCode` expresses identity across the
@@ -547,6 +633,7 @@ inline std::string wxs_document(const std::string& name, const std::string& manu
         "    </StandardDirectory>\n"
         "    <Feature Id=\"MainFeature\" Title=\"{0}\" Level=\"1\">\n"
         "      <ComponentRef Id=\"MainExecutable\" />\n"
+        "      <ComponentGroupRef Id=\"StagedFiles\" />\n"
         "    </Feature>\n"
         "  </Package>\n"
         "</Wix>\n",
@@ -664,6 +751,14 @@ inline plan plan_for(options opt = {}) {
     p.wxs_path     = wxsPath;
     p.target_name  = target;
 
+    const std::vector<std::pair<std::string, std::string>> staged =
+        staged_files_for(mcpp::pack_stage_dir(), target);
+    p.staged_wxs_path = (std::filesystem::path(opt.out_dir) / (name + "-staged.wxs")).string();
+    if (!write_if_different(p.staged_wxs_path, staged_document(staged))) {
+        return refuse(p, "cannot write the staged files", std::format("mcpp.dist.wix: cannot write {}", p.staged_wxs_path));
+    }
+    for (const auto& file : staged) p.staged_files.push_back(file.first);
+
     const std::string targetFile = std::format("${{mcpp.target_file:{}}}", target);
     p.argv = {
         tool, "build",
@@ -674,12 +769,15 @@ inline plan plan_for(options opt = {}) {
         "-d", "Executable=" + targetFile,
         "-o", p.output,
         wxsPath,
+        p.staged_wxs_path,
     };
-    // TWO INPUTS, AND NEITHER IS THE STAGED TREE. The program the MSI carries
-    // and the definition that describes it are the whole of what this action
-    // reads, so editing the `.wxs` rebuilds the MSI and a dependency's shared
-    // library -- which the MSI's one `File` row never names -- does not.
-    p.inputs = { targetFile, wxsPath };
+    // The program, the definition, the staged-files fragment and each staged
+    // file it names are what this action reads, so editing any of them
+    // rebuilds the MSI; `options::inputs` adds what a project's own definition
+    // names beyond them.
+    p.inputs = { targetFile, wxsPath, p.staged_wxs_path };
+    p.inputs.insert(p.inputs.end(), p.staged_files.begin(), p.staged_files.end());
+    p.inputs.insert(p.inputs.end(), opt.inputs.begin(), opt.inputs.end());
 
     // `--format setup`: the bundle that chains the MSI above.
     if (setup) {
@@ -736,6 +834,7 @@ inline plan plan_for(options opt = {}) {
         // The MSI is an input, which is what orders the bundle after it and
         // makes the bundle the request's one terminal artifact.
         p.bundle_inputs = { p.output, bundleWxs, extension };
+        p.bundle_inputs.insert(p.bundle_inputs.end(), opt.bundle_inputs.begin(), opt.bundle_inputs.end());
     }
 
     p.applies = true;

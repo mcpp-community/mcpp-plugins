@@ -1881,6 +1881,19 @@ jobs:
             exit 1; }
           echo "ok: the MSI installs msi-consumer.exe, $insidesize bytes, byte-for-byte the linked program"
 
+          # THE STAGED TREE IS INSTALLED, NOT ONLY THE PROGRAM (0.10.1). The
+          # fixture deploys `share/greeting.txt` to `data/`; the engine stages
+          # it at `bin/data/greeting.txt` and the member names it in the
+          # `StagedFiles` group, so the administrative image carries it at the
+          # same path beside the program, byte-for-byte.
+          data="$(dirname "$inside")/data/greeting.txt"
+          test -f "$data" || {
+            echo "FAIL: the MSI does not install the deployed data/greeting.txt beside the program"
+            find "$admin" -type f | head -20; exit 1; }
+          cmp "$data" share/greeting.txt \
+            || { echo "FAIL: the installed data/greeting.txt differs from share/greeting.txt"; exit 1; }
+          echo "ok: the MSI installs the deployed data/greeting.txt beside the program"
+
       # `--format setup` (mcpp#634, B4): a Burn bundle with WiX's stock
       # bootstrapper application, chaining the MSI the step above measured, and
       # built through the extension `xim:wix` 5.0.2-1 carries.
