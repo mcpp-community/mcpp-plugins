@@ -35,23 +35,26 @@ env:
   # reads the staged tree. Staging is a service to the provider in 2026.9.11.2,
   # and `dist-apple` has been unreachable, not broken, since it was written.
   #
-  # 2026.9.14.1 WHILE mcpp#634 IS DEVELOPED, AS THE RELEASE THAT BUILDS THE
-  # ENGINE UNDER REVIEW. 0.10.0's `dist-apk` and `dist-apple` read the closure
-  # the engine stages, which needs 2026.9.14.2; this pin names that release
-  # before 0.10.0 merges.
-  MCPP_VERSION: 2026.9.14.1
-  # THE ENGINE UNDER REVIEW, BUILT FROM SOURCE WHEN THIS IS NOT EMPTY.
+  # 2026.9.14.2 IS THE RELEASE THAT STAGES THE CLOSURES `dist-apk` AND
+  # `dist-apple` READ (mcpp#634). It stages an Android application's native
+  # libraries under `lib/` (`lib/<abi>/` for several targets) and a Mach-O
+  # program's dylibs beside it, naming each in the stage manifest's `needs`
+  # lines; it leaves an rpath that begins with `@executable_path` as written,
+  # which `dist-apple`'s framework rpath needs; and it runs a distributable
+  # through the runner named after its format, which is how `mcpp run --format
+  # app` reaches `macapp-run`. An engine below it stages no `needs` lines, and
+  # `dist-apk` refuses its tree naming this release.
+  MCPP_VERSION: 2026.9.14.2
+  # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
-  # `.github/scripts/mcpp-under-review.sh` builds mcpp-community/mcpp at this
-  # reference with the release above and points `$MCPP` at the result, in each
-  # job that fetches mcpp, and the step after it checks that the steps run what
-  # it built. A dispatch names the reference through its input. The default is
-  # the development branch of mcpp#634, whose engine stages the closures
-  # `dist-apk` and `dist-apple` read, runs a distributable through the runner
-  # named after its format, and leaves an `@executable_path` rpath as written;
-  # it is removed before 0.10.0 merges, when MCPP_VERSION names the release that
-  # carries that engine.
-  MCPP_SOURCE_REF: ${{ inputs.mcpp_source_ref || 'feat/634-cmake-parity' }}
+  # Empty on every push and pull request, so the steps run the release above.
+  # A dispatch that names a branch or tag of mcpp-community/mcpp through the
+  # `mcpp_source_ref` input has `.github/scripts/mcpp-under-review.sh` build
+  # that reference with the release above and point `$MCPP` at the result, in
+  # each job that fetches mcpp, and the step after it checks that the steps run
+  # what it built. This is how a change to the engine is measured against this
+  # collection before either is released.
+  MCPP_SOURCE_REF: ${{ inputs.mcpp_source_ref || '' }}
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -78,7 +81,8 @@ jobs:
     # compile. The cache key includes the fixtures' manifests, so a run that
     # changes one of them is always the cold case.
     #
-    # 150 while `MCPP_SOURCE_REF` builds mcpp from source ahead of every step.
+    # 150, which leaves room for the source build a dispatch naming
+    # `mcpp_source_ref` adds ahead of every step.
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -130,15 +134,10 @@ jobs:
           version=$("$MCPP" --version | head -1)
           [ "$version" = "$MCPP_UNDER_REVIEW_VERSION" ] || {
             echo "::error::$MCPP prints '$version', and the build printed '$MCPP_UNDER_REVIEW_VERSION'"; exit 1; }
-          # A reading, not a criterion: whether each engine declares `pack
-          # --toolchain` (mcpp#634, E14), which separates the development branch
-          # from 2026.9.14.1 while both print one version.
-          for engine in "$MCPP" "$MCPP_RELEASED"; do
-            "$engine" pack --help > pack-help.txt 2>&1 || true
-            if grep -q -- '--toolchain' pack-help.txt; then t=yes; else t=no; fi
-            echo "READING $engine: $("$engine" --version | head -1), pack --toolchain: $t"
-          done
-          rm -f pack-help.txt
+          # A reading, not a criterion: the two engines' versions, which may be
+          # equal when the reference has not moved the version yet, so the
+          # criterion above is the path and not the version.
+          echo "READING released: $("$MCPP_RELEASED" --version | head -1); under review: $version"
           echo "ok: the steps run $version, built from $MCPP_SOURCE_REF"
 
       # The rule's output is a header holding the SPIR-V module; the program
@@ -1566,7 +1565,8 @@ jobs:
   rules-cross-platform:
     name: rules (${{ matrix.name }})
     runs-on: ${{ matrix.runs-on }}
-    # 150 while `MCPP_SOURCE_REF` builds mcpp from source ahead of every step.
+    # 150, which leaves room for the source build a dispatch naming
+    # `mcpp_source_ref` adds ahead of every step.
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -1681,15 +1681,10 @@ jobs:
           version=$("$MCPP" --version | head -1)
           [ "$version" = "$MCPP_UNDER_REVIEW_VERSION" ] || {
             echo "::error::$MCPP prints '$version', and the build printed '$MCPP_UNDER_REVIEW_VERSION'"; exit 1; }
-          # A reading, not a criterion: whether each engine declares `pack
-          # --toolchain` (mcpp#634, E14), which separates the development branch
-          # from 2026.9.14.1 while both print one version.
-          for engine in "$MCPP" "$MCPP_RELEASED"; do
-            "$engine" pack --help > pack-help.txt 2>&1 || true
-            if grep -q -- '--toolchain' pack-help.txt; then t=yes; else t=no; fi
-            echo "READING $engine: $("$engine" --version | head -1), pack --toolchain: $t"
-          done
-          rm -f pack-help.txt
+          # A reading, not a criterion: the two engines' versions, which may be
+          # equal when the reference has not moved the version yet, so the
+          # criterion above is the path and not the version.
+          echo "READING released: $("$MCPP_RELEASED" --version | head -1); under review: $version"
           echo "ok: the steps run $version, built from $MCPP_SOURCE_REF"
 
       # FIRST, BECAUSE IT IS THE CHEAPER QUESTION AND THE MORE INFORMATIVE
