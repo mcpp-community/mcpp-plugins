@@ -405,7 +405,7 @@ implies           = ["surface"]
 # is downloaded" shape the accelerator rules use, applied to the target axis
 # instead.
 #
-# FOUR PACKAGES, EACH OWNED BY A DIFFERENT HALF OF THE PIPELINE. `aapt2`,
+# FOUR OF THE FIVE PACKAGES, EACH OWNED BY A DIFFERENT HALF OF THE PIPELINE. `aapt2`,
 # `zipalign`, and the `apksigner`/`d8` wrappers all live in one archive
 # (`xim:android-build-tools`); `android.jar` is versioned by API level on its
 # own (`xim:android-platform`) because that is the number a project pins, not
@@ -430,11 +430,17 @@ implies           = ["surface"]
 # directory this entry resolves to (`api_level_from_platform_dir`), so an
 # alias that silently failed to resolve would surface as a build-time
 # refusal rather than a wrong number, but there is no reason to court it.
+#
+# `xim:bundletool` BUILDS `--format aab`. It is installed with the other four
+# for the reason `dist-appimage` gives above: provisioning runs before the
+# build program learns `--format`, so the format cannot gate a download. Its
+# launcher runs the JDK it was installed against, which is the one pinned here.
 [target.'cfg(env = "android")'.feature-xlings.dist-apk]
 "xim:android-build-tools"     = ">=37.0.0"
 "xim:android-platform"        = "36-r2"
 "xim:jdk-temurin"             = "25.0.4+7"
 "xim:android-debug-keystore"  = "1.0.0"
+"xim:bundletool"              = "1.18.3"
 
 [targets.plugins]
 kind = "lib"
