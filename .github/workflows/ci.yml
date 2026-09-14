@@ -1185,6 +1185,15 @@ jobs:
         working-directory: tests/app-framework-consumer
         run: MCPP="$MCPP" ./check-apple-plan.sh
 
+      # dist-wix's `setup` format, as planned for a Windows target (mcpp#634,
+      # B4): the bundle follows the MSI, both generated documents are
+      # well-formed XML, and `setup.exe` is refused. The bundle itself is built
+      # on the Windows runner.
+      - name: dist-wix's MSI and Burn bundle, checked at the plan level
+        timeout-minutes: 15
+        working-directory: tests/msi-consumer
+        run: MCPP="$MCPP" ./check-wix-plan.sh
+
       # dist-web (#622 B3), end to end, the real `mcpp pack --format web
       # --target wasm32-emscripten` -- see `tests/web-consumer/
       # check-web-plan.sh`'s own header for the host-toolchain defect this
