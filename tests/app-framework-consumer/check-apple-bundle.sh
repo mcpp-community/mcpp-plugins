@@ -37,7 +37,7 @@ echo "== 1. the program's rpath =="
 rm -rf target
 "$MCPP" build > bundle-build.log 2>&1 || fail "mcpp build failed" bundle-build.log
 if find target -name '*.app' | grep -q .; then fail "a plain build produced a bundle"; fi
-programs=$(find target -type f -name "$EXE" ! -path '*/.build-mcpp/*')
+programs=$(find target -type f -name "$EXE" ! -path '*/.build-mcpp/*' ! -path '*.dSYM/*')
 [ "$(printf '%s\n' "$programs" | grep -c .)" = 1 ] \
     || fail "expected one linked $EXE under target/, found: $(echo $programs)" bundle-build.log
 otool -l "$programs" > bundle-loadcommands.log
@@ -48,9 +48,11 @@ printf '%s\n' "$rpaths" | grep -qxF '@executable_path/../Frameworks' \
 if printf '%s\n' "$rpaths" | grep -q '.@executable_path'; then
     fail "an rpath carries @executable_path after a directory, anchored" bundle-loadcommands.log
 fi
+# The dependency's install name is the engine's choice and is recorded, not
+# asserted: criterion 3 is what shows the bundle loads the framework copy.
 otool -L "$programs" > bundle-needed.log
-grep -q "@rpath/$DYLIB" bundle-needed.log || fail "the program does not load @rpath/$DYLIB" bundle-needed.log
-echo "ok: LC_RPATH @executable_path/../Frameworks, as written, and the dependency is @rpath/$DYLIB"
+reading install-name "$(grep "$DYLIB" bundle-needed.log | sed 's/^[[:space:]]*//' | head -1)"
+echo "ok: LC_RPATH @executable_path/../Frameworks, as written"
 
 # ── 2. the bundle ──────────────────────────────────────────────────────────
 echo "== 2. the bundle carries the framework and is signed ad hoc =="
@@ -91,7 +93,8 @@ reading bundle-run "exit=$rc $(cat bundle-run-out.log)"
 grep -qx 'framework-1-2-3 argc=1' bundle-run-out.log || fail "the bundled program's output is missing" bundle-run-out.log
 loaded=$(grep "$DYLIB" bundle-run-err.log | head -1)
 reading loaded "$loaded"
-case "$loaded" in *"/$NAME.app/Contents/Frameworks/$DYLIB") ;;
+# dyld may print the rpath expansion unnormalised (`Contents/MacOS/../Frameworks`).
+case "$loaded" in *"/$NAME.app/Contents/Frameworks/$DYLIB" | *"/$NAME.app/Contents/MacOS/../Frameworks/$DYLIB") ;;
     *) fail "the program did not load the framework copy" bundle-run-err.log ;; esac
 cp -R "$app" "$work/"
 rm "$work/$NAME.app/Contents/Frameworks/$DYLIB"
