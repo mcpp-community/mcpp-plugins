@@ -306,4 +306,5 @@ mkdir -p k && unzip -q -o "$APK" "$LIB" -d k
 readelf -S "k/$LIB" > sections-l.log
 grep -q '\.symtab' sections-l.log || fail "keep_debug_symbols packed a stripped library" sections-l.log
 unset APK_CONSUMER_KEEP_DEBUG_SYMBOLS
+rm -rf k
 echo "ok: keep_debug_symbols packs the library with its symbol table"
