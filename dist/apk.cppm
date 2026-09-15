@@ -231,6 +231,12 @@ struct options {
     // reach the ones the engine stages. A library is stripped unless either
     // this option or the engine says to keep it. An older engine publishes
     // neither variable, and the member strips as before.
+    //
+    // THE ENGINE STRIPS FIRST. That engine strips the libraries the graph built
+    // when it stages them, before this member reads the tree, so this option
+    // keeps this member's own strip off and cannot restore what the engine
+    // removed: `mcpp pack --no-strip` is what ships the symbols. With this
+    // option set and the engine stripping, the member says so.
     bool keep_debug_symbols = false;
 
     // LEVEL 1, KOTLIN (0.11.0). One or more directories of `.kt` sources,
@@ -2015,6 +2021,11 @@ inline plan plan_for(options opt = {}) {
     // `options::keep_debug_symbols`.
     const char* engineStrip = std::getenv("MCPP_PACK_STRIP");
     const bool engineKeeps = engineStrip && std::string_view(engineStrip) == "0";
+    if (opt.keep_debug_symbols && engineStrip && std::string_view(engineStrip) == "1") {
+        mcpp::warning("mcpp.dist.apk: options::keep_debug_symbols is set, and the engine stripped "
+                      "the libraries it staged before this member read them; pass "
+                      "`mcpp pack --no-strip` to ship their symbols.");
+    }
     const char* engineDebugDir = std::getenv("MCPP_PACK_DEBUG_SYMBOLS_DIR");
     const std::string debugDir = engineDebugDir ? engineDebugDir : "";
 
@@ -2069,9 +2080,19 @@ inline plan plan_for(options opt = {}) {
         char magic[4] = {};
         return in.read(magic, 4) && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
     };
-    const auto place_library = [&](const std::string& so, const std::string& abi) {
+    // A LIBRARY THE ENGINE STAGED IS ALREADY WHAT THE ENGINE DECIDED. An engine
+    // that publishes its strip decision (`MCPP_PACK_STRIP` is set) has stripped
+    // those libraries, and separated their debug information into
+    // `--debug-symbols`, before this member reads the tree; stripping them again
+    // finds no debug information, writes an empty `.debug` file and points the
+    // packed copy at it (measured with mcpp 2026.9.16.1). They are packed as
+    // staged. The member's own strip applies to what the engine did not stage --
+    // an archive's native libraries -- and to every library under an older
+    // engine, which decides nothing.
+    const bool engineDecided = engineStrip && *engineStrip;
+    const auto place_library = [&](const std::string& so, const std::string& abi, bool staged) {
         const fs::path dst = work / "lib" / abi / fs::path(so).filename();
-        if (llvmStrip.empty()) {
+        if (llvmStrip.empty() || (staged && engineDecided)) {
             collect_tree(so, dst, libInputs);
             return;
         }
@@ -2123,7 +2144,7 @@ inline plan plan_for(options opt = {}) {
     };
     for (auto const& leg : legs)
         for (auto const& so : leg.libraries)
-            place_library(so, leg.abi);
+            place_library(so, leg.abi, /*staged=*/true);
 
     // An AAR's native libraries, for every ABI this package carries.
     for (auto const& c : contributions) {
@@ -2137,7 +2158,7 @@ inline plan plan_for(options opt = {}) {
                 continue;
             }
             for (auto const& so : shared_objects_in(abiDir))
-                place_library(so, leg.abi);
+                place_library(so, leg.abi, /*staged=*/false);
         }
     }
 

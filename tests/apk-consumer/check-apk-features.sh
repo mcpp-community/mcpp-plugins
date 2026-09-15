@@ -297,9 +297,24 @@ unset APK_CONSUMER_TEMPLATE
 echo "ok: the library is stripped, compressed by default, and stored on a 16 KB page when loaded in place"
 
 echo "== (l) keep_debug_symbols =="
+# From mcpp 2026.9.16.1 the engine strips the staged libraries before this member
+# reads them, so the symbols reach the package only with `--no-strip`; the
+# member warns when the option is set and the engine stripped. An older engine
+# stages the library as linked, and the option alone keeps its symbols.
+engine_version=$("$MCPP" --version | awk '{print $2}')
+engine_strips=no
+[ "$(printf '%s\n%s\n' 2026.9.16.1 "$engine_version" | sort -V | head -1)" = 2026.9.16.1 ] && engine_strips=yes
 rm -rf target k
 export APK_CONSUMER_KEEP_DEBUG_SYMBOLS=1
-"$MCPP" pack --format apk --target "$TARGET" > pack-l.log 2>&1 || fail "pack failed" pack-l.log
+if [ "$engine_strips" = yes ]; then
+    "$MCPP" pack --format apk --target "$TARGET" > pack-l0.log 2>&1 || fail "pack failed" pack-l0.log
+    grep -q 'keep_debug_symbols is set, and the engine stripped' pack-l0.log \
+        || fail "keep_debug_symbols under a stripping engine did not say the engine stripped" pack-l0.log
+    rm -rf target
+    "$MCPP" pack --format apk --target "$TARGET" --no-strip > pack-l.log 2>&1 || fail "pack failed" pack-l.log
+else
+    "$MCPP" pack --format apk --target "$TARGET" > pack-l.log 2>&1 || fail "pack failed" pack-l.log
+fi
 APK=$(find target -name 'apk-consumer.apk' | head -1)
 [ -n "$APK" ] || fail "no apk-consumer.apk" pack-l.log
 mkdir -p k && unzip -q -o "$APK" "$LIB" -d k
@@ -311,16 +326,18 @@ echo "ok: keep_debug_symbols packs the library with its symbol table"
 
 # ── (m),(n) 0.12.0: the engine's strip decision reaches the packed libraries ─
 #
-# An engine that strips what the graph built (mcpp 2026.9.16.1) publishes its
-# decision to the build program, so (m) `mcpp pack --no-strip` packs the library
-# with its symbol table, and (n) `--debug-symbols <dir>` separates its debug
-# information into `<dir>/<abi>/<library>.debug` and leaves a `.gnu_debuglink`
-# in the packed copy. An older engine publishes nothing, so these legs are
-# skipped there; (k) is the behaviour that engine keeps.
+# An engine that strips what the graph built (mcpp 2026.9.16.1) strips the
+# staged library itself and publishes its decision to the build program, which
+# packs that library as staged: (m) `mcpp pack --no-strip` packs it with its
+# symbol table, and (n) `--debug-symbols <dir>` gives a packed copy with no debug
+# information whose `.gnu_debuglink` names the file the engine wrote,
+# `<dir>/<library>.debug`, which carries it. An older engine publishes nothing,
+# so these legs are skipped there; (k) is the behaviour that engine keeps.
 engine_version=$("$MCPP" --version | awk '{print $2}')
 if [ "$(printf '%s\n%s\n' 2026.9.16.1 "$engine_version" | sort -V | head -1)" = 2026.9.16.1 ]; then
     echo "== (m) mcpp pack --no-strip =="
     rm -rf target k
+    unset APK_CONSUMER_KEEP_DEBUG_SYMBOLS || true
     "$MCPP" pack --format apk --target "$TARGET" --no-strip > pack-m.log 2>&1 || fail "pack --no-strip failed" pack-m.log
     APK=$(find target -name 'apk-consumer.apk' | head -1)
     [ -n "$APK" ] || fail "no apk-consumer.apk" pack-m.log
@@ -341,12 +358,13 @@ if [ "$(printf '%s\n%s\n' 2026.9.16.1 "$engine_version" | sort -V | head -1)" = 
     readelf -S "k/$LIB" > sections-n.log
     if grep -qE '\.symtab|\.debug_' sections-n.log; then fail "the packed library keeps its symbol table or debug information" sections-n.log; fi
     grep -q '\.gnu_debuglink' sections-n.log || fail "the packed library does not name its debug file" sections-n.log
-    DEBUG_FILE="$DEBUG_DIR/x86_64/libapk-consumer.so.debug"
+    DEBUG_FILE="$DEBUG_DIR/libapk-consumer.so.debug"
     [ -f "$DEBUG_FILE" ] || fail "no $DEBUG_FILE" pack-n.log
     readelf -S "$DEBUG_FILE" > sections-n-debug.log
     grep -q '\.debug_' sections-n-debug.log || fail "the separated file carries no debug sections" sections-n-debug.log
+    [ ! -e "$DEBUG_DIR/x86_64" ] || fail "the member separated a library the engine had already stripped" pack-n.log
     rm -rf k debug-n
-    echo "ok: --debug-symbols separates the library's debug information and links the packed copy to it"
+    echo "ok: --debug-symbols: the packed library is the engine's stripped copy, linked to the engine's debug file, and the member separated nothing again"
 else
     echo "skip: (m),(n) need an engine that publishes MCPP_PACK_STRIP (2026.9.16.1+); this is $engine_version"
 fi
