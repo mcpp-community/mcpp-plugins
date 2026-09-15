@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- What an Xcode project's Info.plist states for a macOS application. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Scans the codes a user points the camera at.</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>org.mcpp.app-consumer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>mcpp-fixture</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSHighResolutionCapable</key>
+    <false/>
+</dict>
+</plist>

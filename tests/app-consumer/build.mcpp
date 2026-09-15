@@ -9,5 +9,10 @@ int main() {
     // No `identity`: signing is off by default, because a member that signed
     // unconditionally would fail every build on a machine with no identity in
     // its keychain. The signing path is exercised separately in CI.
+    //
+    // A project's own Info.plist entries (0.11.0), when the CI step that
+    // measures them names the file.
+    mcpp::rerun_if_env_changed("APP_CONSUMER_INFO_PLIST");
+    if (const char* v = std::getenv("APP_CONSUMER_INFO_PLIST"); v && *v) opt.info_plist = v;
     return mcpp::dist::apple::generate(opt) ? 0 : 1;
 }

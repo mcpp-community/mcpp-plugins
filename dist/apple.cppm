@@ -174,6 +174,18 @@
 // and lists their stems. A project supplying the wrong sizes gets a bundle
 // that installs and a Home Screen icon Apple's UI does not like -- a
 // cosmetic failure, not a build one.
+//
+// A PROJECT'S OWN Info.plist ENTRIES, AND A DEVICE BUNDLE THAT INSTALLS (0.11.0).
+// `options::info_plist` names a plist whose top-level entries join the bundle's
+// -- the usage descriptions, URL types and background modes an Xcode project's
+// Info.plist carries -- while the keys this member derives stay its own and are
+// refused by name. On the iOS device row, `options::provisioning_profile` is
+// embedded as `embedded.mobileprovision` and, unless `options::entitlements`
+// names a file, supplies the entitlements the bundle is signed with; the
+// profile's plist is read from the file itself, so a plan made on any host
+// checks the bundle identifier against it. `mcpp run --format app` on that row
+// reaches the device through the runner named `app` this member supplies,
+// `devicectl-run` (`xim:apple-device-tools`), as `macapp-run` serves macOS.
 
 module;
 #include <cstdio>
@@ -269,6 +281,25 @@ struct options {
     // `--entitlements <path>`, likewise only applied when `identity` is also
     // set. Validated to exist when named, the same as `icon`.
     std::string entitlements;
+
+    // A PLIST OF THE PROJECT'S OWN Info.plist ENTRIES (0.11.0), manifest-relative
+    // or absolute: every entry of its top-level `<dict>` joins the bundle's
+    // Info.plist. The keys this member derives from the options and the engine
+    // -- `CFBundleExecutable`, `CFBundleIdentifier`, `CFBundleName`, the two
+    // version keys, `CFBundlePackageType`, the minimum OS keys,
+    // `CFBundleSupportedPlatforms`, `CFBundleIconFile` and `CFBundleIcons` -- are
+    // refused by name, because an option or the engine states each; the three
+    // it only defaults (`UIDeviceFamily`, `LSRequiresIPhoneOS`,
+    // `NSHighResolutionCapable`) are replaced by the project's value.
+    std::string info_plist;
+
+    // AN iOS DEVICE BUNDLE'S PROVISIONING PROFILE (0.11.0), manifest-relative or
+    // absolute: embedded as `embedded.mobileprovision`, and, when `entitlements`
+    // is empty, the source of the entitlements the bundle is signed with (the
+    // profile's own `Entitlements` dictionary). Its `application-identifier`
+    // must cover `bundle_id`. Only the device row (`aarch64-ios`) takes one, and
+    // it needs `identity`: a device refuses an ad-hoc signature.
+    std::string provisioning_profile;
 
     // Where the produced bundle lands. Empty means `<out_dir>/<app_name>.app`.
     std::string output;
@@ -487,6 +518,11 @@ inline std::string plist_document(const std::string& executable, const std::stri
                                   const std::string& name, const std::string& version,
                                   bool is_ios, bool is_sim,
                                   const std::string& min_os_version,
+                                  // The project's own entries (0.11.0), already
+                                  // formatted, inserted before `</dict>`; and the
+                                  // defaulted keys they replace.
+                                  const std::string& extra_entries,
+                                  const std::vector<std::string>& replaced_keys,
                                   // macOS: the icon FILE's basename, extension
                                   // included, exactly as `CFBundleIconFile` has
                                   // always taken it. iOS: unused (see
@@ -529,9 +565,14 @@ inline std::string plist_document(const std::string& executable, const std::stri
         // `[1, 2]`: iPhone and iPad. Nothing here narrows a project to one
         // idiom -- that is a project decision (a size class, a storyboard)
         // this member has no basis for making.
-        doc += "    <key>UIDeviceFamily</key>\n    <array>\n"
-               "        <integer>1</integer>\n        <integer>2</integer>\n    </array>\n";
-        doc += "    <key>LSRequiresIPhoneOS</key>\n    <true/>\n";
+        const auto replaced = [&](std::string_view k) {
+            return std::ranges::find(replaced_keys, k) != replaced_keys.end();
+        };
+        if (!replaced("UIDeviceFamily"))
+            doc += "    <key>UIDeviceFamily</key>\n    <array>\n"
+                   "        <integer>1</integer>\n        <integer>2</integer>\n    </array>\n";
+        if (!replaced("LSRequiresIPhoneOS"))
+            doc += "    <key>LSRequiresIPhoneOS</key>\n    <true/>\n";
         if (!ios_icon_stems.empty()) {
             doc += "    <key>CFBundleIcons</key>\n    <dict>\n"
                    "        <key>CFBundlePrimaryIcon</key>\n        <dict>\n"
@@ -541,7 +582,8 @@ inline std::string plist_document(const std::string& executable, const std::stri
             doc += "            </array>\n        </dict>\n    </dict>\n";
         }
     } else {
-        doc += "    <key>NSHighResolutionCapable</key>\n    <true/>\n";
+        if (std::ranges::find(replaced_keys, std::string_view("NSHighResolutionCapable")) == replaced_keys.end())
+            doc += "    <key>NSHighResolutionCapable</key>\n    <true/>\n";
         // Not in the letter of this member's key list, but added
         // deliberately: without it, an icon file this member went to the
         // trouble of copying into `Contents/Resources/` is inert -- nothing
@@ -553,8 +595,191 @@ inline std::string plist_document(const std::string& executable, const std::stri
             doc += std::format("    <key>CFBundleIconFile</key>\n    <string>{}</string>\n",
                                plist_escape(mac_icon_name));
     }
+    doc += extra_entries;
     doc += "</dict>\n</plist>\n";
     return doc;
+}
+inline std::string plist_document(const std::string& executable, const std::string& bundle_id,
+                                  const std::string& name, const std::string& version,
+                                  bool is_ios, bool is_sim,
+                                  const std::string& min_os_version,
+                                  const std::string& mac_icon_name,
+                                  const std::vector<std::string>& ios_icon_stems) {
+    return plist_document(executable, bundle_id, name, version, is_ios, is_sim, min_os_version,
+                          std::string(), std::vector<std::string>(), mac_icon_name, ios_icon_stems);
+}
+
+inline std::string read_text(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+inline std::string resolve_path(const std::string& p) {
+    if (p.empty() || std::filesystem::path(p).is_absolute()) return p;
+    return (std::filesystem::path(mcpp::manifest_dir()) / p).lexically_normal().string();
+}
+
+// The keys `plist_document` derives, which a project's plist may not restate,
+// and the keys it only defaults, which a project's plist replaces.
+inline const std::vector<std::string>& derived_plist_keys() {
+    static const std::vector<std::string> v = {
+        "CFBundleExecutable", "CFBundleIdentifier", "CFBundleName", "CFBundleShortVersionString",
+        "CFBundleVersion", "CFBundlePackageType", "LSMinimumSystemVersion", "MinimumOSVersion",
+        "CFBundleSupportedPlatforms", "CFBundleIconFile", "CFBundleIcons"};
+    return v;
+}
+inline const std::vector<std::string>& defaulted_plist_keys() {
+    static const std::vector<std::string> v = {"UIDeviceFamily", "LSRequiresIPhoneOS", "NSHighResolutionCapable"};
+    return v;
+}
+
+// The top-level `<dict>` of a property list, or null. A document whose root is
+// `<dict>` itself is accepted as well as a full `<plist>`.
+inline const mcpp::plugins::xml::node* top_dict(const mcpp::plugins::xml::node& root) {
+    if (root.name == "dict") return &root;
+    if (root.name != "plist") return nullptr;
+    for (auto const& c : root.children) if (c.name == "dict") return &c;
+    return nullptr;
+}
+
+// The value element after each `<key>` of a `<dict>`, as (key, value) pairs.
+inline bool dict_entries(const mcpp::plugins::xml::node& dict,
+                         std::vector<std::pair<std::string, const mcpp::plugins::xml::node*>>& out,
+                         std::string& error) {
+    namespace xml = mcpp::plugins::xml;
+    for (std::size_t i = 0; i < dict.children.size(); ++i) {
+        const auto& k = dict.children[i];
+        if (k.name.empty()) continue;
+        if (k.name != "key") { error = "<" + k.name + "> appears where a <key> is expected"; return false; }
+        const std::string key = k.children.size() == 1 && k.children.front().name.empty()
+            ? xml::trim_copy(k.children.front().text) : std::string();
+        std::size_t j = i + 1;
+        while (j < dict.children.size() && dict.children[j].name.empty()) ++j;
+        if (key.empty() || j >= dict.children.size()) { error = "a <key> without a value"; return false; }
+        out.emplace_back(key, &dict.children[j]);
+        i = j;
+    }
+    return true;
+}
+
+// Reads `options::info_plist`: the entries to add, as the plist text
+// `plist_document` inserts, and the defaulted keys they replace.
+inline bool read_info_plist_fragment(const std::string& path, std::string& entries,
+                                     std::vector<std::string>& replaced, std::string& message) {
+    namespace xml = mcpp::plugins::xml;
+    xml::node root;
+    std::string err;
+    if (!xml::parse(read_text(path), root, err)) {
+        message = std::format("mcpp.dist.apple: `options::info_plist` ({}) cannot be read: {}", path, err);
+        return false;
+    }
+    const xml::node* dict = top_dict(root);
+    if (!dict) {
+        message = std::format("mcpp.dist.apple: `options::info_plist` ({}) has no top-level <dict>.", path);
+        return false;
+    }
+    std::vector<std::pair<std::string, const xml::node*>> pairs;
+    if (!dict_entries(*dict, pairs, err)) {
+        message = std::format("mcpp.dist.apple: `options::info_plist` ({}): {}", path, err);
+        return false;
+    }
+    std::vector<std::string> seen;
+    for (auto const& [key, value] : pairs) {
+        if (std::ranges::find(derived_plist_keys(), key) != derived_plist_keys().end()) {
+            message = std::format(
+                "mcpp.dist.apple: `options::info_plist` ({}) sets {}, which this member derives "
+                "from its options and the engine; set the option instead.", path, key);
+            return false;
+        }
+        if (std::ranges::find(seen, key) != seen.end()) {
+            message = std::format("mcpp.dist.apple: `options::info_plist` ({}) sets {} twice.", path, key);
+            return false;
+        }
+        seen.push_back(key);
+        if (std::ranges::find(defaulted_plist_keys(), key) != defaulted_plist_keys().end())
+            replaced.push_back(key);
+        entries += "    <key>" + key + "</key>\n";
+        xml::write(*value, entries, 1);
+    }
+    return true;
+}
+
+// A provisioning profile is a CMS-signed property list. The plist is stored in
+// the signed content as-is, so it is read from between its `<?xml` and
+// `</plist>` rather than through `security cms -D`, which exists only on macOS
+// and would make a plan made elsewhere unable to check anything. The signature
+// is the device's to verify, not this member's.
+inline bool read_profile(const std::string& path, const std::string& bundleId,
+                         std::string& entitlementsPlist, std::string& message) {
+    namespace xml = mcpp::plugins::xml;
+    const std::string bytes = read_text(path);
+    const auto b = bytes.find("<?xml");
+    const auto e = bytes.find("</plist>");
+    if (b == std::string::npos || e == std::string::npos || e < b) {
+        message = std::format(
+            "mcpp.dist.apple: `options::provisioning_profile` ({}) carries no property list, so "
+            "it is not a provisioning profile.", path);
+        return false;
+    }
+    xml::node root;
+    std::string err;
+    if (!xml::parse(std::string_view(bytes).substr(b, e + 8 - b), root, err)) {
+        message = std::format("mcpp.dist.apple: the property list in {} cannot be read: {}", path, err);
+        return false;
+    }
+    const xml::node* dict = top_dict(root);
+    std::vector<std::pair<std::string, const xml::node*>> pairs;
+    if (!dict || !dict_entries(*dict, pairs, err)) {
+        message = std::format("mcpp.dist.apple: the property list in {} has no readable top-level <dict>.", path);
+        return false;
+    }
+    const xml::node* entitlements = nullptr;
+    for (auto const& [key, value] : pairs) if (key == "Entitlements" && value->name == "dict") entitlements = value;
+    std::vector<std::pair<std::string, const xml::node*>> granted;
+    if (!entitlements || !dict_entries(*entitlements, granted, err)) {
+        message = std::format("mcpp.dist.apple: the provisioning profile {} states no Entitlements dictionary.", path);
+        return false;
+    }
+    std::string appIdentifier;
+    for (auto const& [key, value] : granted)
+        if (key == "application-identifier" && value->children.size() == 1 && value->children.front().name.empty())
+            appIdentifier = xml::trim_copy(value->children.front().text);
+    const auto dot = appIdentifier.find('.');
+    const std::string pattern = dot == std::string::npos ? std::string() : appIdentifier.substr(dot + 1);
+    const bool covers = !pattern.empty() &&
+        (pattern == bundleId || pattern == "*" ||
+         (pattern.ends_with(".*") && bundleId.starts_with(pattern.substr(0, pattern.size() - 1))));
+    if (!covers) {
+        message = std::format(
+            "mcpp.dist.apple: the provisioning profile {} is for the application identifier '{}', "
+            "which does not cover the bundle identifier '{}'. Set `options::bundle_id` to match, "
+            "or use the profile made for it.", path,
+            appIdentifier.empty() ? std::string("(none)") : appIdentifier, bundleId);
+        return false;
+    }
+    // A WILDCARD PROFILE GRANTS `<team>.*`, AND THE SIGNATURE STATES THE BUNDLE.
+    // Xcode signs with the application identifier the bundle is, which the
+    // wildcard covers, rather than with the wildcard itself; the other
+    // entitlements are the profile's as it states them.
+    xml::node signedWith = *entitlements;
+    if (pattern != bundleId) {
+        const std::string exact = appIdentifier.substr(0, dot + 1) + bundleId;
+        for (std::size_t k = 0; k + 1 < signedWith.children.size(); ++k) {
+            auto const& key = signedWith.children[k];
+            auto& value = signedWith.children[k + 1];
+            if (key.name == "key" && key.children.size() == 1 &&
+                xml::trim_copy(key.children.front().text) == "application-identifier" &&
+                value.name == "string" && value.children.size() == 1 && value.children.front().name.empty())
+                value.children.front().text = exact;
+        }
+    }
+    entitlementsPlist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+                        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                        "<plist version=\"1.0\">\n";
+    xml::write(signedWith, entitlementsPlist, 0);
+    entitlementsPlist += "</plist>\n";
+    return true;
 }
 
 // ─── Plan ──────────────────────────────────────────────────────────────────
@@ -707,6 +932,22 @@ inline plan plan_for(options opt = {}) {
                 opt.icon));
         }
     }
+    // Resolved against the manifest for the reason `options::icon` is above.
+    opt.entitlements         = resolve_path(opt.entitlements);
+    opt.info_plist           = resolve_path(opt.info_plist);
+    opt.provisioning_profile = resolve_path(opt.provisioning_profile);
+    std::string extraEntries;
+    std::vector<std::string> replacedKeys;
+    if (!opt.info_plist.empty()) {
+        if (!is_file(opt.info_plist)) {
+            return refuse(p, "info_plist not found", std::format(
+                "mcpp.dist.apple: `options::info_plist` ({}) was not found", opt.info_plist));
+        }
+        mcpp::rerun_if_changed(opt.info_plist.c_str());
+        std::string message;
+        if (!read_info_plist_fragment(opt.info_plist, extraEntries, replacedKeys, message))
+            return refuse(p, "unusable info_plist", message);
+    }
     if (!opt.entitlements.empty() && !is_file(opt.entitlements)) {
         return refuse(p, "entitlements not found", std::format(
             "mcpp.dist.apple: the entitlements file {} was not found", opt.entitlements));
@@ -744,7 +985,41 @@ inline plan plan_for(options opt = {}) {
         : opt.minimum_system_version;
     const std::string plistBytes = plist_document(executableName, bundleId, name, version,
                                                   isIos, isSim, minOsVersion,
+                                                  extraEntries, replacedKeys,
                                                   macIconName, iosIconStems);
+
+    // THE PROVISIONING PROFILE (0.11.0), checked before any step is planned.
+    std::string effectiveEntitlements = opt.entitlements;
+    if (!opt.provisioning_profile.empty()) {
+        if (!isIos || isSim) {
+            return refuse(p, "a provisioning profile off the device row", std::format(
+                "mcpp.dist.apple: `options::provisioning_profile` is embedded in an iOS device "
+                "bundle (aarch64-ios), and this build targets {}.", isIos ? "the iOS Simulator" : os));
+        }
+        if (opt.identity.empty()) {
+            return refuse(p, "a provisioning profile without an identity",
+                "mcpp.dist.apple: `options::provisioning_profile` is set and `options::identity` "
+                "is not; a device refuses an ad-hoc signature, so a device bundle is signed with "
+                "the identity the profile was made for.");
+        }
+        if (!is_file(opt.provisioning_profile)) {
+            return refuse(p, "provisioning profile not found", std::format(
+                "mcpp.dist.apple: `options::provisioning_profile` ({}) was not found",
+                opt.provisioning_profile));
+        }
+        mcpp::rerun_if_changed(opt.provisioning_profile.c_str());
+        std::string entitlementsPlist, message;
+        if (!read_profile(opt.provisioning_profile, bundleId, entitlementsPlist, message))
+            return refuse(p, "unusable provisioning profile", message);
+        if (opt.entitlements.empty()) {
+            const std::string derived = (std::filesystem::path(opt.out_dir) / (name + "-entitlements.plist")).string();
+            if (!write_if_different(derived, entitlementsPlist)) {
+                return refuse(p, "cannot write the entitlements", std::format(
+                    "mcpp.dist.apple: cannot write {}", derived));
+            }
+            effectiveEntitlements = derived;
+        }
+    }
     const std::string plistSrc = (std::filesystem::path(opt.out_dir) / (name + "-Info.plist")).string();
     if (!write_if_different(plistSrc, plistBytes)) {
         return refuse(p, "cannot write Info.plist", std::format("mcpp.dist.apple: cannot write {}", plistSrc));
@@ -943,6 +1218,18 @@ inline plan plan_for(options opt = {}) {
         for (auto const& o : icon.outputs) assembled.push_back(o);
     }
 
+    if (!opt.provisioning_profile.empty()) {
+        step profile;
+        profile.id          = "mcpp.dist.apple.provisioning-profile";
+        profile.role        = "artifact";
+        profile.description = "EMBEDDED.MOBILEPROVISION";
+        profile.argv        = { "ditto", opt.provisioning_profile, bundlePath + "/embedded.mobileprovision" };
+        profile.inputs      = { opt.provisioning_profile };
+        profile.outputs     = { bundlePath + "/embedded.mobileprovision" };
+        p.steps.push_back(profile);
+        assembled.push_back(profile.outputs.front());
+    }
+
     // CODESIGN IS SKIPPED, NOT ATTEMPTED, ON THE SIMULATOR ROW -- see the
     // header comment's signing paragraph. The warning fires at PLAN time
     // (not only on the success path `submit`'s own floor check uses)
@@ -969,17 +1256,17 @@ inline plan plan_for(options opt = {}) {
         if (!opt.identity.empty()) {
             sign.argv.push_back("--timestamp");
             if (opt.hardened_runtime) { sign.argv.push_back("--options"); sign.argv.push_back("runtime"); }
-            if (!opt.entitlements.empty()) {
+            if (!effectiveEntitlements.empty()) {
                 sign.argv.push_back("--entitlements");
-                sign.argv.push_back(opt.entitlements);
+                sign.argv.push_back(effectiveEntitlements);
             }
         }
         sign.argv.push_back(bundlePath);
         // Depends on every other step's output, because codesign covers the
         // bundle's content at signing time -- see the header comment.
         sign.inputs = assembled;
-        if (!opt.identity.empty() && !opt.entitlements.empty())
-            sign.inputs.push_back(opt.entitlements);
+        if (!opt.identity.empty() && !effectiveEntitlements.empty())
+            sign.inputs.push_back(effectiveEntitlements);
         // codesign has no flag to write a receipt to an arbitrary path, so
         // this names the one file signing a BUNDLE (rather than a flat
         // Mach-O) is documented to write as part of embedding the signature:
@@ -1157,6 +1444,12 @@ inline bool generate(options opt = {}) {
         mcpp::runner("app", "macapp-run");
     } else if (os == "ios") {
         mcpp::link_flag("-Wl,-rpath,@executable_path/Frameworks");
+        // THE DEVICE ROW'S RUNNER (0.11.0). The simulator row keeps the runner
+        // its manifest names (`simctl-run`); a device bundle is installed and
+        // launched by `devicectl-run` from `xim:apple-device-tools`, declared
+        // `when = "run"` on that row alone.
+        if (std::string(mcpp::target_env()) != "sim")
+            mcpp::runner("app", "devicectl-run");
     }
     return submit(plan_for(std::move(opt)));
 }

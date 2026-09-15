@@ -52,7 +52,8 @@ check_terminal_bundle() {
     local bundle_inputs
     bundle_inputs=$(quoted_inputs "$bundle_line")
     for other_id in mcpp.dist.apple.info-plist mcpp.dist.apple.layout \
-                    mcpp.dist.apple.icon mcpp.dist.apple.codesign; do
+                    mcpp.dist.apple.icon mcpp.dist.apple.provisioning-profile \
+                    mcpp.dist.apple.codesign; do
         other_line=$(grep -o "\"id\":\"$other_id\"[^}]*}" "$log") || true
         [ -n "$other_line" ] || continue
         found_any=1
@@ -118,6 +119,9 @@ run_row() {
         MCPP_PKG_NAME=ios-app-consumer \
         MCPP_PKG_VERSION=0.3.0 \
         MCPP_OUT_DIR="$out" \
+        IOS_APP_CONSUMER_INFO_PLIST="${IOS_APP_CONSUMER_INFO_PLIST:-}" \
+        IOS_APP_CONSUMER_PROFILE="${IOS_APP_CONSUMER_PROFILE:-}" \
+        IOS_APP_CONSUMER_NO_IDENTITY="${IOS_APP_CONSUMER_NO_IDENTITY:-}" \
         "$BIN" > "$log" 2>&1
     echo "$out"
 }
@@ -210,5 +214,118 @@ done
 grep -q '<key>NSHighResolutionCapable</key>' "$plist" || fail "the macOS plist lost NSHighResolutionCapable" "$plist"
 echo "ok: the macOS row's steps and plist are unchanged by the iOS branch"
 check_terminal_bundle "$log"
+
+# ── 0.11.0 ─────────────────────────────────────────────────────────────────
+echo "== 0.11.0: the simulator row supplies no device runner =="
+grep -q 'mcpp:runner-named=app:devicectl-run' /tmp/ios-plan-sim.log \
+    && fail "the simulator row supplies devicectl-run" /tmp/ios-plan-sim.log
+grep -q 'mcpp:runner-named=app:devicectl-run' /tmp/ios-plan-device.log \
+    || fail "the device row does not supply the runner named app, devicectl-run" /tmp/ios-plan-device.log
+echo "ok: the device row supplies devicectl-run under the name app, and the simulator row does not"
+
+echo "== 0.11.0: a project's Info.plist entries =="
+export IOS_APP_CONSUMER_INFO_PLIST="$PWD/info-plist/usage.plist"
+outdir=$(run_row siminfo ios sim /tmp/ios-plan-sim-info.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+[ -f "$plist" ] || fail "no Info.plist written with options::info_plist" /tmp/ios-plan-sim-info.log
+python3 - "$plist" <<'PY' || fail "the Info.plist does not carry the project's entries as a property list" "$plist"
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+assert d["NSCameraUsageDescription"].startswith("Scans"), d
+assert d["UIDeviceFamily"] == [1], d["UIDeviceFamily"]
+assert d["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["mcpp-fixture"], d
+assert d["CFBundleIdentifier"] == "ios-app-consumer", d
+assert d["CFBundleSupportedPlatforms"] == ["iPhoneSimulator"], d
+PY
+[ "$(grep -c '<key>UIDeviceFamily</key>' "$plist")" -eq 1 ] || fail "UIDeviceFamily is stated more than once" "$plist"
+echo "ok: the project's entries join the plist, its UIDeviceFamily replaces the default, and the derived keys are the member's"
+check_terminal_bundle /tmp/ios-plan-sim-info.log
+
+export IOS_APP_CONSUMER_INFO_PLIST="$PWD/info-plist/derived.plist"
+run_row simderived ios sim /tmp/ios-plan-sim-derived.log > /dev/null
+grep -q 'sets CFBundleIdentifier, which this member derives' /tmp/ios-plan-sim-derived.log \
+    || fail "an Info.plist entry the member derives was not refused by name" /tmp/ios-plan-sim-derived.log
+grep -q 'mcpp.dist.apple.layout' /tmp/ios-plan-sim-derived.log \
+    && fail "steps were planned although the Info.plist was refused" /tmp/ios-plan-sim-derived.log
+unset IOS_APP_CONSUMER_INFO_PLIST
+echo "ok: an entry this member derives is refused, naming the key"
+
+# A provisioning profile is a CMS-signed plist; the member reads the plist from
+# between its markers, so a plan needs only those bytes framed by binary data.
+make_profile() {  # make_profile <file> <application-identifier>
+    {
+        printf '\x30\x82\x0b\x2a\x06\x09\x2a\x86\x48\x86\xf7\x0d\x01\x07\x02\xa0'
+        cat <<P
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AppIDName</key>
+	<string>fixture</string>
+	<key>Entitlements</key>
+	<dict>
+		<key>application-identifier</key>
+		<string>$2</string>
+		<key>com.apple.developer.team-identifier</key>
+		<string>ABCDE12345</string>
+		<key>get-task-allow</key>
+		<true/>
+	</dict>
+	<key>Name</key>
+	<string>fixture profile</string>
+</dict>
+</plist>
+P
+        printf '\xa0\x82\x03\x00\x30\x82'
+    } > "$1"
+}
+profiles=$(mktemp -d)
+make_profile "$profiles/development.mobileprovision" "ABCDE12345.ios-app-consumer"
+make_profile "$profiles/other.mobileprovision" "ABCDE12345.org.example.other"
+make_profile "$profiles/wildcard.mobileprovision" "ABCDE12345.*"
+
+echo "== 0.11.0: the device row embeds a provisioning profile and signs with its entitlements =="
+export IOS_APP_CONSUMER_PROFILE="$profiles/development.mobileprovision"
+outdir=$(run_row deviceprofile ios "" /tmp/ios-plan-device-profile.log)
+log=/tmp/ios-plan-device-profile.log
+grep -q '"id":"mcpp.dist.apple.provisioning-profile"' "$log" || fail "no step embeds the profile" "$log"
+grep '"id":"mcpp.dist.apple.provisioning-profile"' "$log" | grep -q 'IosAppConsumer.app/embedded.mobileprovision' \
+    || fail "the profile is not embedded as embedded.mobileprovision" "$log"
+ents="$outdir/IosAppConsumer-entitlements.plist"
+grep '"id":"mcpp.dist.apple.codesign"' "$log" | grep -qF "\"--entitlements\",\"$ents\"" \
+    || fail "codesign does not sign with the entitlements derived from the profile" "$log"
+python3 - "$ents" <<'PY' || fail "the derived entitlements are not the profile's" "$ents"
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+assert d["application-identifier"] == "ABCDE12345.ios-app-consumer", d
+assert d["get-task-allow"] is True, d
+PY
+echo "ok: embedded.mobileprovision is planned, and codesign signs with the profile's own entitlements"
+check_terminal_bundle "$log"
+
+export IOS_APP_CONSUMER_PROFILE="$profiles/wildcard.mobileprovision"
+outdir=$(run_row devicewild ios "" /tmp/ios-plan-device-wild.log)
+python3 - "$outdir/IosAppConsumer-entitlements.plist" <<'PY' || fail "a wildcard profile does not sign with the bundle's own identifier" /tmp/ios-plan-device-wild.log "$outdir/IosAppConsumer-entitlements.plist"
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+assert d["application-identifier"] == "ABCDE12345.ios-app-consumer", d
+assert d["com.apple.developer.team-identifier"] == "ABCDE12345", d
+PY
+echo "ok: a wildcard profile covers the bundle, and the signature states ABCDE12345.ios-app-consumer"
+
+export IOS_APP_CONSUMER_PROFILE="$profiles/other.mobileprovision"
+run_row deviceother ios "" /tmp/ios-plan-device-other.log > /dev/null
+grep -q 'does not cover the bundle identifier' /tmp/ios-plan-device-other.log \
+    || fail "a profile for another identifier was not refused" /tmp/ios-plan-device-other.log
+export IOS_APP_CONSUMER_PROFILE="$profiles/development.mobileprovision"
+run_row simprofile ios sim /tmp/ios-plan-sim-profile.log > /dev/null
+grep -q 'is embedded in an iOS device bundle' /tmp/ios-plan-sim-profile.log \
+    || fail "a profile on the simulator row was not refused" /tmp/ios-plan-sim-profile.log
+export IOS_APP_CONSUMER_NO_IDENTITY=1
+run_row deviceanon ios "" /tmp/ios-plan-device-anon.log > /dev/null
+grep -q '`options::identity` is not' /tmp/ios-plan-device-anon.log \
+    || fail "a profile without an identity was not refused" /tmp/ios-plan-device-anon.log
+unset IOS_APP_CONSUMER_PROFILE IOS_APP_CONSUMER_NO_IDENTITY
+echo "ok: a profile for another identifier, on the simulator row, or without an identity is refused"
 
 echo "PASS: dist-apple's iOS row, at the plan level"

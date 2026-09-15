@@ -1219,6 +1219,7 @@ jobs:
       - name: dist-web's second pack copies nothing
         working-directory: tests/web-consumer
         run: MCPP="$MCPP" ./check-web-idempotent.sh
+
       # `kind = "app"` on `*-linux-android` links a shared object (#622 A3),
       # so this fixture's own toolchain resolution provisions `xim:android-
       # ndk` for `--target x86_64-linux-android` exactly as mcpp's own CI
@@ -1288,8 +1289,10 @@ jobs:
       # reached by an absolute path, dex into one file carrying classes from
       # both; (g) a project's own res/ links as the BASE -- two resources
       # nothing else defines reach the apk (0.9.0 linked res/ as an aapt2
-      # overlay, which refuses any resource the base does not already have).
-      - name: dist-apk's manifest template, Java roots, res/ and version tokens, (a) to (h)
+      # overlay, which refuses any resource the base does not already have);
+      # (i) Kotlin sources without the `dist-apk-kotlin` feature are refused
+      # naming it, and (j) `sign = false` with a keystore is refused (0.11.0).
+      - name: dist-apk's manifest template, Java roots, res/, version tokens and refusals, (a) to (j)
         working-directory: tests/apk-consumer
         run: MCPP="$MCPP" ./check-apk-features.sh
 
@@ -1307,6 +1310,24 @@ jobs:
         timeout-minutes: 30
         working-directory: tests/apk-consumer-shared
         run: MCPP="$MCPP" ./check-apk-closure.sh
+
+      # 0.11.0: KOTLIN, R CLASSES, LIBRARIES, ARCHIVES, A MAVEN GRAPH AND AN
+      # UNSIGNED PACKAGE. One fixture reaches every configuration through the
+      # environment variables its script sets: an application of Kotlin and
+      # Java, a library from source, a local AAR and JAR in one signed APK
+      # (every class in the dex, the three R packages, the application's value
+      # winning a resource both define, the merged manifest, the archive's
+      # native library and assets); `sign = false`; an App Bundle from the same
+      # inputs; a manifest conflict refused by name; and a Maven graph through
+      # its lock -- refused without one, resolved by
+      # `MCPP_DIST_APK_MAVEN=update`, read from the cache by an ordinary pack,
+      # refused with an empty cache, restored by `MCPP_DIST_APK_MAVEN=fetch`,
+      # and refused when the lock is stale. The two explicit modes are the only
+      # packs that reach the network.
+      - name: dist-apk compiles Kotlin beside Java and packs libraries, archives and a Maven graph
+        timeout-minutes: 30
+        working-directory: tests/apk-consumer-libraries
+        run: MCPP="$MCPP" ./check-apk-libraries.sh
 
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
@@ -1369,25 +1390,26 @@ jobs:
           # `<name> = { ... }`. Reading keys out of the table BODY matched
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
-          # MEMBERS, NOT EVERY FEATURE. A feature that another feature
-          # IMPLIES is internal -- `surface` carries the build-program half of
-          # the generated surface and every member implies it, and a consumer
-          # never writes it. Subtracting the implied ones keeps this check
+          # MEMBERS, NOT EVERY FEATURE. A member is a feature named for its
+          # family -- `rules-*`, `tools-*`, `dist-*`, the README's naming table
+          # -- and a consumer names it. `surface` is not one: it carries the
+          # build-program half of the generated surface, every member implies
+          # it, and a consumer never writes it. Keeping it out keeps this check
           # meaning "the fixture names every member a consumer can activate";
           # padding the fixture instead would make it mean less.
           #
-          # The rule is read out of the manifest, not listed here, so a seventh
-          # MEMBER is still caught: nothing implies it.
+          # BY NAME, NOT BY "NOTHING IMPLIES IT". That was the rule until 0.11.0,
+          # when `dist-apk-kotlin` and `dist-apk-maven` came to imply `dist-apk`,
+          # which a consumer still names. The rule is read out of the manifest,
+          # not listed here, so a new member is still caught.
           # A TEMP FILE, NOT `<(...)`. This step also runs on windows-2022
           # through Git Bash, where process substitution is emulated and not
           # dependable -- and a check that behaves differently on one of the
           # three hosts is the exact class of difference this job exists to
           # catch, so it must not introduce one.
-          grep -oE '^implies[[:space:]]*=.*' mcpp.toml \
-            | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u > /tmp/implied.txt
           grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/allfeats.txt
-          feats=$(comm -23 /tmp/allfeats.txt /tmp/implied.txt)
+            | sed 's/^\[features\.//; s/\]$//' | grep -E '^(rules|tools|dist)-' | sort > /tmp/members.txt
+          feats=$(cat /tmp/members.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
@@ -1710,23 +1732,20 @@ jobs:
           # `<name> = { ... }`. Reading keys out of the table BODY matched
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
-          # MEMBERS, NOT EVERY FEATURE. A feature that another feature
-          # IMPLIES is internal -- `surface` carries the build-program half of
-          # the generated surface and every member implies it, and a consumer
-          # never writes it. Subtracting the implied ones keeps this check
-          # meaning "the fixture names every member a consumer can activate";
-          # padding the fixture instead would make it mean less. The rule is
-          # read out of the manifest, so a seventh MEMBER is still caught.
+          # MEMBERS, NOT EVERY FEATURE: a feature named for its family
+          # (`rules-*`, `tools-*`, `dist-*`), which a consumer names; `surface`,
+          # which every member implies and no consumer writes, is not one. By
+          # name and not by "nothing implies it" since 0.11.0, when
+          # `dist-apk-kotlin` and `dist-apk-maven` came to imply `dist-apk`. The
+          # rule is read out of the manifest, so a new member is still caught.
           #
           # A temp file, not `<(...)`: this step also runs on windows-2022
           # through Git Bash, where process substitution is emulated and not
           # dependable -- and a check that behaves differently on one of the
           # three hosts is the class of difference this job exists to catch.
-          grep -oE '^implies[[:space:]]*=.*' mcpp.toml \
-            | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u > /tmp/implied.txt
           grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/allfeats.txt
-          feats=$(comm -23 /tmp/allfeats.txt /tmp/implied.txt)
+            | sed 's/^\[features\.//; s/\]$//' | grep -E '^(rules|tools|dist)-' | sort > /tmp/members.txt
+          feats=$(cat /tmp/members.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
@@ -1950,6 +1969,37 @@ jobs:
           grep -q 'closure = not-walked' pack.log || echo "note: the stage manifest's closure line was not echoed by pack"
           echo "ok: one bundle, a valid plist, it launches, and the resource is where NSBundle looks"
 
+      # 0.11.0 (`options::info_plist`): a project's Info.plist entries join the
+      # generated plist of the real bundle, a key the member only defaults
+      # (`NSHighResolutionCapable`) takes the project's value, Apple's parser
+      # accepts the result, and the bundle still launches. The refusal of a key
+      # the member derives is asserted at the plan level, in the Linux job.
+      - name: dist-apple carries a project's Info.plist entries, and the bundle launches
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        working-directory: tests/app-consumer
+        run: |
+          set -e
+          export APP_CONSUMER_INFO_PLIST="$PWD/info-plist/usage.plist"
+          "$MCPP" pack --format app | tee pack-info.log
+          app=$(find target -name '*.app' -type d | head -1)
+          test -n "$app" || { cat pack-info.log; echo "FAIL: no .app bundle"; exit 1; }
+          plist="$app/Contents/Info.plist"
+          plutil -lint "$plist"
+          pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$plist"; }
+          [ "$(pb NSCameraUsageDescription)" = "Scans the codes a user points the camera at." ] \
+            || { echo "FAIL: the usage description did not reach the bundle"; cat "$plist"; exit 1; }
+          [ "$(pb CFBundleURLTypes:0:CFBundleURLSchemes:0)" = "mcpp-fixture" ] \
+            || { echo "FAIL: the URL type did not reach the bundle"; cat "$plist"; exit 1; }
+          [ "$(pb NSHighResolutionCapable)" = "false" ] \
+            || { echo "FAIL: the project's NSHighResolutionCapable did not replace the default"; cat "$plist"; exit 1; }
+          [ "$(grep -c '<key>NSHighResolutionCapable</key>' "$plist")" -eq 1 ] \
+            || { echo "FAIL: NSHighResolutionCapable is stated twice"; cat "$plist"; exit 1; }
+          [ "$(pb CFBundleExecutable)" = "app-consumer" ] \
+            || { echo "FAIL: CFBundleExecutable is no longer the member's"; cat "$plist"; exit 1; }
+          "$app/Contents/MacOS/app-consumer" | grep -q '^app-consumer ok' \
+            || { echo "FAIL: the bundle does not launch with the project's entries"; exit 1; }
+          echo "ok: the project's entries are in the bundle's Info.plist, plutil accepts it, and the bundle launches"
+
       # THE CLOSURE AS A FRAMEWORK, ON THE BUNDLE (mcpp#634, B1 to B3). The
       # plan-level half runs on Linux. This step, the Metal step and the iOS
       # step measure independent things, so each runs when an earlier step of
@@ -2069,6 +2119,54 @@ jobs:
           tr -d '\r' <<<"$out" | grep -Eq '^[[:space:]]*1-2-3[[:space:]]*$' \
             || { echo "FAIL: the program's output line '1-2-3' is absent"; printf '%s\n' "$out" | tail -8 | od -c; exit 1; }
           echo "ok: a flat iOS Simulator bundle, MinimumOSVersion 17.0, and the simulator ran it and returned its status 7"
+
+      # 0.11.0 (`options::info_plist`) on the iOS row: the project's entries
+      # join the simulator bundle's Info.plist, its `UIDeviceFamily` replaces
+      # the member's default, and the simulator installs and runs the bundle.
+      - name: dist-apple's iOS row carries a project's Info.plist entries, and the simulator runs the bundle
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        working-directory: tests/ios-app-consumer
+        run: |
+          set -uo pipefail
+          if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+            echo "SKIP: no iphonesimulator SDK on this runner"; exit 0
+          fi
+          set -e
+          export IOS_APP_CONSUMER_INFO_PLIST="$PWD/info-plist/usage.plist"
+          "$MCPP" pack --target aarch64-ios-sim --format app | tee pack-info.log
+          app=$(find target -name '*.app' -type d | head -1)
+          test -n "$app" || { cat pack-info.log; echo "FAIL: no .app bundle"; exit 1; }
+          plist="$app/Info.plist"
+          plutil -lint "$plist"
+          pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$plist"; }
+          [ "$(pb NSCameraUsageDescription)" = "Scans the codes a user points the camera at." ] \
+            || { echo "FAIL: the usage description did not reach the bundle"; cat "$plist"; exit 1; }
+          [ "$(pb CFBundleURLTypes:0:CFBundleURLSchemes:0)" = "mcpp-fixture" ] \
+            || { echo "FAIL: the URL type did not reach the bundle"; cat "$plist"; exit 1; }
+          [ "$(pb UIDeviceFamily:0)" = "1" ] && ! pb UIDeviceFamily:1 >/dev/null 2>&1 \
+            || { echo "FAIL: UIDeviceFamily is not the project's (1)"; cat "$plist"; exit 1; }
+          [ "$(pb CFBundleSupportedPlatforms:0)" = "iPhoneSimulator" ] \
+            || { echo "FAIL: CFBundleSupportedPlatforms is no longer the member's"; cat "$plist"; exit 1; }
+          out=$("$MCPP" run --target aarch64-ios-sim --format app 2>&1) && rc=0 || rc=$?
+          printf '%s\n' "$out" | tail -20
+          [ "$rc" -eq 7 ] \
+            || { echo "FAIL: mcpp run exited $rc with the project's entries, and the program exits 7"; exit 1; }
+          echo "ok: the simulator bundle carries the project's entries, and the simulator ran it and returned 7"
+
+      # NO dist-apk STEP ON THIS HOST, AND THE REASON IS THE ENGINE. The NDK,
+      # the build tools, the platform, the JDK, the Kotlin compiler and coursier
+      # all publish a macOS table, and `tests/apk-consumer` was packed here once
+      # (0.11.0's first run): `mcpp build --target x86_64-linux-android` failed
+      # at the application's own link with
+      #
+      #   ld64.lld: error: unknown argument '-soname'
+      #
+      # before any dist-apk step ran. On a macOS host mcpp 2026.9.14.2 composes
+      # the link line in its macOS branch, which states the target triple only
+      # for an Apple row, so `-fuse-ld=lld` picks the Mach-O flavour
+      # (mcpp-community/mcpp#647, E3). The steps return when an engine links
+      # that row; the Windows NDK has no libc++ module surface, so that host
+      # has no Android row at all.
 
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer

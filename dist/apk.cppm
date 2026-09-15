@@ -63,6 +63,31 @@
 // `-storepass:env <NAME>`, tokens each tool resolves against its own
 // environment at run time, so this member never reads the secret.
 //
+// KOTLIN, R CLASSES AND LIBRARIES (0.11.0). Level 1 compiles Kotlin beside
+// Java (`options::kotlin_sources`, with `kotlinc` from `xim:kotlin`, which the
+// `dist-apk-kotlin` feature declares), and links the R classes a project's
+// code reads its resources through (`aapt2 link --java`). It takes Android
+// libraries the way a Gradle project does: from source (`options::libraries`),
+// as local archives (`options::aars`, `options::jars`) and as Maven coordinates
+// (`options::maven`). A library's resources link under its own package, its
+// manifest is merged into the application's (`merge_manifests` states the
+// subset and its rules), its classes are dexed with the application's, and an
+// AAR's native libraries and assets join the package.
+//
+// MAVEN, AND A BUILD THAT DOES NOT REACH THE NETWORK. A build must not reach
+// the network (`dist/appimage.cppm`), so a Maven graph is resolved into a lock
+// file only when the developer asks -- `MCPP_DIST_APK_MAVEN=update` -- and
+// fetched into coursier's cache only when asked -- `MCPP_DIST_APK_MAVEN=fetch`.
+// An ordinary build reads the locked artifacts from the cache, checks each
+// digest against the lock, and refuses naming the command to run when one is
+// missing or the lock no longer matches the project's coordinates.
+// `xim:coursier`, which the `dist-apk-maven` feature declares, resolves.
+//
+// UNSIGNED, WHEN ASKED (0.11.0). `options::sign = false` writes the aligned
+// package without a signature: the form a release pipeline that signs
+// elsewhere wants, and the form a Gradle release build produces without a
+// signing configuration.
+//
 // WHAT THIS MEMBER DOES NOT DO. It does not run `mcpp run --format apk` --
 // that is `adb-run`, a session `xim:android-platform-tools` registers, and
 // this member's only obligation to it is `assets/mcpp-run.json`, so the
@@ -73,6 +98,9 @@
 
 module;
 #include <cstdio>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 
 export module mcpp.dist.apk;
 
@@ -87,6 +115,24 @@ import mcpp.plugins;
 export namespace mcpp::dist::apk {
 
 // ─── Options ───────────────────────────────────────────────────────────────
+
+// An Android library built from source (0.11.0): what a Gradle library module
+// contributes to an application. Paths are manifest-relative or absolute.
+struct library {
+    // The package its R class is generated under. Required when `resources`
+    // is set; a library whose code reads no resources may leave it empty.
+    std::string package;
+    // A `res/`-shaped directory, linked under `package`.
+    std::string resources;
+    // An `AndroidManifest.xml` whose declarations are merged into the
+    // application's.
+    std::string manifest;
+    // A directory whose files join the package's `assets/`; a file the build
+    // program deploys under the same name wins.
+    std::string assets;
+    std::vector<std::string> java_sources;
+    std::vector<std::string> kotlin_sources;
+};
 
 struct options {
     // The `app` target this member packages. Empty means the package name.
@@ -163,6 +209,45 @@ struct options {
     // the tool does, at run time, in its own process.
     std::string keystore_password_env;
 
+    // `false` writes the aligned package unsigned (0.11.0): no `apksigner` for
+    // an APK and no `jarsigner` for an App Bundle, for a pipeline that signs
+    // elsewhere. With `keystore` it is refused, because the two say opposite
+    // things.
+    bool sign = true;
+
+    // LEVEL 1, KOTLIN (0.11.0). One or more directories of `.kt` sources,
+    // compiled by `kotlinc` with every Java root as its reference sources,
+    // before `javac` compiles the Java against the Kotlin classes; the Kotlin
+    // standard library is dexed into the package. The compiler is
+    // `xim:kotlin`, which the `dist-apk-kotlin` feature declares -- a project
+    // names that feature instead of `dist-apk`. Either this or `java_sources`
+    // makes a level-1 package, and both may be set.
+    std::vector<std::string> kotlin_sources;
+
+    // ANDROID LIBRARIES FROM SOURCE (0.11.0), highest priority first: a library
+    // listed earlier wins a resource both define, as Gradle's dependency order
+    // does, and the application's own `resources` win over every library.
+    std::vector<library> libraries;
+
+    // LOCAL ARCHIVES (0.11.0). A JAR joins the classpath and the dex. An AAR
+    // contributes its classes, its resources (under the package its manifest
+    // names), its manifest, its native libraries and its assets. Archives
+    // rank after `libraries`, in the order listed.
+    std::vector<std::string> jars;
+    std::vector<std::string> aars;
+
+    // MAVEN (0.11.0). `group:artifact:version` coordinates with fixed versions,
+    // resolved with their transitive dependencies into `maven_lock`; see the
+    // header's Maven paragraph for when the network is used. Empty
+    // `maven_repositories` means Google's Maven repository, then Maven
+    // Central; an empty `maven_lock` means `maven.lock` beside the manifest;
+    // an empty `maven_cache` means `COURSIER_CACHE`, then coursier's own
+    // default for this host. Resolved AARs and JARs rank after `aars`.
+    std::vector<std::string> maven;
+    std::vector<std::string> maven_repositories;
+    std::string maven_lock;
+    std::string maven_cache;
+
     // Where the produced file lands. Empty means `<out_dir>/<target>.apk`, or
     // `<out_dir>/<target>.aab` for `--format aab`.
     std::string output;
@@ -172,12 +257,16 @@ struct options {
 // ─── The plan ────────────────────────────────────────────────────────────
 
 struct step {
-    const char*               id;
+    // Owned strings: a library's resource step is named after its position.
+    std::string               id;
     const char*               role;
-    const char*               description;
+    std::string               description;
     std::vector<std::string>  argv;
     std::vector<std::string>  inputs;
     std::string               output;
+    // Further files the same command writes that a later step reads -- the R
+    // classes `aapt2 link --java` generates beside the linked archive.
+    std::vector<std::string>  more_outputs;
 };
 
 struct plan {
@@ -382,10 +471,14 @@ inline std::vector<std::string> tokens_in(const std::string& text) {
 // `application_id` and `activity` are required unconditionally; `lib_name`
 // joins them at level 0, where the manifest's own `<meta-data>` element is
 // the only place the loaded library's name is recorded.
-inline std::vector<std::string> required_manifest_tokens(bool has_code) {
+inline std::vector<std::string> required_manifest_tokens(bool has_code, bool native_activity) {
+    static_cast<void>(has_code);
     std::vector<std::string> v = {"application_id", "activity"};
-    if (!has_code) v.push_back("lib_name");
+    if (native_activity) v.push_back("lib_name");
     return v;
+}
+inline std::vector<std::string> required_manifest_tokens(bool has_code) {
+    return required_manifest_tokens(has_code, !has_code);
 }
 
 // THE BUILT-IN DEFAULT, EXPRESSED WITH THE TOKENS. This is `manifest_xml`'s
@@ -406,7 +499,10 @@ inline std::vector<std::string> required_manifest_tokens(bool has_code) {
 // carried none, and a template with no author to read a comment gains
 // nothing from one. The design record's "mark the required tokens" is done
 // here instead, in the `REQUIRED` labels on the C++ lines that build them.
-inline std::string default_manifest_template(bool has_code) {
+// A NATIVE ACTIVITY MAY STILL CARRY CODE (0.11.0): a level-0 application whose
+// libraries or archives bring classes keeps `android.app.NativeActivity` and its
+// `lib_name` element, with `android:hasCode="true"` so that the dex is loaded.
+inline std::string default_manifest_template(bool has_code, bool native_activity) {
     std::string a =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
@@ -417,7 +513,7 @@ inline std::string default_manifest_template(bool has_code) {
         std::string(has_code ? "true" : "false") + "\">\n"
         "        <activity android:name=\"{{activity}}\" "          // REQUIRED
         "android:exported=\"true\">\n";
-    if (!has_code) {
+    if (native_activity) {
         a += "            <meta-data android:name=\"android.app.lib_name\" "
              "android:value=\"{{lib_name}}\"/>\n";                  // REQUIRED at level 0
     }
@@ -429,6 +525,9 @@ inline std::string default_manifest_template(bool has_code) {
          "    </application>\n"
          "</manifest>\n";
     return a;
+}
+inline std::string default_manifest_template(bool has_code) {
+    return default_manifest_template(has_code, !has_code);
 }
 
 // Checks a manifest template and substitutes it, or refuses (returning
@@ -444,7 +543,7 @@ inline std::string default_manifest_template(bool has_code) {
 // worse message, and the refusal belongs where the name is known -- the same
 // rule read against two different facts, not an inconsistency between the
 // two members.
-inline bool render_manifest(const std::string& templateText, bool has_code,
+inline bool render_manifest(const std::string& templateText, bool has_code, bool native_activity,
                             const std::string& appId, const std::string& label,
                             const std::string& activityName, const std::string& libName,
                             const std::string& minSdk, const std::string& targetSdk,
@@ -461,7 +560,7 @@ inline bool render_manifest(const std::string& templateText, bool has_code,
             return false;
         }
     }
-    for (auto const& tok : required_manifest_tokens(has_code)) {
+    for (auto const& tok : required_manifest_tokens(has_code, native_activity)) {
         if (templateText.find("{{" + tok + "}}") == std::string::npos) {
             message = "mcpp.dist.apk: the manifest template does not use '{{" + tok
                     + "}}', and assets/mcpp-run.json, which adb-run starts the "
@@ -481,6 +580,16 @@ inline bool render_manifest(const std::string& templateText, bool has_code,
     out = replace_all_copy(std::move(out), "{{version_name}}", versionName);
     out = replace_all_copy(std::move(out), "{{version_code}}", versionCode);
     return true;
+}
+inline bool render_manifest(const std::string& templateText, bool has_code,
+                            const std::string& appId, const std::string& label,
+                            const std::string& activityName, const std::string& libName,
+                            const std::string& minSdk, const std::string& targetSdk,
+                            const std::string& versionName, const std::string& versionCode,
+                            std::string& out, std::string& reason,
+                            std::string& message) {
+    return render_manifest(templateText, has_code, !has_code, appId, label, activityName, libName,
+                           minSdk, targetSdk, versionName, versionCode, out, reason, message);
 }
 
 inline std::string run_json(const std::string& app_id, const std::string& activity_name) {
@@ -515,6 +624,662 @@ inline void collect_tree(const fs::path& src, const fs::path& dst,
         fs::copy_file(e.path(), to, fs::copy_options::overwrite_existing, ec);
         out.push_back(to.string());
     }
+}
+
+namespace xml = mcpp::plugins::xml;
+
+// ─── Paths a project names ─────────────────────────────────────────────────
+
+// A project names its directories relative to its manifest; the actions this
+// member declares run later, from the build directory, where a relative path
+// names nothing (the defect `dist/apple.cppm` measured with `ditto ios-icons`).
+// Every path option is therefore resolved here, once, against
+// `mcpp::manifest_dir()`; an absolute path is left alone.
+inline std::string resolve_path(const std::string& p) {
+    if (p.empty()) return p;
+    const fs::path path(p);
+    if (path.is_absolute()) return p;
+    return (fs::path(mcpp::manifest_dir()) / path).lexically_normal().string();
+}
+
+inline void resolve_paths(std::vector<std::string>& v) {
+    for (auto& p : v) p = resolve_path(p);
+}
+
+// Every regular file under `root` whose extension is `ext`, sorted.
+inline std::vector<std::string> files_with_extension(const std::string& root, std::string_view ext) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (auto& e : fs::recursive_directory_iterator(root, ec)) {
+        if (ec) break;
+        if (e.is_regular_file(ec) && e.path().extension() == ext)
+            out.push_back(e.path().string());
+    }
+    std::ranges::sort(out);
+    return out;
+}
+
+inline bool dir_has_files(const std::string& root) {
+    std::error_code ec;
+    for (auto& e : fs::recursive_directory_iterator(root, ec)) {
+        if (ec) break;
+        if (e.is_regular_file(ec)) return true;
+    }
+    return false;
+}
+
+inline std::string read_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+inline std::string join(const std::vector<std::string>& v, std::string_view sep) {
+    std::string out;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (i) out += sep;
+        out += v[i];
+    }
+    return out;
+}
+
+// ─── SHA-256 ───────────────────────────────────────────────────────────────
+
+// FIPS 180-4, over bytes held in memory. Here for one purpose: a Maven lock
+// records each artifact's digest, and a build that reads a cached artifact
+// checks it against the lock before the file reaches a package. The inputs are
+// libraries of a few megabytes, so reading a file whole is the simple choice.
+inline std::string sha256_hex(std::string_view data) {
+    static constexpr std::uint32_t k[64] = {
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+    std::uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                          0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    std::string msg(data);
+    const std::uint64_t bits = static_cast<std::uint64_t>(data.size()) * 8u;
+    msg.push_back(static_cast<char>(0x80));
+    while (msg.size() % 64 != 56) msg.push_back('\0');
+    for (int i = 7; i >= 0; --i) msg.push_back(static_cast<char>((bits >> (i * 8)) & 0xffu));
+    const auto rotr = [](std::uint32_t x, int n) -> std::uint32_t { return (x >> n) | (x << (32 - n)); };
+    for (std::size_t off = 0; off < msg.size(); off += 64) {
+        std::uint32_t w[64];
+        for (int i = 0; i < 16; ++i) {
+            const auto byte = [&](int j) {
+                return static_cast<std::uint32_t>(static_cast<unsigned char>(msg[off + static_cast<std::size_t>(i * 4 + j)]));
+            };
+            w[i] = (byte(0) << 24) | (byte(1) << 16) | (byte(2) << 8) | byte(3);
+        }
+        for (int i = 16; i < 64; ++i) {
+            const std::uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+            const std::uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+        std::uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+        for (int i = 0; i < 64; ++i) {
+            const std::uint32_t t1 = hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + k[i] + w[i];
+            const std::uint32_t t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+            hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+    }
+    std::string hex;
+    hex.reserve(64);
+    for (int i = 0; i < 8; ++i) hex += std::format("{:08x}", h[i]);
+    return hex;
+}
+
+inline std::string sha256_file(const std::string& path) {
+    return is_file(path) ? sha256_hex(read_file(path)) : std::string();
+}
+
+// ─── Running a tool at plan time ─────────────────────────────────────────
+
+// POSIX single quotes: the only character that needs care inside them is the
+// quote itself. This member runs on the hosts that build Android rows, which
+// are Linux and macOS (xim:android-ndk publishes no Windows table).
+inline std::string shell_quote(const std::string& s) {
+    std::string out = "'";
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\'') out += "'\\''";
+        else out += s[i];
+    }
+    return out + "'";
+}
+
+// Runs `argv` through `/bin/sh`, returning its exit status and its combined
+// output -- the same `popen` the rules members use to probe a tool at plan
+// time. Only the explicit Maven modes and AAR extraction call it; an ordinary
+// build of an unchanged project runs nothing here.
+inline int run_capture(const std::vector<std::string>& argv, std::string& output) {
+    std::string cmd;
+    for (std::size_t i = 0; i < argv.size(); ++i) {
+        if (i) cmd += ' ';
+        cmd += shell_quote(argv[i]);
+    }
+    cmd += " 2>&1";
+    output.clear();
+#if defined(_WIN32)
+    FILE* p = ::_popen(cmd.c_str(), "r");
+#else
+    FILE* p = ::popen(cmd.c_str(), "r");
+#endif
+    if (!p) return -1;
+    char buf[4096];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, p)) > 0) output.append(buf, n);
+#if defined(_WIN32)
+    // Compiled on every host (`tests/all-rules-compile`); an Android row is
+    // never packed on Windows, so this branch only has to be well-formed.
+    return ::_pclose(p);
+#else
+    const int status = ::pclose(p);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+
+// ─── Merging library manifests into the application's ────────────────────
+
+// What `mcpp.dist.apk` merges, and the rules it applies. This is a SUBSET of
+// the Android Gradle plugin's manifest merger, stated rather than implied:
+//
+//   - `<uses-permission>`, `<uses-permission-sdk-23>`, `<permission>`,
+//     `<uses-feature>` and the other children of `<manifest>` are added when
+//     the application has no element of the same kind and `android:name`;
+//     `<queries>` children are unioned;
+//   - the children of a library's `<application>` -- activities, aliases,
+//     services, receivers, providers, `<meta-data>`, `<uses-library>` -- are
+//     added the same way; a library's `<application>` attribute the
+//     application does not state is added;
+//   - an identical element is not added twice; a DIFFERENT element under the
+//     same name is refused, naming it, unless the application's own element
+//     says `tools:node="replace"` (the application's wins) or
+//     `tools:node="remove"` (neither is kept); a differing `<application>`
+//     attribute is refused unless the application lists it in `tools:replace`;
+//   - a library's `<uses-sdk android:minSdkVersion>` above the application's
+//     floor is refused, as Gradle refuses it;
+//   - `${applicationId}` is substituted everywhere, and any other `${...}`
+//     placeholder is refused, naming it -- no placeholder source exists here;
+//   - every `tools:` attribute and the `xmlns:tools` declaration are removed
+//     from the result.
+//
+// Anything a project needs beyond that is stated in its own manifest template,
+// which this member never edits except to add what the libraries declare.
+struct manifest_source {
+    std::string label;   // what a refusal names: a library, an AAR, a coordinate
+    std::string text;
+};
+
+inline std::string manifest_key(const xml::node& n) {
+    if (n.name == "uses-feature") {
+        const std::string nm = xml::attr_of(n, "android:name");
+        return nm.empty() ? "uses-feature@glEsVersion=" + xml::attr_of(n, "android:glEsVersion")
+                          : "uses-feature:" + nm;
+    }
+    return n.name + ":" + xml::attr_of(n, "android:name");
+}
+
+inline void strip_tools(xml::node& n) {
+    std::erase_if(n.attrs, [](const std::pair<std::string, std::string>& a) {
+        return a.first.starts_with("tools:") || a.first == "xmlns:tools";
+    });
+    for (auto& c : n.children) strip_tools(c);
+}
+
+inline std::string canonical_xml(xml::node n) {
+    strip_tools(n);
+    std::string out;
+    xml::write(n, out, 0);
+    return out;
+}
+
+inline bool substitute_placeholders(xml::node& n, const std::string& appId,
+                                    const std::string& label, std::string& message) {
+    for (auto& a : n.attrs) {
+        a.second = replace_all_copy(a.second, "${applicationId}", appId);
+        const auto p = a.second.find("${");
+        if (p != std::string::npos) {
+            const auto e = a.second.find('}', p);
+            message = std::format(
+                "mcpp.dist.apk: {} uses the manifest placeholder '{}' in {}=\"{}\"; "
+                "only ${{applicationId}} is substituted here.", label,
+                a.second.substr(p, e == std::string::npos ? std::string::npos : e - p + 1),
+                a.first, a.second);
+            return false;
+        }
+    }
+    for (auto& c : n.children)
+        if (!substitute_placeholders(c, appId, label, message)) return false;
+    return true;
+}
+
+inline xml::node* find_child(xml::node& parent, std::string_view name) {
+    for (auto& c : parent.children) if (c.name == name) return &c;
+    return nullptr;
+}
+
+// Removes every element the application marked `tools:node="remove"`: a marker
+// that says "this is not wanted", not an element to ship.
+inline void drop_removed(xml::node& n) {
+    std::erase_if(n.children, [](const xml::node& c) { return xml::attr_of(c, "tools:node") == "remove"; });
+    for (auto& c : n.children) drop_removed(c);
+}
+
+inline bool merge_manifests(std::string& appText, const std::vector<manifest_source>& libs,
+                            const std::string& appId, const std::string& minSdk,
+                            std::string& reason, std::string& message) {
+    xml::node app;
+    std::string err;
+    if (!xml::parse(appText, app, err) || app.name != "manifest") {
+        reason = "the application manifest cannot be read";
+        message = "mcpp.dist.apk: the application's manifest cannot be read for merging: "
+                + (err.empty() ? std::string("its root element is not <manifest>") : err);
+        return false;
+    }
+    if (!substitute_placeholders(app, appId, "the application's manifest", message)) {
+        reason = "unknown manifest placeholder";
+        return false;
+    }
+    xml::node* application = find_child(app, "application");
+    if (!application) {
+        app.children.push_back(xml::node{"application", {}, {}, {}});
+        application = &app.children.back();
+    }
+    const auto parse_number = [](const std::string& s) {
+        long v = 0;
+        for (std::size_t i = 0; i < s.size(); ++i) {
+            if (s[i] < '0' || s[i] > '9') return -1L;
+            v = v * 10 + (s[i] - '0');
+        }
+        return s.empty() ? -1L : v;
+    };
+
+    for (auto const& lib : libs) {
+        xml::node m;
+        if (!xml::parse(lib.text, m, err) || m.name != "manifest") {
+            reason = "a library manifest cannot be read";
+            message = std::format("mcpp.dist.apk: the manifest of {} cannot be read: {}", lib.label,
+                                  err.empty() ? std::string("its root element is not <manifest>") : err);
+            return false;
+        }
+        if (!substitute_placeholders(m, appId, lib.label, message)) {
+            reason = "unknown manifest placeholder";
+            return false;
+        }
+        for (auto& c : m.children) {
+            if (c.name.empty()) continue;
+            if (c.name == "uses-sdk") {
+                const long want = parse_number(xml::attr_of(c, "android:minSdkVersion"));
+                const long have = parse_number(minSdk);
+                if (want > 0 && have > 0 && want > have) {
+                    reason = "a library needs a higher minSdkVersion";
+                    message = std::format(
+                        "mcpp.dist.apk: {} declares android:minSdkVersion {}, above this "
+                        "application's floor {}. Raise the row's min_api_level, or do not "
+                        "depend on it.", lib.label, want, have);
+                    return false;
+                }
+                continue;
+            }
+            if (c.name == "application") {
+                const std::string replaced = xml::attr_of(*application, "tools:replace");
+                for (auto const& a : c.attrs) {
+                    if (a.first.starts_with("tools:")) continue;
+                    const std::string mine = xml::attr_of(*application, a.first);
+                    if (mine.empty()) { xml::set_attr(*application, a.first, a.second); continue; }
+                    if (mine == a.second) continue;
+                    bool listed = false;
+                    std::size_t start = 0;
+                    while (start <= replaced.size()) {
+                        auto comma = replaced.find(',', start);
+                        if (comma == std::string::npos) comma = replaced.size();
+                        if (xml::trim_copy(replaced.substr(start, comma - start)) == a.first) { listed = true; break; }
+                        start = comma + 1;
+                    }
+                    if (!listed) {
+                        reason = "conflicting <application> attribute";
+                        message = std::format(
+                            "mcpp.dist.apk: <application {}> is \"{}\" in the application and "
+                            "\"{}\" in {}. Add tools:replace=\"{}\" to the application's "
+                            "<application> to keep its value.", a.first, mine, a.second, lib.label, a.first);
+                        return false;
+                    }
+                }
+                for (auto& cc : c.children) {
+                    if (cc.name.empty()) continue;
+                    const std::string key = manifest_key(cc);
+                    xml::node* mine = nullptr;
+                    for (auto& x : application->children)
+                        if (!x.name.empty() && manifest_key(x) == key) { mine = &x; break; }
+                    if (!mine) { application->children.push_back(cc); continue; }
+                    const std::string node = xml::attr_of(*mine, "tools:node");
+                    if (node == "remove" || node == "replace") continue;
+                    if (canonical_xml(*mine) == canonical_xml(cc)) continue;
+                    reason = "conflicting manifest element";
+                    message = std::format(
+                        "mcpp.dist.apk: <{} android:name=\"{}\"> differs between the application "
+                        "and {}. State tools:node=\"replace\" on the application's element to keep "
+                        "it, or tools:node=\"remove\" to drop both.", cc.name,
+                        xml::attr_of(cc, "android:name"), lib.label);
+                    return false;
+                }
+                continue;
+            }
+            if (c.name == "queries") {
+                xml::node* q = find_child(app, "queries");
+                if (!q) {
+                    auto pos = std::ranges::find_if(app.children, [](const xml::node& x) { return x.name == "application"; });
+                    q = &*app.children.insert(pos, xml::node{"queries", {}, {}, {}});
+                    application = find_child(app, "application");
+                }
+                for (auto& qc : c.children) {
+                    if (qc.name.empty()) continue;
+                    const std::string canon = canonical_xml(qc);
+                    const bool present = std::ranges::any_of(q->children, [&](const xml::node& x) {
+                        return canonical_xml(x) == canon;
+                    });
+                    if (!present) q->children.push_back(qc);
+                }
+                continue;
+            }
+            const std::string key = manifest_key(c);
+            xml::node* mine = nullptr;
+            for (auto& x : app.children)
+                if (!x.name.empty() && manifest_key(x) == key) { mine = &x; break; }
+            if (mine) {
+                const std::string node = xml::attr_of(*mine, "tools:node");
+                if (node == "remove" || node == "replace") continue;
+                if (canonical_xml(*mine) == canonical_xml(c)) continue;
+                reason = "conflicting manifest element";
+                message = std::format(
+                    "mcpp.dist.apk: <{} android:name=\"{}\"> differs between the application and "
+                    "{}. State tools:node=\"replace\" on the application's element to keep it, or "
+                    "tools:node=\"remove\" to drop both.", c.name, xml::attr_of(c, "android:name"), lib.label);
+                return false;
+            }
+            auto pos = std::ranges::find_if(app.children, [](const xml::node& x) { return x.name == "application"; });
+            app.children.insert(pos, c);
+            application = find_child(app, "application");
+        }
+    }
+
+    drop_removed(app);
+    strip_tools(app);
+    appText = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+    xml::write(app, appText, 0);
+    return true;
+}
+
+// ─── JSON, as far as coursier's report needs it ───────────────────────────
+
+struct json_value {
+    enum class kind { null, boolean, number, string, array, object };
+    kind                                             type = kind::null;
+    std::string                                      text;    // string, number or boolean spelling
+    std::vector<json_value>                          items;
+    std::vector<std::pair<std::string, json_value>>  members;
+
+    const json_value* get(std::string_view key) const {
+        for (auto const& m : members) if (m.first == key) return &m.second;
+        return nullptr;
+    }
+};
+
+struct json_reader {
+    std::string_view s;
+    std::size_t      i = 0;
+
+    void skip_space() {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
+    }
+    bool string(std::string& out) {
+        if (i >= s.size() || s[i] != '"') return false;
+        ++i;
+        while (i < s.size() && s[i] != '"') {
+            if (s[i] != '\\') { out += s[i++]; continue; }
+            if (++i >= s.size()) return false;
+            const char e = s[i++];
+            switch (e) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case 'u': {
+                    if (i + 4 > s.size()) return false;
+                    unsigned cp = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        const char h = s[i++];
+                        cp <<= 4;
+                        if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
+                        else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
+                        else return false;
+                    }
+                    if (cp < 0x80) out += static_cast<char>(cp);
+                    else if (cp < 0x800) { out += static_cast<char>(0xc0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
+                    else { out += static_cast<char>(0xe0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
+                    break;
+                }
+                default: out += e;
+            }
+        }
+        if (i >= s.size()) return false;
+        ++i;
+        return true;
+    }
+    bool value(json_value& out) {
+        skip_space();
+        if (i >= s.size()) return false;
+        const char c = s[i];
+        if (c == '"') { out.type = json_value::kind::string; return string(out.text); }
+        if (c == '{') {
+            out.type = json_value::kind::object;
+            ++i;
+            skip_space();
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            for (;;) {
+                skip_space();
+                std::string key;
+                if (!string(key)) return false;
+                skip_space();
+                if (i >= s.size() || s[i] != ':') return false;
+                ++i;
+                json_value v;
+                if (!value(v)) return false;
+                out.members.emplace_back(std::move(key), std::move(v));
+                skip_space();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; return true; }
+                return false;
+            }
+        }
+        if (c == '[') {
+            out.type = json_value::kind::array;
+            ++i;
+            skip_space();
+            if (i < s.size() && s[i] == ']') { ++i; return true; }
+            for (;;) {
+                json_value v;
+                if (!value(v)) return false;
+                out.items.push_back(std::move(v));
+                skip_space();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == ']') { ++i; return true; }
+                return false;
+            }
+        }
+        const std::size_t b = i;
+        while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' &&
+               s[i] != ' ' && s[i] != '\n' && s[i] != '\r' && s[i] != '\t') ++i;
+        out.text = std::string(s.substr(b, i - b));
+        if (out.text == "null") out.type = json_value::kind::null;
+        else if (out.text == "true" || out.text == "false") out.type = json_value::kind::boolean;
+        else out.type = json_value::kind::number;
+        return !out.text.empty();
+    }
+};
+
+inline bool parse_json(std::string_view text, json_value& out) {
+    json_reader r{text};
+    return r.value(out);
+}
+
+// ─── The Maven lock ───────────────────────────────────────────────────────
+
+// One line per fact, sorted, so that a diff of a lock says what changed:
+//
+//   request <group:artifact:version>        what the project asked for
+//   repository <url>                        where resolution looked, in order
+//   artifact <coordinate> <aar|jar> <path> <sha256>
+//
+// `<path>` is relative to the cache root, which is where coursier keeps the
+// file under `<scheme>/<host>/<path>` (`--cache` is always passed, so the root
+// this member computes and the one coursier writes to are the same directory).
+struct maven_artifact {
+    std::string coordinate;
+    std::string type;
+    std::string path;
+    std::string sha256;
+};
+
+struct maven_lock {
+    bool                        found = false;
+    std::vector<std::string>    requests;
+    std::vector<std::string>    repositories;
+    std::vector<maven_artifact> artifacts;
+};
+
+inline maven_lock read_maven_lock(const std::string& path) {
+    maven_lock lock;
+    if (!is_file(path)) return lock;
+    lock.found = true;
+    std::istringstream in(read_file(path));
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream fields(line);
+        std::string kind;
+        fields >> kind;
+        if (kind == "request")    { std::string v; fields >> v; lock.requests.push_back(v); }
+        else if (kind == "repository") { std::string v; fields >> v; lock.repositories.push_back(v); }
+        else if (kind == "artifact") {
+            maven_artifact a;
+            fields >> a.coordinate >> a.type >> a.path >> a.sha256;
+            lock.artifacts.push_back(std::move(a));
+        }
+    }
+    return lock;
+}
+
+inline std::string render_maven_lock(const maven_lock& lock) {
+    std::string out =
+        "# mcpp.dist.apk Maven lock. Written by MCPP_DIST_APK_MAVEN=update; commit it.\n"
+        "# An ordinary build reads only these artifacts, from the cache, and checks each digest.\n";
+    for (auto const& r : lock.requests)     out += "request " + r + "\n";
+    for (auto const& r : lock.repositories) out += "repository " + r + "\n";
+    for (auto const& a : lock.artifacts)
+        out += "artifact " + a.coordinate + " " + a.type + " " + a.path + " " + a.sha256 + "\n";
+    return out;
+}
+
+// Where coursier's cache is: the option, then `COURSIER_CACHE`, then coursier's
+// own default on this host, so a developer's `cs` and this member share one.
+inline std::string maven_cache_root(const std::string& option) {
+    if (!option.empty()) return option;
+    if (const char* env = std::getenv("COURSIER_CACHE"); env && *env) return env;
+    const char* home = std::getenv("HOME");
+    const std::string h = home ? home : "";
+    if (std::string(mcpp::host()).find("apple") != std::string::npos ||
+        std::string(mcpp::host()).find("macos") != std::string::npos)
+        return h + "/Library/Caches/Coursier/v1";
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg) return std::string(xdg) + "/coursier/v1";
+    return h + "/.cache/coursier/v1";
+}
+
+// `group:artifact:version`, three non-empty parts and a fixed version: a range
+// would make the lock the only place the version is decided.
+inline bool plain_coordinate(const std::string& c) {
+    int colons = 0;
+    for (std::size_t i = 0; i < c.size(); ++i) {
+        if (c[i] == ':') ++colons;
+        if (c[i] == '[' || c[i] == '(' || c[i] == ',' || c[i] == '+' || c[i] == ' ') return false;
+    }
+    return colons == 2 && !c.starts_with(":") && !c.ends_with(":") && c.find("::") == std::string::npos;
+}
+
+// coursier names an AAR-packaged module `group:artifact:aar:version`; the lock
+// records the coordinate a project writes.
+inline std::string plain_form(const std::string& coord) {
+    return replace_all_copy(coord, ":aar:", ":");
+}
+
+// ─── An AAR, unpacked ─────────────────────────────────────────────────────
+
+// What an Android library archive contributes: its manifest (merged), its
+// `res/` (linked under its own package), its classes (`classes.jar`, and any
+// `libs/*.jar` it carries), its native libraries (`jni/<abi>/`) and its
+// `assets/`. `R.txt`, `proguard.txt`, `lint.jar` and `public.txt` are not
+// read: this member does not shrink, lint or compute non-transitive R classes.
+struct library_input {
+    std::string              label;
+    std::string              package;
+    std::string              resources;
+    std::string              manifest;
+    std::string              assets;
+    std::string              jni;
+    std::vector<std::string> java;
+    std::vector<std::string> kotlin;
+    std::vector<std::string> jars;
+};
+
+// Unpacked with the JDK's `jar` at plan time, once per archive content: a stamp
+// beside the tree records the archive's digest, and a matching stamp skips the
+// work on the next plan.
+inline bool unpack_aar(const std::string& aar, const fs::path& dest, const std::string& jarTool,
+                       library_input& out, std::string& message) {
+    const std::string digest = sha256_file(aar);
+    if (digest.empty()) {
+        message = std::format("mcpp.dist.apk: the AAR {} was not found.", aar);
+        return false;
+    }
+    const fs::path stamp = dest / ".mcpp-aar-sha256";
+    if (read_file(stamp.string()) != digest) {
+        std::error_code ec;
+        fs::remove_all(dest, ec);
+        fs::create_directories(dest, ec);
+        std::string output;
+        const int rc = run_capture({"/bin/sh", "-c", "cd \"$1\" && \"$2\" xf \"$3\"", "unpack-aar",
+                                    dest.string(), jarTool, aar}, output);
+        if (rc != 0) {
+            message = std::format("mcpp.dist.apk: unpacking {} with {} failed ({}): {}", aar, jarTool, rc, output);
+            return false;
+        }
+        write_if_different(stamp, digest);
+    }
+    const std::string manifest = (dest / "AndroidManifest.xml").string();
+    if (!is_file(manifest)) {
+        message = std::format("mcpp.dist.apk: {} carries no AndroidManifest.xml, so it is not an AAR.", aar);
+        return false;
+    }
+    xml::node m;
+    std::string err;
+    if (!xml::parse(read_file(manifest), m, err) || m.name != "manifest") {
+        message = std::format("mcpp.dist.apk: the manifest of {} cannot be read: {}", aar, err);
+        return false;
+    }
+    out.package  = xml::attr_of(m, "package");
+    out.manifest = manifest;
+    if (is_dir((dest / "res").string()) && dir_has_files((dest / "res").string()))       out.resources = (dest / "res").string();
+    if (is_dir((dest / "assets").string()) && dir_has_files((dest / "assets").string())) out.assets = (dest / "assets").string();
+    if (is_dir((dest / "jni").string()))                                                  out.jni = (dest / "jni").string();
+    if (is_file((dest / "classes.jar").string())) out.jars.push_back((dest / "classes.jar").string());
+    for (auto const& j : files_with_extension((dest / "libs").string(), ".jar")) out.jars.push_back(j);
+    return true;
 }
 
 // ─── The staged tree ───────────────────────────────────────────────────────
@@ -692,21 +1457,46 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
-    if (opt.java_sources.empty() && !opt.activity.empty()) {
+    // Every path option, resolved against the manifest once (`resolve_path`).
+    opt.resources = resolve_path(opt.resources);
+    resolve_paths(opt.java_sources);
+    resolve_paths(opt.kotlin_sources);
+    for (auto& l : opt.libraries) {
+        l.resources = resolve_path(l.resources);
+        l.manifest  = resolve_path(l.manifest);
+        l.assets    = resolve_path(l.assets);
+        resolve_paths(l.java_sources);
+        resolve_paths(l.kotlin_sources);
+    }
+    resolve_paths(opt.jars);
+    resolve_paths(opt.aars);
+    opt.maven_lock  = resolve_path(opt.maven_lock.empty() ? std::string("maven.lock") : opt.maven_lock);
+    opt.maven_cache = resolve_path(opt.maven_cache);
+
+    // LEVEL 1 IS THE APPLICATION HOSTING ITS OWN ACTIVITY, which it does when it
+    // compiles code of its own, Java or Kotlin. Code a library brings does not
+    // change the activity (see `default_manifest_template`).
+    const bool appHosted = !opt.java_sources.empty() || !opt.kotlin_sources.empty();
+    if (!appHosted && !opt.activity.empty()) {
         // Not fatal -- an explicit activity with no Java host is simply
         // unused -- but the project almost certainly meant `java_sources`
         // too, and level 0's activity is never a name this member reads.
         mcpp::warning("mcpp.dist.apk: options::activity is set with no "
-                      "options::java_sources; level 0 always uses "
-                      "android.app.NativeActivity and ignores it");
+                      "options::java_sources or options::kotlin_sources; level 0 "
+                      "always uses android.app.NativeActivity and ignores it");
     }
-    if (!opt.java_sources.empty() && opt.activity.empty()) {
+    if (appHosted && opt.activity.empty()) {
         return refuse(p, "java_sources without activity",
-            "mcpp.dist.apk: options::java_sources is set, so this is a level-1 "
-            "(Java-hosted) package, and options::activity is required: the "
-            "manifest has no other way to name the launchable activity.");
+            "mcpp.dist.apk: options::java_sources or options::kotlin_sources is set, "
+            "so this is a level-1 (Java-hosted) package, and options::activity is "
+            "required: the manifest has no other way to name the launchable activity.");
     }
-    const bool hasCode = !opt.java_sources.empty();
+    const bool nativeActivity = !appHosted;
+    if (!opt.sign && !opt.keystore.empty()) {
+        return refuse(p, "sign = false with a keystore",
+            "mcpp.dist.apk: options::sign is false and options::keystore names a key; "
+            "the two say opposite things. Drop one of them.");
+    }
 
     // ── the payloads this member declared ──────────────────────────────
     const std::string buildTools = mcpp::xpkg_dir("xim", "android-build-tools");
@@ -802,6 +1592,277 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
+    // ── the libraries: from source, as archives, from Maven (0.11.0) ────
+    //
+    // Gathered in priority order, highest first: `libraries`, then `jars` and
+    // `aars`, then what the Maven lock names. Only resources have a priority
+    // to speak of; classes, manifests and assets are unions.
+    std::vector<library_input> contributions;
+    for (std::size_t i = 0; i < opt.libraries.size(); ++i) {
+        const auto& l = opt.libraries[i];
+        library_input in;
+        in.label   = l.package.empty() ? std::format("options::libraries[{}]", i)
+                                       : std::format("the library {}", l.package);
+        in.package = l.package;
+        if (!l.resources.empty()) {
+            if (!is_dir(l.resources)) {
+                return refuse(p, "library resources not found", std::format(
+                    "mcpp.dist.apk: {} names resources '{}', which is not a directory.",
+                    in.label, l.resources));
+            }
+            if (l.package.empty()) {
+                return refuse(p, "library resources without a package", std::format(
+                    "mcpp.dist.apk: options::libraries[{}] has resources and no package; its "
+                    "R class needs one. Set options::libraries[{}].package.", i, i));
+            }
+            in.resources = l.resources;
+        }
+        if (!l.manifest.empty()) {
+            if (!is_file(l.manifest)) {
+                return refuse(p, "library manifest not found", std::format(
+                    "mcpp.dist.apk: {} names the manifest '{}', which does not exist.",
+                    in.label, l.manifest));
+            }
+            mcpp::rerun_if_changed(l.manifest.c_str());
+            in.manifest = l.manifest;
+        }
+        if (!l.assets.empty()) {
+            if (!is_dir(l.assets)) {
+                return refuse(p, "library assets not found", std::format(
+                    "mcpp.dist.apk: {} names assets '{}', which is not a directory.",
+                    in.label, l.assets));
+            }
+            in.assets = l.assets;
+        }
+        in.java   = l.java_sources;
+        in.kotlin = l.kotlin_sources;
+        contributions.push_back(std::move(in));
+    }
+    for (auto const& j : opt.jars) {
+        if (!is_file(j)) {
+            return refuse(p, "jar not found", std::format(
+                "mcpp.dist.apk: options::jars names '{}', which does not exist.", j));
+        }
+        library_input in;
+        in.label = j;
+        in.jars.push_back(j);
+        contributions.push_back(std::move(in));
+    }
+    std::vector<std::pair<std::string, std::string>> archives;   // label, file
+    for (auto const& a : opt.aars) archives.emplace_back(a, a);
+
+    if (!opt.maven.empty()) {
+        std::vector<std::string> requested = opt.maven;
+        for (auto const& c : requested) {
+            if (!plain_coordinate(c)) {
+                return refuse(p, "not a plain Maven coordinate", std::format(
+                    "mcpp.dist.apk: options::maven names '{}'; write group:artifact:version "
+                    "with a fixed version.", c));
+            }
+        }
+        std::ranges::sort(requested);
+        requested.erase(std::unique(requested.begin(), requested.end()), requested.end());
+        const std::vector<std::string> repositories = opt.maven_repositories.empty()
+            ? std::vector<std::string>{"https://maven.google.com", "https://repo1.maven.org/maven2"}
+            : opt.maven_repositories;
+        const std::string cacheRoot = maven_cache_root(opt.maven_cache);
+        mcpp::rerun_if_changed(opt.maven_lock.c_str());
+        mcpp::rerun_if_env_changed("MCPP_DIST_APK_MAVEN");
+        mcpp::rerun_if_env_changed("COURSIER_CACHE");
+        const char* modeEnv = std::getenv("MCPP_DIST_APK_MAVEN");
+        const std::string mode = modeEnv ? modeEnv : "";
+        if (!mode.empty() && mode != "update" && mode != "fetch") {
+            return refuse(p, "unknown MCPP_DIST_APK_MAVEN", std::format(
+                "mcpp.dist.apk: MCPP_DIST_APK_MAVEN is '{}'. It is 'update', which resolves "
+                "options::maven and rewrites {}, or 'fetch', which downloads what the lock "
+                "names into {}.", mode, opt.maven_lock, cacheRoot));
+        }
+        const auto coursier = [&]() -> std::string {
+            const std::string dir = mcpp::xpkg_dir("xim", "coursier");
+            return dir.empty() ? std::string() : (fs::path(dir) / "bin" / "cs").string();
+        };
+        const auto no_coursier = [&](plan& pl) -> plan& {
+            return refuse(pl, "coursier not found", std::format(
+                "mcpp.dist.apk: MCPP_DIST_APK_MAVEN={} runs coursier from xim:coursier, which "
+                "was not found. Name the dist-apk-maven feature of mcpp:plugins instead of "
+                "dist-apk; it declares the resolver.", mode));
+        };
+
+        if (mode == "update") {
+            const std::string cs = coursier();
+            if (!is_file(cs)) return no_coursier(p);
+            const std::string report = (fs::path(opt.out_dir) / "dist-apk-maven.json").string();
+            std::vector<std::string> argv = {cs, "fetch", "--cache", cacheRoot};
+            for (auto const& r : repositories) { argv.push_back("-r"); argv.push_back(r); }
+            argv.push_back("-A");
+            argv.push_back("aar,jar");
+            argv.push_back("--json-output-file");
+            argv.push_back(report);
+            for (auto const& c : requested) argv.push_back(c);
+            std::string output;
+            if (const int rc = run_capture(argv, output); rc != 0) {
+                return refuse(p, "Maven resolution failed", std::format(
+                    "mcpp.dist.apk: coursier could not resolve {} (exit {}): {}",
+                    join(requested, ", "), rc, output));
+            }
+            json_value doc;
+            if (!parse_json(read_file(report), doc) || !doc.get("dependencies")) {
+                return refuse(p, "unreadable coursier report", std::format(
+                    "mcpp.dist.apk: coursier's report {} cannot be read.", report));
+            }
+            maven_lock fresh;
+            fresh.found        = true;
+            fresh.requests     = requested;
+            fresh.repositories = repositories;
+            // Compared as canonical paths: coursier may report a file through a
+            // symlink the option did not name (`/tmp` is `/private/tmp` on macOS).
+            const auto canonical = [](const std::string& path) {
+                std::error_code ec;
+                const auto c = fs::weakly_canonical(path, ec);
+                return (ec ? fs::path(path).lexically_normal() : c).generic_string();
+            };
+            const std::string rootPrefix = canonical(cacheRoot) + "/";
+            for (auto const& d : doc.get("dependencies")->items) {
+                const json_value* coord = d.get("coord");
+                const json_value* file  = d.get("file");
+                if (!coord || !file) continue;
+                const std::string f = canonical(file->text);
+                if (!f.starts_with(rootPrefix)) {
+                    return refuse(p, "Maven artifact outside the cache", std::format(
+                        "mcpp.dist.apk: coursier placed {} outside the cache {}.", f, cacheRoot));
+                }
+                maven_artifact a;
+                a.coordinate = plain_form(coord->text);
+                a.type       = f.ends_with(".aar") ? "aar" : "jar";
+                a.path       = f.substr(rootPrefix.size());
+                a.sha256     = sha256_file(f);
+                fresh.artifacts.push_back(std::move(a));
+            }
+            std::ranges::sort(fresh.artifacts, {}, &maven_artifact::coordinate);
+            if (!write_if_different(opt.maven_lock, render_maven_lock(fresh))) {
+                return refuse(p, "cannot write the Maven lock", std::format(
+                    "mcpp.dist.apk: cannot write {}.", opt.maven_lock));
+            }
+            mcpp::warning(std::format(
+                "mcpp.dist.apk: MCPP_DIST_APK_MAVEN=update wrote {} ({} artifacts for {}); commit it.",
+                opt.maven_lock, fresh.artifacts.size(), join(requested, ", ")).c_str());
+        }
+
+        const maven_lock lock = read_maven_lock(opt.maven_lock);
+        if (!lock.found) {
+            return refuse(p, "no Maven lock", std::format(
+                "mcpp.dist.apk: options::maven names {}, and there is no lock at {}. Resolve "
+                "once with MCPP_DIST_APK_MAVEN=update set, then commit the lock.",
+                join(requested, ", "), opt.maven_lock));
+        }
+        // STALE MEANS OTHER COORDINATES. The repositories a lock was resolved from
+        // are recorded and not compared: every artifact is checked against its
+        // digest, so a mirror that serves the same bytes is as good a source, and
+        // a developer behind one does not invalidate the lock for everyone else.
+        {
+            std::vector<std::string> locked = lock.requests;
+            std::ranges::sort(locked);
+            if (locked != requested) {
+                return refuse(p, "stale Maven lock", std::format(
+                    "mcpp.dist.apk: {} was resolved for {}, and the project now names {}. "
+                    "Resolve again with MCPP_DIST_APK_MAVEN=update set.",
+                    opt.maven_lock, join(locked, ", "), join(requested, ", ")));
+            }
+        }
+        const auto not_cached = [&]() {
+            std::vector<const maven_artifact*> out;
+            for (auto const& a : lock.artifacts)
+                if (sha256_file((fs::path(cacheRoot) / a.path).string()) != a.sha256)
+                    out.push_back(&a);
+            return out;
+        };
+        auto missing = not_cached();
+        if (!missing.empty() && mode == "fetch") {
+            const std::string cs = coursier();
+            if (!is_file(cs)) return no_coursier(p);
+            std::vector<std::string> argv = {cs, "fetch", "--cache", cacheRoot};
+            for (auto const& r : repositories) { argv.push_back("-r"); argv.push_back(r); }
+            argv.push_back("-A");
+            argv.push_back("aar,jar");
+            // `--intransitive <module>` per module (coursier 2.x: the option takes the
+            // module, it is not a switch): exactly the locked artifacts, nothing resolved.
+            for (auto const* a : missing) { argv.push_back("--intransitive"); argv.push_back(a->coordinate); }
+            std::string output;
+            if (const int rc = run_capture(argv, output); rc != 0) {
+                return refuse(p, "Maven fetch failed", std::format(
+                    "mcpp.dist.apk: coursier could not fetch the locked artifacts (exit {}): {}",
+                    rc, output));
+            }
+            missing = not_cached();
+            if (!missing.empty()) {
+                std::string names;
+                for (auto const* a : missing) names += (names.empty() ? "" : ", ") + a->coordinate;
+                return refuse(p, "Maven artifact differs from the lock", std::format(
+                    "mcpp.dist.apk: after fetching, {} still do not match the digests {} records: "
+                    "the repository serves different bytes than it did when the lock was written.",
+                    names, opt.maven_lock));
+            }
+        }
+        if (!missing.empty()) {
+            std::string names;
+            for (auto const* a : missing) names += (names.empty() ? "" : ", ") + a->coordinate;
+            return refuse(p, "Maven artifacts not in the cache", std::format(
+                "mcpp.dist.apk: the cache {} does not hold {} with the digests {} records. "
+                "Fetch them once with MCPP_DIST_APK_MAVEN=fetch set.",
+                cacheRoot, names, opt.maven_lock));
+        }
+        for (auto const& a : lock.artifacts) {
+            const std::string f = (fs::path(cacheRoot) / a.path).string();
+            if (a.type == "aar") {
+                archives.emplace_back(a.coordinate, f);
+            } else {
+                library_input in;
+                in.label = a.coordinate;
+                in.jars.push_back(f);
+                contributions.push_back(std::move(in));
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < archives.size(); ++i) {
+        const auto& [label, file] = archives[i];
+        library_input in;
+        in.label = label;
+        std::string name = fs::path(file).stem().string();
+        for (std::size_t k = 0; k < name.size(); ++k)
+            if (!std::isalnum(static_cast<unsigned char>(name[k])) && name[k] != '-' && name[k] != '.') name[k] = '_';
+        const fs::path dest = fs::path(opt.out_dir) / "dist-apk-aar" / std::format("{}-{}", i, name);
+        std::string message;
+        if (!unpack_aar(file, dest, jar, in, message)) return refuse(p, "cannot unpack an AAR", message);
+        if (!in.resources.empty() && in.package.empty()) {
+            return refuse(p, "AAR without a package", std::format(
+                "mcpp.dist.apk: {} carries resources and its manifest names no package, so its "
+                "R class has no name.", label));
+        }
+        contributions.push_back(std::move(in));
+    }
+
+    bool needsKotlin = !opt.kotlin_sources.empty();
+    bool hasDex = appHosted;
+    for (auto const& c : contributions) {
+        if (!c.kotlin.empty()) needsKotlin = true;
+        if (!c.java.empty() || !c.kotlin.empty() || !c.jars.empty()) hasDex = true;
+    }
+    std::string kotlinc, kotlinStdlib;
+    if (needsKotlin) {
+        const std::string kdir = mcpp::xpkg_dir("xim", "kotlin");
+        if (!kdir.empty()) {
+            kotlinc      = (fs::path(kdir) / "bin" / "kotlinc").string();
+            kotlinStdlib = (fs::path(kdir) / "kotlinc" / "lib" / "kotlin-stdlib.jar").string();
+        }
+        if (!is_file(kotlinc) || !is_file(kotlinStdlib)) {
+            return refuse(p, "kotlin not found",
+                "mcpp.dist.apk: Kotlin sources are compiled by kotlinc from xim:kotlin, which "
+                "was not found. Name the dist-apk-kotlin feature of mcpp:plugins instead of "
+                "dist-apk; it declares the compiler.");
+        }
+    }
+
     // ── signing: a keystore, an alias and a password ───────────────────
     //
     // `apksigner` takes a password as `pass:<value>` or `env:<NAME>`;
@@ -809,7 +1870,9 @@ inline plan plan_for(options opt = {}) {
     // `-storepass:env <NAME>`. Both spellings are derived from one decision.
     std::string keystoreFile, keystoreAlias, keystorePassArg;
     std::vector<std::string> jarsignerPass;
-    if (opt.keystore.empty()) {
+    if (!opt.sign) {
+        // Unsigned: no keystore is resolved, so none has to be declared.
+    } else if (opt.keystore.empty()) {
         const std::string ksDir = mcpp::xpkg_dir("xim", "android-debug-keystore");
         if (ksDir.empty()) {
             return refuse(p, "android-debug-keystore not found",
@@ -866,7 +1929,7 @@ inline plan plan_for(options opt = {}) {
     // ── the manifest and the run sidecar, written now (plan time) ─────────
     const std::string appId = application_id_for(opt, target);
     const std::string label = label_for(opt);
-    const std::string activityName = hasCode ? opt.activity : std::string("android.app.NativeActivity");
+    const std::string activityName = appHosted ? opt.activity : std::string("android.app.NativeActivity");
 
     std::string manifestTemplateText;
     if (!opt.manifest_template.empty()) {
@@ -885,16 +1948,25 @@ inline plan plan_for(options opt = {}) {
         manifestTemplateText.assign((std::istreambuf_iterator<char>(in)),
                                     std::istreambuf_iterator<char>());
     } else {
-        manifestTemplateText = default_manifest_template(hasCode);
+        manifestTemplateText = default_manifest_template(hasDex, nativeActivity);
     }
 
     const std::string versionName = mcpp::package_version() ? mcpp::package_version() : "";
     const std::string versionCode = version_code_for(versionName);
     std::string manifestBytes, manifestReason, manifestMessage;
-    if (!render_manifest(manifestTemplateText, hasCode, appId, label, activityName,
+    if (!render_manifest(manifestTemplateText, hasDex, nativeActivity, appId, label, activityName,
                          target, minSdk, targetSdk, versionName, versionCode,
                          manifestBytes, manifestReason, manifestMessage)) {
         return refuse(p, manifestReason, manifestMessage);
+    }
+    {
+        std::vector<manifest_source> libraryManifests;
+        for (auto const& c : contributions)
+            if (!c.manifest.empty()) libraryManifests.push_back({c.label, read_file(c.manifest)});
+        if (!libraryManifests.empty() &&
+            !merge_manifests(manifestBytes, libraryManifests, appId, minSdk, manifestReason, manifestMessage)) {
+            return refuse(p, manifestReason, manifestMessage);
+        }
     }
 
     const fs::path outDir = fs::path(opt.out_dir) / (bundle ? "dist-aab" : "dist-apk");
@@ -918,8 +1990,28 @@ inline plan plan_for(options opt = {}) {
         for (auto const& so : leg.libraries)
             collect_tree(so, work / "lib" / leg.abi / fs::path(so).filename(), libInputs);
 
+    // An AAR's native libraries, for every ABI this package carries.
+    for (auto const& c : contributions) {
+        if (c.jni.empty()) continue;
+        for (auto const& leg : legs) {
+            const fs::path abiDir = fs::path(c.jni) / leg.abi;
+            if (!is_dir(abiDir.string())) {
+                mcpp::warning(std::format(
+                    "mcpp.dist.apk: {} carries native libraries, and none for {}; a class that "
+                    "loads them fails on that ABI.", c.label, leg.abi).c_str());
+                continue;
+            }
+            for (auto const& so : shared_objects_in(abiDir))
+                collect_tree(so, work / "lib" / leg.abi / fs::path(so).filename(), libInputs);
+        }
+    }
+
     const fs::path assetsDir = work / "assets";
     std::vector<std::string> assetInputs;
+    // Library and archive assets first, so a file the build program deploys
+    // under the same name replaces theirs.
+    for (auto const& c : contributions)
+        if (!c.assets.empty()) collect_tree(c.assets, assetsDir, assetInputs);
     { // every deploy'd file, `<stage>/bin/<rel>` -> `assets/<rel>`: the engine
       // stages `mcpp::deploy`'s destinations under `bin/` on this row as on
       // every other.
@@ -955,13 +2047,20 @@ inline plan plan_for(options opt = {}) {
     };
     // Copies the linked archive and adds the staged `lib/`, `assets/` and the
     // dex with `jar`: aapt2 has no flag for native libraries.
+    // `--dex <dir>` adds every `classes*.dex` d8 wrote there: a package whose
+    // classes pass the 64K-method limit of one dex gets `classes2.dex` and on,
+    // and which of them exist is known only when d8 has run.
     const std::string copyThenJar = helper("copy-then-jar.sh",
         "#!/bin/sh\n"
         "# mcpp.dist.apk helper. Do not edit.\n"
+        "# copy-then-jar.sh <src> <dst> <jar> [--dex <dir>] <jar update arguments>...\n"
         "set -e\n"
         "src=\"$1\"; dst=\"$2\"; jar=\"$3\"; shift 3\n"
+        "dex=\"\"\n"
+        "if [ \"${1:-}\" = --dex ]; then dex=\"$2\"; shift 2; fi\n"
         "cp \"$src\" \"$dst\"\n"
-        "\"$jar\" uf \"$dst\" \"$@\"\n");
+        "\"$jar\" uf \"$dst\" \"$@\"\n"
+        "if [ -n \"$dex\" ]; then (cd \"$dex\" && \"$jar\" uf \"$dst\" classes*.dex); fi\n");
     const std::string runAndStamp = helper("run-and-stamp.sh",
         "#!/bin/sh\n"
         "set -e\n"
@@ -975,17 +2074,30 @@ inline plan plan_for(options opt = {}) {
     // into `BaseCommand$Builder.addProgramFiles`. javac's own output set is
     // not knowable at plan time, so this wrapper finds the `.class` files
     // `d8`'s command line needs at COMMAND time instead.
+    // Its inputs are directories of classes (javac's, kotlinc's), expanded, and
+    // archives (JARs, an AAR's classes.jar, the Kotlin stdlib), passed as they
+    // are; `--` ends them. Earlier dex files are removed first, so a package
+    // that shrinks below the multidex limit does not keep a stale `classes2.dex`.
     const std::string runD8 = helper("run-d8.sh",
         "#!/bin/sh\n"
         "# mcpp.dist.apk helper. Do not edit.\n"
+        "# run-d8.sh <d8> <classes directory | archive>... -- <d8 option>...\n"
         "set -e\n"
-        "d8=\"$1\"; classesdir=\"$2\"; shift 2\n"
-        "classes=$(find \"$classesdir\" -name '*.class')\n"
-        "if [ -z \"$classes\" ]; then\n"
-        "    echo \"run-d8.sh: no .class file under $classesdir\" >&2\n"
+        "d8=\"$1\"; shift\n"
+        "inputs=\"\"\n"
+        "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do\n"
+        "    if [ -d \"$1\" ]; then inputs=\"$inputs $(find \"$1\" -name '*.class')\"; else inputs=\"$inputs $1\"; fi\n"
+        "    shift\n"
+        "done\n"
+        "[ \"$#\" -gt 0 ] && shift\n"
+        "if [ -z \"$(echo $inputs)\" ]; then\n"
+        "    echo \"run-d8.sh: no .class file and no archive to dex\" >&2\n"
         "    exit 1\n"
         "fi\n"
-        "\"$d8\" \"$@\" $classes\n");
+        "out=\"\"; prev=\"\"\n"
+        "for a in \"$@\"; do [ \"$prev\" = --output ] && out=\"$a\"; prev=\"$a\"; done\n"
+        "if [ -n \"$out\" ]; then rm -f \"$out\"/classes*.dex; fi\n"
+        "\"$d8\" \"$@\" $inputs\n");
     // THE BASE MODULE OF AN APP BUNDLE. `aapt2 link --proto-format` writes the
     // manifest at the archive's root beside `resources.pb` and `res/`;
     // bundletool reads a module whose manifest is under `manifest/`, whose dex
@@ -1004,7 +2116,7 @@ inline plan plan_for(options opt = {}) {
         "mv \"$module/AndroidManifest.xml\" \"$module/manifest/AndroidManifest.xml\"\n"
         "if [ -d \"$work/lib\" ]; then cp -R \"$work/lib\" \"$module/lib\"; fi\n"
         "if [ -d \"$work/assets\" ]; then cp -R \"$work/assets\" \"$module/assets\"; fi\n"
-        "if [ \"$dex\" != - ]; then mkdir -p \"$module/dex\"; cp \"$dex\" \"$module/dex/classes.dex\"; fi\n"
+        "if [ \"$dex\" != - ]; then mkdir -p \"$module/dex\"; cp \"$(dirname \"$dex\")\"/classes*.dex \"$module/dex/\"; fi\n"
         "\"$jar\" cfM \"$out\" -C \"$module\" .\n") : std::string();
 
     // ── the pipeline ────────────────────────────────────────────────────
@@ -1025,6 +2137,24 @@ inline plan plan_for(options opt = {}) {
         compile.inputs = { opt.resources };
         p.steps.push_back(compile);
         assembled.push_back(compile.output);
+    }
+    const std::string appUnit = assembled.empty() ? std::string() : assembled.back();
+
+    // THE LIBRARIES' RESOURCES, EACH COMPILED ON ITS OWN, LOWEST PRIORITY FIRST.
+    // `contributions` is highest first, so it is walked backwards.
+    std::vector<std::string> libraryUnits;
+    for (std::size_t k = contributions.size(); k-- > 0;) {
+        const auto& c = contributions[k];
+        if (c.resources.empty()) continue;
+        step unit;
+        unit.id          = std::format("{}:res:{}", bundle ? "aab" : "apk", k);
+        unit.role        = "artifact";
+        unit.description = "AAPT2 COMPILE " + c.label;
+        unit.output      = (outDir / std::format("compiled-library-{}.zip", k)).string();
+        unit.argv        = { aapt2, "compile", "--dir", c.resources, "-o", unit.output };
+        unit.inputs      = { c.resources };
+        p.steps.push_back(unit);
+        libraryUnits.push_back(unit.output);
     }
 
     step link;
@@ -1053,61 +2183,141 @@ inline plan plan_for(options opt = {}) {
     // failed as `color/ic_launcher_background does not override an existing
     // resource` (0.9.0, measured by HuxerUI's Android row). A positional
     // unit is the base.
-    if (!assembled.empty()) link.argv.push_back(assembled.back());
+    //
+    // WITH LIBRARIES, THE LOWEST-PRIORITY LIBRARY IS THE BASE AND EVERYTHING
+    // ABOVE IT OVERLAYS IT, the application last, with `--auto-add-overlay` so
+    // that an overlay may also define resources the base does not have -- the
+    // property 0.9.0's overlay lacked, and why the application alone is still
+    // linked positionally.
+    if (libraryUnits.empty()) {
+        if (!appUnit.empty()) link.argv.push_back(appUnit);
+    } else {
+        link.argv.push_back(libraryUnits.front());
+        for (std::size_t k = 1; k < libraryUnits.size(); ++k) {
+            link.argv.push_back("-R");
+            link.argv.push_back(libraryUnits[k]);
+        }
+        if (!appUnit.empty()) {
+            link.argv.push_back("-R");
+            link.argv.push_back(appUnit);
+        }
+        link.argv.push_back("--auto-add-overlay");
+    }
+    // THE R CLASSES (0.11.0), whenever classes are compiled: the application's
+    // under its package, and the same ids under every library package, which
+    // is how a library's code reaches the resources it brought.
+    const fs::path genDir = outDir / "gen";
+    std::vector<std::string> rJava;
+    if (hasDex) {
+        std::vector<std::string> extraPackages;
+        for (auto const& c : contributions)
+            if (!c.package.empty() && c.package != appId &&
+                std::ranges::find(extraPackages, c.package) == extraPackages.end())
+                extraPackages.push_back(c.package);
+        link.argv.push_back("--java");
+        link.argv.push_back(genDir.string());
+        if (!extraPackages.empty()) {
+            link.argv.push_back("--extra-packages");
+            link.argv.push_back(join(extraPackages, ":"));
+        }
+        const auto rPath = [&](const std::string& package) {
+            return (genDir / replace_all_copy(package, ".", "/") / "R.java").string();
+        };
+        rJava.push_back(rPath(appId));
+        for (auto const& e : extraPackages) rJava.push_back(rPath(e));
+        link.more_outputs = rJava;
+    }
     link.argv.push_back("-o"); link.argv.push_back(link.output);
     link.inputs = { manifestPath, androidJar };
-    if (!assembled.empty()) link.inputs.push_back(assembled.back());
+    if (!appUnit.empty()) link.inputs.push_back(appUnit);
+    for (auto const& u : libraryUnits) link.inputs.push_back(u);
     p.steps.push_back(link);
 
-    std::vector<std::string> javaOutputs; // classes.dex, when level 1
-    if (hasCode) {
-        // ONE `javac` OVER EVERY ROOT'S `.java` FILES. The member compiles
-        // what it is given (design record §3.3) and a second root is more of
-        // the same input, not a second step -- `javaFiles` below is one flat
-        // list across every root, and one `javac` invocation compiles all of
-        // it into one `classesDir`, exactly as it did over one root before.
-        std::vector<std::string> javaFiles;
-        for (auto const& root : opt.java_sources) {
-            if (!is_dir(root)) {
-                return refuse(p, "java_sources directory not found", std::format(
-                    "mcpp.dist.apk: options::java_sources root '{}' is not a "
-                    "directory.", root));
+    std::vector<std::string> javaOutputs; // classes.dex, when there are classes
+    if (hasDex) {
+        // THE SOURCE ROOTS: the application's and every library's, each refused
+        // when it is not a directory or holds no source of its language.
+        //
+        // THE RE-RUN QUESTION (design record §3.3). `glob_fingerprint` walks the
+        // PACKAGE ROOT and matches paths relative to it; a root outside that
+        // walk (a dependency's unpack directory) matches nothing, and the
+        // fingerprint would be the same as "no files". So a project root (under
+        // `mcpp::manifest_dir()`) is declared with the glob; a dependency root is
+        // not -- its file set changes only with the dependency's version, already
+        // in the build's fingerprint, and each of its files is an input of the
+        // compile below. THE PATTERN IS MANIFEST-RELATIVE (`root_in_project`'s
+        // return value), NOT `root` ITSELF: an absolute pattern never matches --
+        // see `root_in_project`'s own header for the measurement.
+        std::vector<std::string> javaFiles, kotlinFiles;
+        struct root_list { const std::vector<std::string>* roots; std::string option; };
+        std::vector<root_list> javaRoots   = { {&opt.java_sources, "options::java_sources"} };
+        std::vector<root_list> kotlinRoots = { {&opt.kotlin_sources, "options::kotlin_sources"} };
+        for (auto const& c : contributions) {
+            if (!c.java.empty())   javaRoots.push_back({&c.java, c.label + " java_sources"});
+            if (!c.kotlin.empty()) kotlinRoots.push_back({&c.kotlin, c.label + " kotlin_sources"});
+        }
+        const auto gather = [&](const std::vector<root_list>& lists, const char* ext,
+                                std::vector<std::string>& into, std::string& reason,
+                                std::string& message) -> bool {
+            for (auto const& list : lists) {
+                for (auto const& root : *list.roots) {
+                    if (!is_dir(root)) {
+                        reason  = std::format("{} directory not found", ext[1] == 'j' ? "java_sources" : "kotlin_sources");
+                        message = std::format("mcpp.dist.apk: {} root '{}' is not a directory.", list.option, root);
+                        return false;
+                    }
+                    const auto found = files_with_extension(root, ext);
+                    if (found.empty()) {
+                        reason  = std::format("no {} sources", ext);
+                        message = std::format("mcpp.dist.apk: {} root '{}' carries no {} file.", list.option, root, ext);
+                        return false;
+                    }
+                    into.insert(into.end(), found.begin(), found.end());
+                    if (auto rel = root_in_project(root))
+                        mcpp::rerun_if_changed_glob((*rel + "/**/*" + ext).c_str());
+                }
             }
-            const std::size_t before = javaFiles.size();
-            { std::error_code ec;
-              for (auto& e : fs::recursive_directory_iterator(root, ec)) {
-                  if (ec) break;
-                  if (e.is_regular_file(ec) && e.path().extension() == ".java")
-                      javaFiles.push_back(e.path().string());
-              }
-            }
-            if (javaFiles.size() == before) {
-                return refuse(p, "no .java sources", std::format(
-                    "mcpp.dist.apk: options::java_sources root '{}' carries no "
-                    ".java file.", root));
-            }
-            // THE RE-RUN QUESTION (design record §3.3). `glob_fingerprint`
-            // walks the PACKAGE ROOT and matches paths relative to it; a
-            // root outside that walk (a dependency's unpack directory)
-            // matches nothing, and the fingerprint would be the same as "no
-            // files" -- a criterion whose "no" reads as silence. So a
-            // project root (under `mcpp::manifest_dir()`) is declared with
-            // the glob, as today; a dependency root is not: its file set
-            // changes only with the dependency's version, already in the
-            // build's fingerprint, and each of its files is already an
-            // input of the `javac` action below.
-            //
-            // THE PATTERN IS MANIFEST-RELATIVE (`root_in_project`'s return
-            // value), NOT `root` ITSELF, which is absolute: the engine's
-            // glob fingerprint compares each candidate file made relative to
-            // the package root against the pattern, so an absolute pattern
-            // is compared against a relative candidate and never matches --
-            // see `root_in_project`'s own header for the measurement.
-            if (auto rel = root_in_project(root))
-                mcpp::rerun_if_changed_glob((*rel + "/**/*.java").c_str());
+            return true;
+        };
+        {
+            std::string reason, message;
+            if (!gather(javaRoots, ".java", javaFiles, reason, message) ||
+                !gather(kotlinRoots, ".kt", kotlinFiles, reason, message))
+                return refuse(p, reason, message);
+        }
+        for (auto const& r : rJava) javaFiles.push_back(r);
+
+        std::vector<std::string> classpath = { androidJar };
+        std::vector<std::string> archivesToDex;
+        for (auto const& c : contributions)
+            for (auto const& j : c.jars) { classpath.push_back(j); archivesToDex.push_back(j); }
+
+        const std::string classesDir       = (outDir / "classes").string();
+        const std::string kotlinClassesDir = (outDir / "classes-kotlin").string();
+        std::string kotlinStamp;
+        if (!kotlinFiles.empty()) {
+            // KOTLIN FIRST, WITH THE JAVA AS REFERENCE SOURCES: `kotlinc` reads
+            // the `.java` files to resolve what the Kotlin names, and writes
+            // classes for the Kotlin only; `javac` then compiles the Java against
+            // them. The R classes are among the Java, generated by the link.
+            step kt;
+            kt.id          = id("apk:kotlinc", "aab:kotlinc");
+            kt.role        = "artifact";
+            kt.description = "KOTLINC";
+            kt.output      = kotlinClassesDir + "/.stamp";
+            kt.argv = { runAndStamp, kt.output, kotlinc, "-jvm-target", "17", "-no-reflect",
+                        "-classpath", join(classpath, ":"), "-d", kotlinClassesDir };
+            for (auto const& f : kotlinFiles) kt.argv.push_back(f);
+            for (auto const& f : javaFiles)   kt.argv.push_back(f);
+            kt.inputs = kotlinFiles;
+            for (auto const& f : javaFiles) kt.inputs.push_back(f);
+            for (auto const& c : classpath) kt.inputs.push_back(c);
+            p.steps.push_back(kt);
+            kotlinStamp = kt.output;
         }
 
-        const std::string classesDir = (outDir / "classes").string();
+        std::vector<std::string> javacClasspath = classpath;
+        if (!kotlinFiles.empty()) javacClasspath.push_back(kotlinClassesDir);
         step javacStep;
         javacStep.id = id("apk:javac", "aab:javac");
         javacStep.role = "artifact";
@@ -1115,10 +2325,11 @@ inline plan plan_for(options opt = {}) {
         javacStep.output = classesDir + "/.stamp";
         javacStep.argv = { runAndStamp, javacStep.output, javac,
                           "-source", "17", "-target", "17",
-                          "-cp", androidJar, "-d", classesDir };
+                          "-cp", join(javacClasspath, ":"), "-d", classesDir };
         for (auto const& f : javaFiles) javacStep.argv.push_back(f);
         javacStep.inputs = javaFiles;
-        javacStep.inputs.push_back(androidJar);
+        for (auto const& c : classpath) javacStep.inputs.push_back(c);
+        if (!kotlinStamp.empty()) javacStep.inputs.push_back(kotlinStamp);
         p.steps.push_back(javacStep);
 
         const std::string dexDir = (outDir / "dex").string();
@@ -1127,9 +2338,17 @@ inline plan plan_for(options opt = {}) {
         d8Step.role = "artifact";
         d8Step.description = "D8";
         d8Step.output = dexDir + "/classes.dex";
-        d8Step.argv = { runD8, d8, classesDir, "--min-api", minSdk, "--lib", androidJar,
-                       "--output", dexDir };
+        d8Step.argv = { runD8, d8, classesDir };
+        if (!kotlinFiles.empty()) d8Step.argv.push_back(kotlinClassesDir);
+        for (auto const& a : archivesToDex) d8Step.argv.push_back(a);
+        if (!kotlinFiles.empty()) d8Step.argv.push_back(kotlinStdlib);
+        d8Step.argv.push_back("--");
+        for (auto const& a : {std::string("--min-api"), minSdk, std::string("--lib"), androidJar,
+                              std::string("--output"), dexDir})
+            d8Step.argv.push_back(a);
         d8Step.inputs = { javacStep.output, androidJar };
+        if (!kotlinStamp.empty()) { d8Step.inputs.push_back(kotlinStamp); d8Step.inputs.push_back(kotlinStdlib); }
+        for (auto const& a : archivesToDex) d8Step.inputs.push_back(a);
         p.steps.push_back(d8Step);
         javaOutputs.push_back(d8Step.output);
     }
@@ -1150,22 +2369,26 @@ inline plan plan_for(options opt = {}) {
         for (auto const& f : javaOutputs) baseModule.inputs.push_back(f);
         p.steps.push_back(baseModule);
 
+        p.output = !opt.output.empty() ? opt.output
+                 : (fs::path(opt.out_dir) / (target + ".aab")).string();
         step build;
         build.id = "aab:bundle";
         build.role = "artifact";
         build.description = "BUNDLETOOL BUILD-BUNDLE";
-        build.output = (outDir / "unsigned.aab").string();
+        build.output = opt.sign ? (outDir / "unsigned.aab").string() : p.output;
         build.argv = { bundletool, "build-bundle", "--modules=" + baseModule.output,
                        "--output=" + build.output, "--overwrite" };
         build.inputs = { baseModule.output };
         p.steps.push_back(build);
+        if (!opt.sign) {
+            p.applies = true;
+            return p;
+        }
 
         step sign;
         sign.id = "aab:sign";
         sign.role = "artifact";
         sign.description = "JARSIGNER";
-        p.output = !opt.output.empty() ? opt.output
-                 : (fs::path(opt.out_dir) / (target + ".aab")).string();
         sign.output = p.output;
         sign.argv = { jarsigner, "-keystore", keystoreFile };
         for (auto const& a : jarsignerPass) sign.argv.push_back(a);
@@ -1189,9 +2412,10 @@ inline plan plan_for(options opt = {}) {
                  "-C", work.string(), "lib",
                  "-C", work.string(), "assets" };
     if (!javaOutputs.empty()) {
-        libs.argv.push_back("-C");
-        libs.argv.push_back((outDir / "dex").string());
-        libs.argv.push_back("classes.dex");
+        // After the three fixed operands and before the `jar` arguments: see
+        // `copy-then-jar.sh`.
+        libs.argv.insert(libs.argv.begin() + 4, (outDir / "dex").string());
+        libs.argv.insert(libs.argv.begin() + 4, "--dex");
     }
     libs.inputs = { link.output };
     for (auto const& f : libInputs)   libs.inputs.push_back(f);
@@ -1203,7 +2427,10 @@ inline plan plan_for(options opt = {}) {
     align.id = "apk:align";
     align.role = "artifact";
     align.description = "ZIPALIGN";
-    align.output = (outDir / "aligned.apk").string();
+    p.output = !opt.output.empty() ? opt.output
+             : (fs::path(opt.out_dir) / (target + ".apk")).string();
+    // Unsigned, the aligned archive is the package.
+    align.output = opt.sign ? (outDir / "aligned.apk").string() : p.output;
     // `-f`: OVERWRITE. Measured -- `zipalign` refuses by default when its own
     // output already exists ("Output file '...' exists"), which every
     // rebuild after the first hits, because ninja does not delete a stale
@@ -1211,13 +2438,15 @@ inline plan plan_for(options opt = {}) {
     align.argv = { zipalign, "-f", "-p", "4", libs.output, align.output };
     align.inputs = { libs.output };
     p.steps.push_back(align);
+    if (!opt.sign) {
+        p.applies = true;
+        return p;
+    }
 
     step sign;
     sign.id = "apk:sign";
     sign.role = "artifact";
     sign.description = "APKSIGNER";
-    p.output = !opt.output.empty() ? opt.output
-             : (fs::path(opt.out_dir) / (target + ".apk")).string();
     sign.output = p.output;
     sign.argv = { apksigner, "sign", "--ks", keystoreFile,
                  "--ks-pass", keystorePassArg,
@@ -1237,12 +2466,13 @@ inline bool submit(const plan& p) {
     if (!p.applies) return true;
     for (auto const& s : p.steps) {
         mcpp::action a;
-        a.id          = s.id;
+        a.id          = s.id.c_str();
         a.role        = s.role;
-        a.description = s.description;
+        a.description = s.description.c_str();
         for (auto const& tok : s.argv)   a.arg(tok.c_str());
         for (auto const& in  : s.inputs) a.input(in.c_str());
         a.output(s.output.c_str());
+        for (auto const& out : s.more_outputs) a.output(out.c_str());
         a.submit();
     }
 

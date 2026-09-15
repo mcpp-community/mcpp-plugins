@@ -1,0 +1,35 @@
+# Fixture: dist-apk 0.11.0 end to end. An application whose activity is Kotlin
+# and whose helper is Java, reading its resources through R; a library built
+# from source, also Java and Kotlin, with its own resources, manifest and
+# assets; a local AAR and a local JAR the check script builds; and, when
+# `APK_LIBS_MAVEN` selects it, a Maven graph (androidx.startup) resolved into a
+# lock. `check-apk-libraries.sh` states the criteria.
+[package]
+name        = "apk-consumer-libraries"
+version     = "0.11.0"
+description = "Fixture: dist-apk's Kotlin, R classes, libraries, archives and Maven dependencies"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# `dist-apk-kotlin` and `dist-apk-maven` each imply `dist-apk`; naming both
+# declares the Kotlin compiler and the Maven resolver on the Android rows.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-apk-kotlin", "dist-apk-maven"], host-module = true }
+
+[targets.apk-consumer-libraries]
+kind = "app"
+main = "src/main.cpp"
+
+[target.'cfg(env = "android")'.runtime]
+libraries = ["log"]
+
+[target.x86_64-linux-android]
+min_api_level = 24
+
+[target.aarch64-linux-android]
+min_api_level = 24
