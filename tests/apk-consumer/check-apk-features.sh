@@ -308,3 +308,45 @@ grep -q '\.symtab' sections-l.log || fail "keep_debug_symbols packed a stripped 
 unset APK_CONSUMER_KEEP_DEBUG_SYMBOLS
 rm -rf k
 echo "ok: keep_debug_symbols packs the library with its symbol table"
+
+# ── (m),(n) 0.12.0: the engine's strip decision reaches the packed libraries ─
+#
+# An engine that strips what the graph built (mcpp 2026.9.16.1) publishes its
+# decision to the build program, so (m) `mcpp pack --no-strip` packs the library
+# with its symbol table, and (n) `--debug-symbols <dir>` separates its debug
+# information into `<dir>/<abi>/<library>.debug` and leaves a `.gnu_debuglink`
+# in the packed copy. An older engine publishes nothing, so these legs are
+# skipped there; (k) is the behaviour that engine keeps.
+engine_version=$("$MCPP" --version | awk '{print $2}')
+if [ "$(printf '%s\n%s\n' 2026.9.16.1 "$engine_version" | sort -V | head -1)" = 2026.9.16.1 ]; then
+    echo "== (m) mcpp pack --no-strip =="
+    rm -rf target k
+    "$MCPP" pack --format apk --target "$TARGET" --no-strip > pack-m.log 2>&1 || fail "pack --no-strip failed" pack-m.log
+    APK=$(find target -name 'apk-consumer.apk' | head -1)
+    [ -n "$APK" ] || fail "no apk-consumer.apk" pack-m.log
+    mkdir -p k && unzip -q -o "$APK" "$LIB" -d k
+    readelf -S "k/$LIB" > sections-m.log
+    grep -q '\.symtab' sections-m.log || fail "--no-strip packed a stripped library" sections-m.log
+    rm -rf k
+    echo "ok: --no-strip packs the library with its symbol table"
+
+    echo "== (n) mcpp pack --debug-symbols <dir> =="
+    rm -rf target k debug-n
+    DEBUG_DIR="$PWD/debug-n"
+    "$MCPP" pack --format apk --target "$TARGET" --debug-symbols "$DEBUG_DIR" > pack-n.log 2>&1 \
+        || fail "pack --debug-symbols failed" pack-n.log
+    APK=$(find target -name 'apk-consumer.apk' | head -1)
+    [ -n "$APK" ] || fail "no apk-consumer.apk" pack-n.log
+    mkdir -p k && unzip -q -o "$APK" "$LIB" -d k
+    readelf -S "k/$LIB" > sections-n.log
+    if grep -qE '\.symtab|\.debug_' sections-n.log; then fail "the packed library keeps its symbol table or debug information" sections-n.log; fi
+    grep -q '\.gnu_debuglink' sections-n.log || fail "the packed library does not name its debug file" sections-n.log
+    DEBUG_FILE="$DEBUG_DIR/x86_64/libapk-consumer.so.debug"
+    [ -f "$DEBUG_FILE" ] || fail "no $DEBUG_FILE" pack-n.log
+    readelf -S "$DEBUG_FILE" > sections-n-debug.log
+    grep -q '\.debug_' sections-n-debug.log || fail "the separated file carries no debug sections" sections-n-debug.log
+    rm -rf k debug-n
+    echo "ok: --debug-symbols separates the library's debug information and links the packed copy to it"
+else
+    echo "skip: (m),(n) need an engine that publishes MCPP_PACK_STRIP (2026.9.16.1+); this is $engine_version"
+fi

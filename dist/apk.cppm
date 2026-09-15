@@ -221,6 +221,16 @@ struct options {
     // drops the symbol table and the debug information -- what the Android
     // Gradle plugin does to every library it packages, and what `mcpp pack`
     // reports it did.
+    //
+    // FROM 0.12.0 THE ENGINE'S DECISION GOVERNS AS WELL. An engine that strips
+    // what the graph built (mcpp 2026.9.16.1, #649 E5) tells a build program
+    // whether this packaging pass strips (`MCPP_PACK_STRIP`, "1" or "0") and
+    // where `--debug-symbols` sends the separated debug information
+    // (`MCPP_PACK_DEBUG_SYMBOLS_DIR`), so `mcpp pack --no-strip` and
+    // `--debug-symbols <dir>` reach the libraries this member packs as they
+    // reach the ones the engine stages. A library is stripped unless either
+    // this option or the engine says to keep it. An older engine publishes
+    // neither variable, and the member strips as before.
     bool keep_debug_symbols = false;
 
     // LEVEL 1, KOTLIN (0.11.0). One or more directories of `.kt` sources,
@@ -1998,10 +2008,24 @@ inline plan plan_for(options opt = {}) {
     }
     const bool inPlaceLibraries = loads_native_libraries_in_place(manifestBytes);
 
+    // THE ENGINE'S STRIP DECISION (0.12.0), read through the environment
+    // rather than an `mcpp::` accessor so the member still builds, and still
+    // strips, under an engine that predates the accessor. See
+    // `options::keep_debug_symbols`.
+    const char* engineStrip = std::getenv("MCPP_PACK_STRIP");
+    const bool engineKeeps = engineStrip && std::string_view(engineStrip) == "0";
+    const char* engineDebugDir = std::getenv("MCPP_PACK_DEBUG_SYMBOLS_DIR");
+    const std::string debugDir = engineDebugDir ? engineDebugDir : "";
+
     // THE BUILD'S OWN llvm-strip (0.11.1): the one beside the compiler mcpp
-    // resolved for this row, the NDK's.
+    // resolved for this row, the NDK's. With a debug-symbols directory,
+    // `llvm-objcopy` beside it separates the debug information first, in the
+    // order the engine's own strip uses (`src/pack/strip.cppm`): a copy of the
+    // debug sections while the library still has them, then the stripped
+    // library with a `.gnu_debuglink` naming that copy.
     std::string llvmStrip;
-    if (!opt.keep_debug_symbols) {
+    std::string llvmObjcopy;
+    if (!opt.keep_debug_symbols && !engineKeeps) {
         const std::string toolchain = mcpp::toolchain_dir();
         const fs::path candidate = fs::path(toolchain) / "bin" / "llvm-strip";
         if (!toolchain.empty() && is_file(candidate.string())) {
@@ -2010,6 +2034,17 @@ inline plan plan_for(options opt = {}) {
             mcpp::warning(std::format(
                 "mcpp.dist.apk: no llvm-strip beside the toolchain ({}); the native libraries are packed "
                 "with their debug information.", toolchain.empty() ? "none reported" : toolchain).c_str());
+        }
+        if (!llvmStrip.empty() && !debugDir.empty()) {
+            const fs::path objcopy = fs::path(toolchain) / "bin" / "llvm-objcopy";
+            if (is_file(objcopy.string())) {
+                llvmObjcopy = objcopy.string();
+            } else {
+                mcpp::warning(std::format(
+                    "mcpp.dist.apk: --debug-symbols names {}, and there is no llvm-objcopy beside the "
+                    "toolchain ({}) to separate the libraries' debug information; they are stripped "
+                    "without it.", debugDir, toolchain).c_str());
+            }
         }
     }
 
@@ -2047,10 +2082,38 @@ inline plan plan_for(options opt = {}) {
         }
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
+        const std::string leaf = fs::path(so).filename().string();
+        if (!llvmObjcopy.empty()) {
+            // One subdirectory per ABI: a package carries the same library name
+            // once for every ABI, and a flat directory would let the last one
+            // overwrite the others' debug information.
+            const fs::path debugFile = fs::path(debugDir) / abi / (leaf + ".debug");
+            fs::create_directories(debugFile.parent_path(), ec);
+            step keep;
+            keep.id          = std::format("{}:debug:{}:{}", bundle ? "aab" : "apk", abi, leaf);
+            keep.role        = "artifact";
+            keep.description = "LLVM-OBJCOPY --only-keep-debug " + abi + "/" + leaf;
+            keep.output      = debugFile.string();
+            keep.argv        = { llvmObjcopy, "--only-keep-debug", so, keep.output };
+            keep.inputs      = { so };
+            p.steps.push_back(keep);
+
+            step strip;
+            strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, leaf);
+            strip.role        = "artifact";
+            strip.description = "LLVM-OBJCOPY --strip-unneeded " + abi + "/" + leaf;
+            strip.output      = dst.string();
+            strip.argv        = { llvmObjcopy, "--strip-unneeded",
+                                  "--add-gnu-debuglink=" + debugFile.string(), so, strip.output };
+            strip.inputs      = { so, keep.output };
+            p.steps.push_back(strip);
+            libInputs.push_back(strip.output);
+            return;
+        }
         step strip;
-        strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, fs::path(so).filename().string());
+        strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, leaf);
         strip.role        = "artifact";
-        strip.description = "LLVM-STRIP " + abi + "/" + fs::path(so).filename().string();
+        strip.description = "LLVM-STRIP " + abi + "/" + leaf;
         strip.output      = dst.string();
         strip.argv        = { llvmStrip, "--strip-unneeded", "-o", strip.output, so };
         strip.inputs      = { so };
