@@ -2046,6 +2046,18 @@ jobs:
         working-directory: tests/metal-consumer
         run: MCPP="$MCPP" ./check-metal.sh
 
+      # rules-swift (mcpp#647 E2): a C++ program calling a Swift function, which
+      # calls back into C through the bridging header, printing a line from each
+      # side; the generated header declares the exported function; the fixture
+      # links for the iOS simulator when the runner has that SDK. On a runner
+      # without swiftc the script asserts the rule's refusal and annotates the
+      # run instead.
+      - name: rules-swift compiles a package's Swift sources, or records that this runner has no swiftc
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        timeout-minutes: 20
+        working-directory: tests/swift-consumer
+        run: MCPP="$MCPP" ./check-swift.sh
+
       # THE iOS ROW, FOR REAL (#622 B1's other half). `tests/ios-app-consumer`
       # is the same fixture the Linux `consumers` job checks at the plan
       # level (see that fixture's own header); here it is built, packed and

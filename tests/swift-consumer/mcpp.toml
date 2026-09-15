@@ -1,0 +1,33 @@
+# Fixture: a C++ program calling Swift, and Swift calling back into C, compiled
+# by rules-swift.
+#
+# `swift/answer.swift` exports `swift_consumer_answer` with `@_cdecl` and calls
+# `swift_consumer_c_marker`, which `src/marker.c` defines and `swift/bridge.h`
+# declares for Swift through `options::bridging_header`. `src/main.cpp` calls the
+# exported function and prints a marker built from both sides. The Swift sources
+# are named on the macOS and iOS rows only, where this fixture is built: the rule
+# refuses them on any other row, by name.
+[package]
+name        = "swift-consumer"
+version     = "0.1.0"
+description = "Fixture: Swift sources compiled by rules-swift and linked into a C++ program"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-swift"], host-module = true }
+
+[build]
+sources = ["src/*.cpp", "src/*.c"]
+
+[target.'cfg(any(os = "macos", os = "ios"))'.build]
+sources = ["src/*.cpp", "src/*.c", "swift/*.swift"]
+
+[targets.swift-consumer]
+kind = "bin"
+main = "src/main.cpp"
