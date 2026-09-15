@@ -2024,10 +2024,24 @@ inline plan plan_for(options opt = {}) {
     { std::error_code ec; fs::remove_all(work, ec); }
     std::vector<std::string> libInputs;
     // A library reaches `lib/<abi>/` stripped, as an action of its own, or
-    // copied as it is when the debug information is kept.
+    // copied as it is when the debug information is kept. A file that is not
+    // an ELF object -- an archive can carry anything under `jni/` -- is copied
+    // as it is with a warning, as the Android Gradle plugin packs a library it
+    // cannot strip.
+    const auto is_elf = [](const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        char magic[4] = {};
+        return in.read(magic, 4) && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+    };
     const auto place_library = [&](const std::string& so, const std::string& abi) {
         const fs::path dst = work / "lib" / abi / fs::path(so).filename();
         if (llvmStrip.empty()) {
+            collect_tree(so, dst, libInputs);
+            return;
+        }
+        if (!is_elf(so)) {
+            mcpp::warning(std::format(
+                "mcpp.dist.apk: {} is not an ELF object, so it is packed without being stripped.", so).c_str());
             collect_tree(so, dst, libInputs);
             return;
         }
