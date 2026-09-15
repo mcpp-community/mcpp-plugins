@@ -1,5 +1,6 @@
 // mcpp.dist.web -- the wasm32-emscripten stem family becomes a static
-// directory a browser can load, with an `index.html` this member writes.
+// directory a browser can load, with a page this member writes (`index.html`
+// unless `options::page` names another).
 //
 // WHY THIS IS NEITHER A RULE NOR A TOOL, AND WHY IT COMPILES NO TRANSLATION
 // UNIT. Same shape `dist/appimage.cppm` and `dist/apple.cppm` already state:
@@ -117,6 +118,14 @@ struct options {
     // `{{title}}` in the template. Empty means `[package] name`.
     std::string title;
 
+    // The page's file name inside the produced directory. Empty means
+    // `index.html`, what a static file server answers for the directory itself.
+    // A bare `*.html` name with no directory component: an Emscripten build
+    // through CMake names the page after the target (`<target>.html`), and a
+    // project that ships such a page keeps its name (#649 P2). A name with a
+    // separator, or without the `.html` extension, is refused at plan time.
+    std::string page;
+
     // Where the produced directory lands. Empty means `<out_dir>/web`.
     std::string output;
     std::string out_dir = std::string(mcpp::out_dir());
@@ -174,6 +183,25 @@ inline std::string target_for(const options& opt) {
     if (!opt.target.empty()) return opt.target;
     const char* n = mcpp::package_name();
     return (n && *n) ? std::string(n) : std::string();
+}
+
+// The page name `options::page` asks for, or the reason it cannot be used.
+// Bare, because the page is written beside the launcher it loads with a
+// relative `<script src>`; a page in a subdirectory would load nothing.
+inline std::expected<std::string, std::string> page_name(const options& opt) {
+    if (opt.page.empty()) return std::string("index.html");
+    const std::string& n = opt.page;
+    if (n.find('/') != std::string::npos || n.find('\\') != std::string::npos)
+        return std::unexpected(std::format(
+            "`options::page` names '{}', which has a directory component; the "
+            "page is written beside `<name>.js`, so it is a bare file name", n));
+    if (n == ".html" || n.size() <= 5 || !n.ends_with(".html"))
+        return std::unexpected(std::format(
+            "`options::page` names '{}', which is not a `*.html` file name", n));
+    if (n.starts_with("."))
+        return std::unexpected(std::format(
+            "`options::page` names '{}', a hidden file a server does not list", n));
+    return n;
 }
 
 inline std::string replace_all_copy(std::string s, std::string_view from, std::string_view to) {
@@ -261,6 +289,14 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
+    const auto pageFile = page_name(opt);
+    if (!pageFile) {
+        std::cerr << "mcpp.dist.web: " << pageFile.error() << '\n';
+        mcpp::warning(("mcpp.dist.web: " + pageFile.error()).c_str());
+        p.reason = "page name refused";
+        return p;
+    }
+
     if (!opt.template_file.empty()) {
         const std::string tpl =
             (std::filesystem::path(mcpp::manifest_dir()) / opt.template_file).string();
@@ -291,11 +327,14 @@ inline plan plan_for(options opt = {}) {
     const std::string webDir = !opt.output.empty() ? opt.output
                               : (std::filesystem::path(opt.out_dir) / "web").string();
 
+    // The side file carries the page name, so two packs of one program with
+    // different pages do not overwrite each other's rendering; the default
+    // keeps the name 0.11 wrote (`<target>-index.html`).
     const std::string indexSrc =
-        (std::filesystem::path(opt.out_dir) / (target + "-index.html")).string();
+        (std::filesystem::path(opt.out_dir) / (target + "-" + *pageFile)).string();
     if (!write_if_different(indexSrc, templateBytes)) {
         std::cerr << std::format("mcpp.dist.web: cannot write {}", indexSrc) << '\n';
-        p.reason = "cannot write index.html";
+        p.reason = std::format("cannot write {}", *pageFile);
         return p;
     }
 
@@ -363,9 +402,9 @@ inline plan plan_for(options opt = {}) {
     page.role        = "artifact";
     page.description = "INDEX.HTML";
     page.argv    = { "${mcpp.self}", "stage", "--verify", "content", "--output",
-                     webDir + "/index.html", indexSrc };
+                     webDir + "/" + *pageFile, indexSrc };
     page.inputs  = { indexSrc };
-    page.outputs = { webDir + "/index.html" };
+    page.outputs = { webDir + "/" + *pageFile };
     p.steps.push_back(std::move(page));
 
     p.applies = true;
