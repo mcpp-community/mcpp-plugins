@@ -44,6 +44,7 @@ plugins = { path = "../..", features = [
   "rules-spirv", "rules-sycl",
   "tools-embed", "tools-island",
   "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
+  "dist-apk-kotlin", "dist-apk-maven",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns
@@ -61,6 +62,11 @@ plugins = { path = "../..", features = [
 # every member's module is COMPILED on every host, and a member left out is a
 # member whose macOS and Windows compile is never attempted -- which is exactly
 # the failure the two platform-specific members are here to catch.
+#
+# `dist-apk-kotlin` and `dist-apk-maven` add no source: each implies `dist-apk`
+# and declares one payload on the `cfg(env = "android")` axis, which a host
+# build never opens. They are listed because a consumer names them, which is
+# what the CI step that reads this list counts.
 
 [build]
 sources = ["src/*.cpp"]

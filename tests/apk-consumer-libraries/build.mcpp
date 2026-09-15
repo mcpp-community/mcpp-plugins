@@ -1,0 +1,58 @@
+// dist-apk 0.11.0's criteria, selected by the environment variables
+// check-apk-libraries.sh sets, so that one fixture reaches each configuration:
+//
+//   APK_LIBS_UNSIGNED             non-empty: `options::sign = false`
+//   APK_LIBS_CONFLICT             non-empty: a manifest template whose
+//                                 `<meta-data>` disagrees with the library's
+//   APK_LIBS_MAVEN                non-empty: `options::maven` names
+//                                 androidx.startup:startup-runtime:1.1.1
+//   APK_LIBS_MAVEN_MORE           non-empty: and androidx.annotation:annotation:1.1.0,
+//                                 which the lock was not resolved for
+//   APK_LIBS_MAVEN_REPOSITORIES   space-separated repositories replacing the
+//                                 default two (a mirror, where Google's is slow)
+import std;
+import mcpp;
+import mcpp.dist.apk;
+
+int main() {
+    for (const char* v : {"APK_LIBS_UNSIGNED", "APK_LIBS_CONFLICT", "APK_LIBS_MAVEN",
+                          "APK_LIBS_MAVEN_MORE", "APK_LIBS_MAVEN_REPOSITORIES"})
+        mcpp::rerun_if_env_changed(v);
+    const auto set = [](const char* v) { const char* x = std::getenv(v); return x && *x; };
+
+    mcpp::dist::apk::options opt;
+    opt.target            = "apk-consumer-libraries";
+    opt.application_id    = "org.mcpp.apklibs";
+    opt.activity          = "org.mcpp.apklibs.MainActivity";
+    opt.kotlin_sources    = { "android/kotlin" };
+    opt.java_sources      = { "android/java" };
+    opt.resources         = "android/res";
+    opt.manifest_template = set("APK_LIBS_CONFLICT") ? "android/manifest-conflict.xml"
+                                                      : "android/manifest.xml";
+
+    mcpp::dist::apk::library lib;
+    lib.package        = "org.mcpp.apklibs.lib";
+    lib.resources      = "lib/res";
+    lib.manifest       = "lib/AndroidManifest.xml";
+    lib.assets         = "lib/assets";
+    lib.java_sources   = { "lib/java" };
+    lib.kotlin_sources = { "lib/kotlin" };
+    opt.libraries      = { lib };
+
+    // Built by make-archives.sh before the first pack.
+    opt.aars = { "target/archives/example.aar" };
+    opt.jars = { "target/archives/example.jar" };
+
+    if (set("APK_LIBS_UNSIGNED")) opt.sign = false;
+    if (set("APK_LIBS_MAVEN")) {
+        opt.maven = { "androidx.startup:startup-runtime:1.1.1" };
+        if (set("APK_LIBS_MAVEN_MORE")) opt.maven.push_back("androidx.annotation:annotation:1.1.0");
+        if (set("APK_LIBS_MAVEN_REPOSITORIES")) {
+            std::istringstream repos(std::getenv("APK_LIBS_MAVEN_REPOSITORIES"));
+            for (std::string r; repos >> r;) opt.maven_repositories.push_back(r);
+        }
+        opt.maven_lock  = "maven.lock";
+        opt.maven_cache = ".coursier-cache";
+    }
+    return mcpp::dist::apk::generate(opt) ? 0 : 1;
+}

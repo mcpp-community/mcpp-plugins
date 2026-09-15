@@ -21,5 +21,15 @@ int main() {
     // packed through a real `mcpp pack` on a host that could actually
     // invoke `codesign`, so no CI lane signs anything with this string.
     opt.identity = "Apple Development: Test (ABCDE12345)";
+    // 0.11.0's criteria (check-ios-plan.sh): a project's Info.plist entries, a
+    // provisioning profile, and a device row with no identity. Empty values
+    // leave the options as they are, because the script passes every variable
+    // to every row. The macOS runner's real pack names the first one too.
+    for (const char* v : {"IOS_APP_CONSUMER_INFO_PLIST", "IOS_APP_CONSUMER_PROFILE",
+                          "IOS_APP_CONSUMER_NO_IDENTITY"})
+        mcpp::rerun_if_env_changed(v);
+    if (const char* v = std::getenv("IOS_APP_CONSUMER_INFO_PLIST"); v && *v) opt.info_plist = v;
+    if (const char* v = std::getenv("IOS_APP_CONSUMER_PROFILE"); v && *v) opt.provisioning_profile = v;
+    if (const char* v = std::getenv("IOS_APP_CONSUMER_NO_IDENTITY"); v && *v) opt.identity.clear();
     return mcpp::dist::apple::generate(opt) ? 0 : 1;
 }

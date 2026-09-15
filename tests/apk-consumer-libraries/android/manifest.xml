@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="{{application_id}}"
+    android:versionCode="{{version_code}}" android:versionName="{{version_name}}">
+    <uses-sdk android:minSdkVersion="{{min_sdk}}" android:targetSdkVersion="{{target_sdk}}"/>
+    <!-- The library asks for the camera; this application removes the request. -->
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove"/>
+    <application android:label="{{label}}" android:hasCode="true">
+        <activity android:name="{{activity}}" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

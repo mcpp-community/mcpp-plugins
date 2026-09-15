@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lib_greeting">hello from the library</string>
+    <string name="shared_name">from the library</string>
+</resources>

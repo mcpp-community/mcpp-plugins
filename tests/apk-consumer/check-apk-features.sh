@@ -240,3 +240,21 @@ grep -q "versionName='0.3.0'" badging-h.log || fail "versionName is not the pack
 grep -q "versionCode='3000'" badging-h.log || fail "versionCode is not 3000 for 0.3.0" badging-h.log
 unset APK_CONSUMER_TEMPLATE
 echo "ok: the manifest carries versionName 0.3.0 and versionCode 3000 from the package version"
+
+# ── (i),(j) 0.11.0 refusals that need no payload ───────────────────────────
+#
+# (i) Kotlin sources in a project that named `dist-apk` alone: the compiler is
+# declared by `dist-apk-kotlin`, and the refusal names that feature. (j)
+# `sign = false` with a keystore: the two contradict, and the refusal says so.
+echo "== (i),(j) Kotlin without its feature, and an unsigned package with a keystore =="
+rm -rf target
+export APK_CONSUMER_KOTLIN=1
+"$MCPP" pack --format apk --target "$TARGET" > pack-i.log 2>&1 && fail "Kotlin sources without dist-apk-kotlin were packed" pack-i.log
+grep -q 'dist-apk-kotlin' pack-i.log || fail "the refusal does not name the dist-apk-kotlin feature" pack-i.log
+unset APK_CONSUMER_KOTLIN
+echo "ok: Kotlin sources without the dist-apk-kotlin feature are refused, naming it"
+export APK_CONSUMER_SIGN_CONFLICT=1
+"$MCPP" pack --format apk --target "$TARGET" > pack-j.log 2>&1 && fail "sign = false with a keystore was packed" pack-j.log
+grep -q 'opposite things' pack-j.log || fail "the refusal does not say the two options contradict" pack-j.log
+unset APK_CONSUMER_SIGN_CONFLICT
+echo "ok: sign = false with a keystore is refused"

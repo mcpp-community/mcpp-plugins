@@ -61,5 +61,17 @@ int main() {
         opt.java_sources = { root + "/java", root + "/../apk-consumer-external-java" };
     }
 
+    // (i) Kotlin sources in a project that named `dist-apk` and not
+    // `dist-apk-kotlin`: refused, naming the feature that declares the compiler.
+    if (const char* kt = std::getenv("APK_CONSUMER_KOTLIN"); kt && *kt) {
+        opt.activity       = "org.mcpp.apkconsumer.MainActivity";
+        opt.kotlin_sources = { root + "/java" };
+    }
+    // (j) `sign = false` with a keystore: refused, because the two contradict.
+    if (const char* sc = std::getenv("APK_CONSUMER_SIGN_CONFLICT"); sc && *sc) {
+        opt.sign     = false;
+        opt.keystore = "xim:android-debug-keystore";
+    }
+
     return mcpp::dist::apk::generate(opt) ? 0 : 1;
 }
