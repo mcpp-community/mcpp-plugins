@@ -122,6 +122,7 @@ run_row() {
         IOS_APP_CONSUMER_INFO_PLIST="${IOS_APP_CONSUMER_INFO_PLIST:-}" \
         IOS_APP_CONSUMER_PROFILE="${IOS_APP_CONSUMER_PROFILE:-}" \
         IOS_APP_CONSUMER_NO_IDENTITY="${IOS_APP_CONSUMER_NO_IDENTITY:-}" \
+        IOS_APP_CONSUMER_OMIT_KEYS="${IOS_APP_CONSUMER_OMIT_KEYS:-}" \
         "$BIN" > "$log" 2>&1
     echo "$out"
 }
@@ -249,6 +250,40 @@ grep -q 'mcpp.dist.apple.layout' /tmp/ios-plan-sim-derived.log \
     && fail "steps were planned although the Info.plist was refused" /tmp/ios-plan-sim-derived.log
 unset IOS_APP_CONSUMER_INFO_PLIST
 echo "ok: an entry this member derives is refused, naming the key"
+
+# ── 0.12.0 ─────────────────────────────────────────────────────────────────
+echo "== 0.12.0: options::omit_keys leaves a defaulted key out =="
+export IOS_APP_CONSUMER_OMIT_KEYS="LSRequiresIPhoneOS"
+outdir=$(run_row simomit ios sim /tmp/ios-plan-sim-omit.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+[ -f "$plist" ] || fail "no Info.plist written with options::omit_keys" /tmp/ios-plan-sim-omit.log
+grep -q '<key>LSRequiresIPhoneOS</key>' "$plist" && fail "LSRequiresIPhoneOS was written although omitted" "$plist"
+grep -q '<key>UIDeviceFamily</key>' "$plist" || fail "omitting one default removed another" "$plist"
+check_terminal_bundle /tmp/ios-plan-sim-omit.log
+export IOS_APP_CONSUMER_OMIT_KEYS="NSHighResolutionCapable,UIDeviceFamily"
+outdir=$(run_row macosomit macos "" /tmp/ios-plan-macos-omit.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+grep -q '<key>NSHighResolutionCapable</key>' "$plist" && fail "NSHighResolutionCapable was written on macOS although omitted" "$plist"
+grep -q '<key>CFBundleExecutable</key>' "$plist" || fail "the macOS plist lost a derived key" "$plist"
+echo "ok: an omitted default is not written, on iOS and on macOS, and the rest of the plist is unchanged"
+
+export IOS_APP_CONSUMER_OMIT_KEYS="CFBundleIdentifier"
+run_row simomitderived ios sim /tmp/ios-plan-sim-omit-derived.log > /dev/null
+grep -q 'names CFBundleIdentifier, which this member derives' /tmp/ios-plan-sim-omit-derived.log \
+    || fail "omitting a derived key was not refused by name" /tmp/ios-plan-sim-omit-derived.log
+grep -q 'mcpp.dist.apple.layout' /tmp/ios-plan-sim-omit-derived.log \
+    && fail "steps were planned although omit_keys was refused" /tmp/ios-plan-sim-omit-derived.log
+export IOS_APP_CONSUMER_OMIT_KEYS="NSCameraUsageDescription"
+run_row simomitother ios sim /tmp/ios-plan-sim-omit-other.log > /dev/null
+grep -q 'names NSCameraUsageDescription, which this member does not write' /tmp/ios-plan-sim-omit-other.log \
+    || fail "omitting a key this member does not default was not refused by name" /tmp/ios-plan-sim-omit-other.log
+export IOS_APP_CONSUMER_OMIT_KEYS="UIDeviceFamily"
+export IOS_APP_CONSUMER_INFO_PLIST="$PWD/info-plist/usage.plist"
+run_row simomitboth ios sim /tmp/ios-plan-sim-omit-both.log > /dev/null
+grep -q 'names UIDeviceFamily, and `options::info_plist`' /tmp/ios-plan-sim-omit-both.log \
+    || fail "a key both omitted and set by info_plist was not refused" /tmp/ios-plan-sim-omit-both.log
+unset IOS_APP_CONSUMER_OMIT_KEYS IOS_APP_CONSUMER_INFO_PLIST
+echo "ok: omitting a derived key, a key this member does not write, or a key info_plist sets is refused by name"
 
 # A provisioning profile is a CMS-signed plist; the member reads the plist from
 # between its markers, so a plan needs only those bytes framed by binary data.

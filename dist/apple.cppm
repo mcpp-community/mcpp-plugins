@@ -293,6 +293,17 @@ struct options {
     // `NSHighResolutionCapable`) are replaced by the project's value.
     std::string info_plist;
 
+    // DEFAULTED Info.plist KEYS TO LEAVE OUT (0.12.0). A property list has no
+    // null, so `info_plist` can replace a default's value but cannot remove the
+    // key; a project whose other build states neither `NSHighResolutionCapable`
+    // nor `LSRequiresIPhoneOS` names them here (#649 P1). Only the three keys
+    // this member defaults are accepted: a key it derives is refused by name, as
+    // `info_plist` refuses it, and so is any other key, which this member never
+    // writes. A key named here and also set by `info_plist` is refused, because
+    // the two statements contradict each other. A key that does not apply to the
+    // row (`UIDeviceFamily` on macOS) is accepted and changes nothing.
+    std::vector<std::string> omit_keys;
+
     // AN iOS DEVICE BUNDLE'S PROVISIONING PROFILE (0.11.0), manifest-relative or
     // absolute: embedded as `embedded.mobileprovision`, and, when `entitlements`
     // is empty, the source of the entitlements the bundle is signed with (the
@@ -948,6 +959,33 @@ inline plan plan_for(options opt = {}) {
         if (!read_info_plist_fragment(opt.info_plist, extraEntries, replacedKeys, message))
             return refuse(p, "unusable info_plist", message);
     }
+    for (std::size_t i = 0; i < opt.omit_keys.size(); ++i) {
+        const auto& key = opt.omit_keys[i];
+        if (std::ranges::find(derived_plist_keys(), key) != derived_plist_keys().end()) {
+            return refuse(p, "omit_keys names a derived key", std::format(
+                "mcpp.dist.apple: `options::omit_keys` names {}, which this member derives "
+                "from its options and the engine; a derived key cannot be omitted.", key));
+        }
+        if (std::ranges::find(defaulted_plist_keys(), key) == defaulted_plist_keys().end()) {
+            return refuse(p, "omit_keys names a key this member does not default", std::format(
+                "mcpp.dist.apple: `options::omit_keys` names {}, which this member does not "
+                "write; only UIDeviceFamily, LSRequiresIPhoneOS and NSHighResolutionCapable "
+                "can be omitted.", key));
+        }
+        if (std::find(opt.omit_keys.begin(), opt.omit_keys.begin() + static_cast<std::ptrdiff_t>(i), key)
+                != opt.omit_keys.begin() + static_cast<std::ptrdiff_t>(i)) {
+            return refuse(p, "omit_keys names a key twice", std::format(
+                "mcpp.dist.apple: `options::omit_keys` names {} twice.", key));
+        }
+        if (std::ranges::find(replacedKeys, key) != replacedKeys.end()) {
+            return refuse(p, "omit_keys and info_plist name one key", std::format(
+                "mcpp.dist.apple: `options::omit_keys` names {}, and `options::info_plist` ({}) "
+                "sets it; state one of the two.", key, opt.info_plist));
+        }
+    }
+    // An omitted default is written the way a replaced one is: not at all. The
+    // replaced list is what `plist_document` consults, so the two share it.
+    for (auto const& key : opt.omit_keys) replacedKeys.push_back(key);
     if (!opt.entitlements.empty() && !is_file(opt.entitlements)) {
         return refuse(p, "entitlements not found", std::format(
             "mcpp.dist.apple: the entitlements file {} was not found", opt.entitlements));
