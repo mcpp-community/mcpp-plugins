@@ -1,0 +1,22 @@
+# The library of `tests/apk-consumer-graph`: it states what it contributes to an
+# APK in `[package.metadata.dist-apk]`, with paths relative to this directory.
+[package]
+name        = "apk-graph-lib"
+namespace   = "mcpp"
+version     = "0.1.0"
+description = "Fixture: a library that contributes Android resources through the graph"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[package.metadata.dist-apk]
+package   = "org.mcpp.apkgraph.lib"
+resources = "res"
+
+[language]
+standard = "c++23"
+
+[targets.apk-graph-lib]
+kind = "lib"
+
+[build]
+sources = ["src/lib.cpp"]

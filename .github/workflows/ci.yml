@@ -1352,6 +1352,19 @@ jobs:
         working-directory: tests/apk-consumer-libraries
         run: MCPP="$MCPP" ./check-apk-libraries.sh
 
+      # LIBRARIES THE GRAPH CONTRIBUTES (0.12.0). `tests/apk-consumer-graph/lib`
+      # states `[package.metadata.dist-apk]`, and the application names it only
+      # as a dependency. Under an engine that gives the root build program the
+      # resolved graph (mcpp 2026.9.16.1+) the library's resource is in the APK,
+      # `graph_libraries = false` reads none, the application's own library wins
+      # a resource both define, and a malformed contribution is refused naming
+      # the package and the key; under an older engine the pack succeeds without
+      # the contribution. The script chooses its legs from `mcpp --version`.
+      - name: dist-apk collects the libraries the resolved graph contributes
+        timeout-minutes: 30
+        working-directory: tests/apk-consumer-graph
+        run: MCPP="$MCPP" ./check-apk-graph.sh
+
       # Compiles the device unit on a machine with no GPU: the clang route
       # produces sm_89 code from the payload toolkit. Running it needs a
       # device, so the run is of the CPU variant, which the same seam serves.

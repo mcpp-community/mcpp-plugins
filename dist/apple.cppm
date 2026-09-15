@@ -304,6 +304,24 @@ struct options {
     // row (`UIDeviceFamily` on macOS) is accepted and changes nothing.
     std::vector<std::string> omit_keys;
 
+    // Info.plist ENTRIES THE GRAPH CONTRIBUTES (0.12.0). With mcpp 2026.9.16.1
+    // the root project's build program receives the resolved graph, and every
+    // package in it other than the application that states
+    // `[package.metadata.dist-apple] info_plist = "<file>"` contributes that
+    // plist's entries, the path relative to the package's directory: a library
+    // that needs a usage description or a background mode states it once, and
+    // every application that depends on it carries it. The entries are applied
+    // in the graph's order, dependencies first, so a package overrides the
+    // packages it depends on, and the application's own `info_plist` is applied
+    // last and wins every key. The keys this member derives are refused in a
+    // contribution as in `info_plist`, naming the package; a key the application
+    // names in `omit_keys` is left out whoever contributes it.
+    //
+    // `false` reads no contribution. Under an older engine, or in a dependency's
+    // own build program, there is no graph, and nothing is contributed either
+    // way.
+    bool graph_info_plist = true;
+
     // AN iOS DEVICE BUNDLE'S PROVISIONING PROFILE (0.11.0), manifest-relative or
     // absolute: embedded as `embedded.mobileprovision`, and, when `entitlements`
     // is empty, the source of the entitlements the bundle is signed with (the
@@ -673,44 +691,52 @@ inline bool dict_entries(const mcpp::plugins::xml::node& dict,
     return true;
 }
 
-// Reads `options::info_plist`: the entries to add, as the plist text
-// `plist_document` inserts, and the defaulted keys they replace.
-inline bool read_info_plist_fragment(const std::string& path, std::string& entries,
-                                     std::vector<std::string>& replaced, std::string& message) {
+// One Info.plist entry a fragment states: its key and the plist text of the
+// `<key>` and its value, as `plist_document` inserts it.
+struct plist_entry {
+    std::string key;
+    std::string text;
+};
+
+// Reads one plist fragment's entries. `who` is how a diagnostic names the
+// fragment (`options::info_plist`, or a package's [package.metadata.dist-apple]).
+inline bool read_plist_entries(const std::string& path, const std::string& who,
+                               std::vector<plist_entry>& out, std::string& message) {
     namespace xml = mcpp::plugins::xml;
     xml::node root;
     std::string err;
     if (!xml::parse(read_text(path), root, err)) {
-        message = std::format("mcpp.dist.apple: `options::info_plist` ({}) cannot be read: {}", path, err);
+        message = std::format("mcpp.dist.apple: {} ({}) cannot be read: {}", who, path, err);
         return false;
     }
     const xml::node* dict = top_dict(root);
     if (!dict) {
-        message = std::format("mcpp.dist.apple: `options::info_plist` ({}) has no top-level <dict>.", path);
+        message = std::format("mcpp.dist.apple: {} ({}) has no top-level <dict>.", who, path);
         return false;
     }
     std::vector<std::pair<std::string, const xml::node*>> pairs;
     if (!dict_entries(*dict, pairs, err)) {
-        message = std::format("mcpp.dist.apple: `options::info_plist` ({}): {}", path, err);
+        message = std::format("mcpp.dist.apple: {} ({}): {}", who, path, err);
         return false;
     }
     std::vector<std::string> seen;
     for (auto const& [key, value] : pairs) {
         if (std::ranges::find(derived_plist_keys(), key) != derived_plist_keys().end()) {
             message = std::format(
-                "mcpp.dist.apple: `options::info_plist` ({}) sets {}, which this member derives "
-                "from its options and the engine; set the option instead.", path, key);
+                "mcpp.dist.apple: {} ({}) sets {}, which this member derives "
+                "from its options and the engine; set the option instead.", who, path, key);
             return false;
         }
         if (std::ranges::find(seen, key) != seen.end()) {
-            message = std::format("mcpp.dist.apple: `options::info_plist` ({}) sets {} twice.", path, key);
+            message = std::format("mcpp.dist.apple: {} ({}) sets {} twice.", who, path, key);
             return false;
         }
         seen.push_back(key);
-        if (std::ranges::find(defaulted_plist_keys(), key) != defaulted_plist_keys().end())
-            replaced.push_back(key);
-        entries += "    <key>" + key + "</key>\n";
-        xml::write(*value, entries, 1);
+        plist_entry e;
+        e.key  = key;
+        e.text = "    <key>" + key + "</key>\n";
+        xml::write(*value, e.text, 1);
+        out.push_back(std::move(e));
     }
     return true;
 }
@@ -949,6 +975,10 @@ inline plan plan_for(options opt = {}) {
     opt.provisioning_profile = resolve_path(opt.provisioning_profile);
     std::string extraEntries;
     std::vector<std::string> replacedKeys;
+    std::vector<std::string> contributedDefaults;
+    // The application's own entries, read first so that their refusals come
+    // before any contribution's; they are applied last.
+    std::vector<plist_entry> ownEntries;
     if (!opt.info_plist.empty()) {
         if (!is_file(opt.info_plist)) {
             return refuse(p, "info_plist not found", std::format(
@@ -956,8 +986,72 @@ inline plan plan_for(options opt = {}) {
         }
         mcpp::rerun_if_changed(opt.info_plist.c_str());
         std::string message;
-        if (!read_info_plist_fragment(opt.info_plist, extraEntries, replacedKeys, message))
+        if (!read_plist_entries(opt.info_plist, "`options::info_plist`", ownEntries, message))
             return refuse(p, "unusable info_plist", message);
+        for (auto const& e : ownEntries)
+            if (std::ranges::find(defaulted_plist_keys(), e.key) != defaulted_plist_keys().end())
+                replacedKeys.push_back(e.key);
+    }
+
+    // The entries the graph's packages contribute, in the graph's order
+    // (dependencies first), each replacing an earlier contribution of the same
+    // key; then the application's own, replacing any contribution.
+    std::vector<plist_entry> merged;
+    const auto apply_entries = [&](const std::vector<plist_entry>& list) {
+        for (auto const& e : list) {
+            auto it = std::ranges::find_if(merged, [&](const plist_entry& m) { return m.key == e.key; });
+            if (it != merged.end()) it->text = e.text;
+            else merged.push_back(e);
+        }
+    };
+    if (opt.graph_info_plist) {
+        auto graph = mcpp::plugins::graph::read();
+        if (!graph) {
+            return refuse(p, "unreadable graph document", std::format(
+                "mcpp.dist.apple: {}; the Info.plist entries its packages contribute cannot be "
+                "collected. Set `options::graph_info_plist = false` to read none.", graph.error()));
+        }
+        for (auto const& pkg : graph->packages) {
+            if (pkg.root) continue;
+            const auto* t = mcpp::plugins::graph::table_of(pkg, "dist-apple");
+            if (!t) continue;
+            const std::string who = std::format("the [package.metadata.dist-apple] of {}",
+                                                mcpp::plugins::graph::label_of(pkg));
+            for (auto const& [key, v] : t->members) {
+                if (key == "info_plist") continue;
+                mcpp::warning(std::format(
+                    "mcpp.dist.apple: {} states `{}`, which this version of the member does not "
+                    "read; it is ignored.", who, key).c_str());
+            }
+            const auto* ip = t->get("info_plist");
+            if (!ip) continue;
+            if (ip->type != mcpp::plugins::json::value::kind::string || ip->text.empty()) {
+                return refuse(p, "malformed graph contribution", std::format(
+                    "mcpp.dist.apple: {} states `info_plist` as something other than a path.", who));
+            }
+            const std::string path = mcpp::plugins::graph::resolve(pkg, ip->text);
+            if (!is_file(path)) {
+                return refuse(p, "contributed info_plist not found", std::format(
+                    "mcpp.dist.apple: {} names the Info.plist fragment {}, which was not found.", who, path));
+            }
+            mcpp::rerun_if_changed(path.c_str());
+            std::vector<plist_entry> list;
+            std::string message;
+            if (!read_plist_entries(path, who, list, message))
+                return refuse(p, "unusable contributed info_plist", message);
+            apply_entries(list);
+        }
+    }
+    // The application's own entries win; a key it omits is left out whoever
+    // contributed it. The omit_keys checks below still see only the
+    // application's own entries in `replacedKeys`.
+    apply_entries(ownEntries);
+    for (auto const& e : merged) {
+        if (std::ranges::find(opt.omit_keys, e.key) != opt.omit_keys.end()) continue;
+        extraEntries += e.text;
+        if (std::ranges::find(defaulted_plist_keys(), e.key) != defaulted_plist_keys().end()
+            && std::ranges::find(replacedKeys, e.key) == replacedKeys.end())
+            contributedDefaults.push_back(e.key);
     }
     for (std::size_t i = 0; i < opt.omit_keys.size(); ++i) {
         const auto& key = opt.omit_keys[i];
@@ -984,8 +1078,10 @@ inline plan plan_for(options opt = {}) {
         }
     }
     // An omitted default is written the way a replaced one is: not at all. The
-    // replaced list is what `plist_document` consults, so the two share it.
+    // replaced list is what `plist_document` consults, so the two share it, and
+    // a defaulted key a contribution states replaces the default the same way.
     for (auto const& key : opt.omit_keys) replacedKeys.push_back(key);
+    for (auto const& key : contributedDefaults) replacedKeys.push_back(key);
     if (!opt.entitlements.empty() && !is_file(opt.entitlements)) {
         return refuse(p, "entitlements not found", std::format(
             "mcpp.dist.apple: the entitlements file {} was not found", opt.entitlements));

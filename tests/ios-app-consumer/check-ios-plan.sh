@@ -123,6 +123,8 @@ run_row() {
         IOS_APP_CONSUMER_PROFILE="${IOS_APP_CONSUMER_PROFILE:-}" \
         IOS_APP_CONSUMER_NO_IDENTITY="${IOS_APP_CONSUMER_NO_IDENTITY:-}" \
         IOS_APP_CONSUMER_OMIT_KEYS="${IOS_APP_CONSUMER_OMIT_KEYS:-}" \
+        IOS_APP_CONSUMER_NO_GRAPH="${IOS_APP_CONSUMER_NO_GRAPH:-}" \
+        MCPP_GRAPH_FILE="${IOS_APP_CONSUMER_GRAPH_FILE:-}" \
         "$BIN" > "$log" 2>&1
     echo "$out"
 }
@@ -284,6 +286,95 @@ grep -q 'names UIDeviceFamily, and `options::info_plist`' /tmp/ios-plan-sim-omit
     || fail "a key both omitted and set by info_plist was not refused" /tmp/ios-plan-sim-omit-both.log
 unset IOS_APP_CONSUMER_OMIT_KEYS IOS_APP_CONSUMER_INFO_PLIST
 echo "ok: omitting a derived key, a key this member does not write, or a key info_plist sets is refused by name"
+
+# ── 0.12.0: Info.plist entries the graph contributes ────────────────────────
+#
+# The document the engine gives the root build program (mcpp 2026.9.16.1,
+# `MCPP_GRAPH_FILE`), written here for three packages below the application:
+# `example.graph-a` states graph-a.plist, `example.graph-b` depends on it and
+# states graph-b.plist, and the application states a table of its own, which the
+# member ignores because the application's entries are its own `info_plist`.
+write_graph() {  # write_graph <file> <path of b's fragment>
+    cat > "$1" <<G
+{"kind":"mcpp.graph","version":1,"packages":[
+ {"package":{"canonical":"example.graph-a@0.1.0","namespace":"example","name":"graph-a","version":"0.1.0","source":"path"},
+  "root":false,"requested_by":[],"manifest_dir":"$PWD/info-plist","features":[],"targets":[],
+  "metadata":{"dist-apple":{"info_plist":"graph-a.plist"}}},
+ {"package":{"canonical":"example.graph-b@0.1.0","namespace":"example","name":"graph-b","version":"0.1.0","source":"path"},
+  "root":false,"requested_by":[],"manifest_dir":"$PWD/info-plist","features":[],"targets":[],
+  "metadata":{"dist-apple":{"info_plist":"$2"}}},
+ {"package":{"canonical":"mcpplibs.ios-app-consumer@0.3.0","namespace":"mcpplibs","name":"ios-app-consumer","version":"0.3.0","source":"path"},
+  "root":true,"requested_by":[],"manifest_dir":"$PWD","features":[],"targets":[],
+  "metadata":{"dist-apple":{"info_plist":"info-plist/derived.plist"}}}
+]}
+G
+}
+GRAPH=$(mktemp)
+export IOS_APP_CONSUMER_GRAPH_FILE="$GRAPH"
+
+echo "== 0.12.0: the graph's Info.plist entries, dependencies first =="
+write_graph "$GRAPH" graph-b.plist
+outdir=$(run_row simgraph ios sim /tmp/ios-plan-sim-graph.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+[ -f "$plist" ] || fail "no Info.plist written with a graph document" /tmp/ios-plan-sim-graph.log
+python3 - "$plist" <<'PY2' || fail "the graph's entries are not merged in the graph's order" "$plist"
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+assert d["NSLocationWhenInUseUsageDescription"] == "from A", d
+assert d["NSMicrophoneUsageDescription"] == "from B", d
+assert d["NSCameraUsageDescription"] == "from B", d
+assert d["UIDeviceFamily"] == [2], d["UIDeviceFamily"]
+assert d["CFBundleName"] != "NotTheApplication", d
+PY2
+[ "$(grep -c '<key>UIDeviceFamily</key>' "$plist")" -eq 1 ] || fail "a contributed default is stated more than once" "$plist"
+check_terminal_bundle /tmp/ios-plan-sim-graph.log
+echo "ok: a package's entry overrides the package it depends on, a contributed default replaces the member's, and the application's own table is not read as a contribution"
+
+echo "== 0.12.0: the application's own entries win, and omit_keys applies to contributions =="
+export IOS_APP_CONSUMER_INFO_PLIST="$PWD/info-plist/usage.plist"
+outdir=$(run_row simgraphown ios sim /tmp/ios-plan-sim-graph-own.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+python3 - "$plist" <<'PY2' || fail "the application's own entries do not win over the graph's" "$plist"
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+assert d["NSCameraUsageDescription"].startswith("Scans"), d
+assert d["UIDeviceFamily"] == [1], d["UIDeviceFamily"]
+assert d["NSMicrophoneUsageDescription"] == "from B", d
+PY2
+unset IOS_APP_CONSUMER_INFO_PLIST
+export IOS_APP_CONSUMER_OMIT_KEYS="UIDeviceFamily"
+outdir=$(run_row simgraphomit ios sim /tmp/ios-plan-sim-graph-omit.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+[ -f "$plist" ] || fail "omitting a key a contribution states was refused" /tmp/ios-plan-sim-graph-omit.log
+grep -q '<key>UIDeviceFamily</key>' "$plist" && fail "a key the application omits was written from a contribution" "$plist"
+unset IOS_APP_CONSUMER_OMIT_KEYS
+echo "ok: the application's info_plist wins every key, and a key it omits is left out whoever contributes it"
+
+echo "== 0.12.0: options::graph_info_plist = false reads no contribution =="
+export IOS_APP_CONSUMER_NO_GRAPH=1
+outdir=$(run_row simnograph ios sim /tmp/ios-plan-sim-nograph.log)
+plist="$outdir/IosAppConsumer-Info.plist"
+grep -q 'NSLocationWhenInUseUsageDescription' "$plist" && fail "graph_info_plist = false still merged a contribution" "$plist"
+unset IOS_APP_CONSUMER_NO_GRAPH
+echo "ok: no contribution is read"
+
+echo "== 0.12.0: a contribution may not state a derived key, and the refusal names the package =="
+write_graph "$GRAPH" graph-derived.plist
+run_row simgraphderived ios sim /tmp/ios-plan-sim-graph-derived.log > /dev/null
+grep -q 'the \[package.metadata.dist-apple\] of example.graph-b@0.1.0 (.*graph-derived.plist) sets CFBundleName, which this member derives' /tmp/ios-plan-sim-graph-derived.log \
+    || fail "a contributed derived key was not refused naming the package" /tmp/ios-plan-sim-graph-derived.log
+grep -q 'mcpp.dist.apple.layout' /tmp/ios-plan-sim-graph-derived.log \
+    && fail "steps were planned although a contribution was refused" /tmp/ios-plan-sim-graph-derived.log
+echo "ok: the refusal names example.graph-b@0.1.0 and CFBundleName"
+
+echo "== 0.12.0: a graph document that cannot be read is refused =="
+export IOS_APP_CONSUMER_GRAPH_FILE="$GRAPH.missing"
+run_row simgraphmissing ios sim /tmp/ios-plan-sim-graph-missing.log > /dev/null
+grep -q 'cannot be read' /tmp/ios-plan-sim-graph-missing.log \
+    || fail "a graph document that does not exist was not refused" /tmp/ios-plan-sim-graph-missing.log
+unset IOS_APP_CONSUMER_GRAPH_FILE
+rm -f "$GRAPH"
+echo "ok: a named graph document that cannot be read is refused rather than read as no contributions"
 
 # A provisioning profile is a CMS-signed plist; the member reads the plist from
 # between its markers, so a plan needs only those bytes framed by binary data.
