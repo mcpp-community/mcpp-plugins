@@ -80,10 +80,14 @@ struct options {
     // here is visible only to a desktop launcher, never to a build.
     bool terminal = true;
 
-    // A PNG a project supplies. Empty uses the built-in placeholder, which
-    // exists so that an AppImage can be produced with nothing declared:
-    // appimagetool requires an icon and refuses without one, and a member whose
-    // first use needs a graphic asset is a member nobody tries.
+    // A PNG or, from 0.11.1, an SVG a project supplies. The desktop entry
+    // names the icon without an extension and a reader -- appimagetool, a
+    // desktop's icon lookup -- finds it by the file's, so the file keeps the
+    // one it was supplied with; any other is refused. Empty uses the built-in
+    // placeholder, which exists so that an AppImage can be produced with
+    // nothing declared: appimagetool requires an icon and refuses without one,
+    // and a member whose first use needs a graphic asset is a member nobody
+    // tries.
     std::string icon;
 
     // An explicit `appimagetool` wins over discovery. Set it to pin a build
@@ -365,12 +369,33 @@ inline plan plan_for(options opt = {}) {
     const auto launcher_rel = mcpp::plugins::names::relative_to(launcher, stage);
 
     // ── The three files AppImage requires, written into the staged tree ────
+    std::string iconExtension = ".png";
+    if (!opt.icon.empty()) {
+        iconExtension = std::filesystem::path(opt.icon).extension().string();
+        for (char& c : iconExtension) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (iconExtension != ".png" && iconExtension != ".svg") {
+            // Also a warning: the engine discards a build program's stderr when it exits 0.
+            const std::string message = std::format(
+                "mcpp.dist.appimage: the icon {} is neither a .png nor an .svg, the two "
+                "formats a desktop entry's icon is read in.", opt.icon);
+            std::cerr << message << '\n';
+            mcpp::warning(message.c_str());
+            p.reason = "icon format";
+            return p;
+        }
+    }
     const std::string name = app_name_for(opt);
     const auto stagePath   = std::filesystem::path(stage);
     const auto desktop     = stagePath / (name + ".desktop");
-    const auto icon        = stagePath / (name + ".png");
+    const auto icon        = stagePath / (name + iconExtension);
     const auto dirIcon     = stagePath / ".DirIcon";
     const auto runFile     = stagePath / "AppRun";
+    // The other format's file from an earlier pack of this tree: appimagetool
+    // takes a PNG over an SVG of the same name.
+    {
+        std::error_code ec;
+        std::filesystem::remove(stagePath / (name + (iconExtension == ".png" ? ".svg" : ".png")), ec);
+    }
 
     std::string iconBytes;
     if (!opt.icon.empty()) {
@@ -481,7 +506,7 @@ inline bool submit(const plan& p) {
         const auto name = e.path().filename().string();
         if (e.path().parent_path() == std::filesystem::path(p.appdir)
             && (name == "AppRun" || name == ".DirIcon"
-                || name.ends_with(".desktop") || name.ends_with(".png")))
+                || name.ends_with(".desktop") || name.ends_with(".png") || name.ends_with(".svg")))
             continue;
         ++carried;
     }

@@ -258,3 +258,53 @@ export APK_CONSUMER_SIGN_CONFLICT=1
 grep -q 'opposite things' pack-j.log || fail "the refusal does not say the two options contradict" pack-j.log
 unset APK_CONSUMER_SIGN_CONFLICT
 echo "ok: sign = false with a keystore is refused"
+
+# ── (k),(l) 0.11.1: native libraries as the Android Gradle plugin packs them ─
+#
+# (k) A packed library is stripped with the build's own llvm-strip
+# (`--strip-unneeded`: no symbol table and no debug information, the dynamic
+# symbols kept), and a package whose manifest states nothing stores it
+# compressed, as before. A manifest stating `android:extractNativeLibs="false"`
+# gets it stored uncompressed and aligned to a 16 KB page, which the platform
+# needs to load it from the APK in place. (l) `keep_debug_symbols` packs the
+# library as the engine staged it.
+LIB=lib/x86_64/libapk-consumer.so
+method_of() { unzip -v "$1" | awk -v name="$LIB" '$NF == name { print $2 }'; }
+
+echo "== (k) a stripped library, stored and 16 KB-aligned when loaded in place =="
+rm -rf target k
+unset APK_CONSUMER_TEMPLATE APK_CONSUMER_KEEP_DEBUG_SYMBOLS || true
+"$MCPP" pack --format apk --target "$TARGET" > pack-k1.log 2>&1 || fail "pack failed" pack-k1.log
+APK=$(find target -name 'apk-consumer.apk' | head -1)
+[ -n "$APK" ] || fail "no apk-consumer.apk" pack-k1.log
+mkdir -p k && unzip -q -o "$APK" "$LIB" -d k
+readelf -S "k/$LIB" > sections-k1.log
+if grep -qE '\.symtab|\.debug_' sections-k1.log; then fail "the packed library keeps its symbol table or debug information" sections-k1.log; fi
+readelf --dyn-syms -W "k/$LIB" > dynsym-k1.log
+grep -q 'ANativeActivity_onCreate' dynsym-k1.log || fail "stripping dropped the entry point the platform calls" dynsym-k1.log
+[ "$(method_of "$APK")" != Stored ] || fail "a manifest stating nothing got its library stored uncompressed" pack-k1.log
+
+rm -rf target
+export APK_CONSUMER_TEMPLATE=manifest-template-in-place.xml
+"$MCPP" pack --format apk --target "$TARGET" > pack-k2.log 2>&1 || fail "pack failed" pack-k2.log
+APK=$(find target -name 'apk-consumer.apk' | head -1)
+[ -n "$APK" ] || fail "no apk-consumer.apk" pack-k2.log
+[ "$(method_of "$APK")" = Stored ] || fail "a library loaded in place is stored compressed" pack-k2.log
+"$BT/zipalign" -c -P 16 4 "$APK" > align-k2.log 2>&1 || fail "the library is not aligned to a 16 KB page" align-k2.log
+"$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml > xmltree-k2.log 2>&1
+grep -q 'extractNativeLibs.*=false' xmltree-k2.log || fail "the manifest does not state extractNativeLibs=false" xmltree-k2.log
+unset APK_CONSUMER_TEMPLATE
+echo "ok: the library is stripped, compressed by default, and stored on a 16 KB page when loaded in place"
+
+echo "== (l) keep_debug_symbols =="
+rm -rf target k
+export APK_CONSUMER_KEEP_DEBUG_SYMBOLS=1
+"$MCPP" pack --format apk --target "$TARGET" > pack-l.log 2>&1 || fail "pack failed" pack-l.log
+APK=$(find target -name 'apk-consumer.apk' | head -1)
+[ -n "$APK" ] || fail "no apk-consumer.apk" pack-l.log
+mkdir -p k && unzip -q -o "$APK" "$LIB" -d k
+readelf -S "k/$LIB" > sections-l.log
+grep -q '\.symtab' sections-l.log || fail "keep_debug_symbols packed a stripped library" sections-l.log
+unset APK_CONSUMER_KEEP_DEBUG_SYMBOLS
+rm -rf k
+echo "ok: keep_debug_symbols packs the library with its symbol table"

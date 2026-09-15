@@ -72,6 +72,10 @@ int main() {
         opt.sign     = false;
         opt.keystore = "xim:android-debug-keystore";
     }
+    // (l) the native libraries as the engine staged them, symbol table and all.
+    if (const char* keep = std::getenv("APK_CONSUMER_KEEP_DEBUG_SYMBOLS"); keep && *keep) {
+        opt.keep_debug_symbols = true;
+    }
 
     return mcpp::dist::apk::generate(opt) ? 0 : 1;
 }
