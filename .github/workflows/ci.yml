@@ -1164,6 +1164,29 @@ jobs:
           fi
           echo "ok: one AppImage, and it printed the program's output"
 
+          # AN SVG ICON KEEPS ITS FORMAT (0.11.1): the desktop entry names the
+          # icon without an extension and appimagetool finds it by the file's,
+          # so the image carries `<name>.svg` with the supplied bytes and no
+          # PNG of that name. A format no desktop entry reads is refused.
+          APPIMAGE_CONSUMER_ICON="$PWD/assets/icon.svg" "$MCPP" pack --format appimage | tee pack-svg.log
+          img=$(find target -name '*.AppImage' | head -1)
+          rm -rf squashfs-root
+          APPIMAGE_EXTRACT_AND_RUN=1 "$img" --appimage-extract > /dev/null
+          cmp assets/icon.svg squashfs-root/AppimageConsumer.svg \
+            || { echo "FAIL: the image does not carry the SVG icon"; ls -la squashfs-root; exit 1; }
+          test ! -e squashfs-root/AppimageConsumer.png \
+            || { echo "FAIL: the placeholder PNG is still beside the SVG"; exit 1; }
+          grep -qx 'Icon=AppimageConsumer' squashfs-root/AppimageConsumer.desktop \
+            || { echo "FAIL: the desktop entry does not name the icon"; exit 1; }
+          cp assets/icon.svg assets/icon.jpg
+          set +e
+          APPIMAGE_CONSUMER_ICON="$PWD/assets/icon.jpg" "$MCPP" pack --format appimage > pack-jpg.log 2>&1
+          set -e
+          grep -q 'neither a .png nor an .svg' pack-jpg.log \
+            || { cat pack-jpg.log; echo "FAIL: a .jpg icon was not refused by name"; exit 1; }
+          rm -f assets/icon.jpg
+          echo "ok: an SVG icon is packed as an SVG, and a .jpg is refused"
+
       # THE iOS ROW OF `dist-apple`, AT THE PLAN LEVEL (#622 B1). No runner
       # in this workflow has an Apple SDK, so `--target aarch64-ios-sim`
       # refuses before `build.mcpp` even runs -- see

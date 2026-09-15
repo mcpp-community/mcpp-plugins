@@ -215,6 +215,14 @@ struct options {
     // things.
     bool sign = true;
 
+    // `true` packs the native libraries as the engine staged them (0.11.1).
+    // By default each is stripped with the build's own `llvm-strip
+    // --strip-unneeded`, which keeps the dynamic symbols the loader reads and
+    // drops the symbol table and the debug information -- what the Android
+    // Gradle plugin does to every library it packages, and what `mcpp pack`
+    // reports it did.
+    bool keep_debug_symbols = false;
+
     // LEVEL 1, KOTLIN (0.11.0). One or more directories of `.kt` sources,
     // compiled by `kotlinc` with every Java root as its reference sources,
     // before `javac` compiles the Java against the Kotlin classes; the Kotlin
@@ -1336,6 +1344,19 @@ inline std::vector<std::string> shared_objects_in(const fs::path& dir) {
     return out;
 }
 
+// Does the manifest ask for the native libraries to be loaded from the APK in
+// place (`<application android:extractNativeLibs="false">`, 0.11.1)? The
+// platform can map a library only from an entry stored uncompressed on a page
+// boundary, so such a package is laid out that way; a compressed library in it
+// fails to install.
+inline bool loads_native_libraries_in_place(const std::string& manifest) {
+    xml::node root;
+    std::string error;
+    if (!xml::parse(manifest, root, error) || root.name != "manifest") return false;
+    const xml::node* application = find_child(root, "application");
+    return application && xml::attr_of(*application, "android:extractNativeLibs") == "false";
+}
+
 // ─── Plan ──────────────────────────────────────────────────────────────────
 
 inline plan plan_for(options opt = {}) {
@@ -1975,6 +1996,22 @@ inline plan plan_for(options opt = {}) {
         return refuse(p, "cannot write AndroidManifest.xml", std::format(
             "mcpp.dist.apk: cannot write {}.", manifestPath));
     }
+    const bool inPlaceLibraries = loads_native_libraries_in_place(manifestBytes);
+
+    // THE BUILD'S OWN llvm-strip (0.11.1): the one beside the compiler mcpp
+    // resolved for this row, the NDK's.
+    std::string llvmStrip;
+    if (!opt.keep_debug_symbols) {
+        const std::string toolchain = mcpp::toolchain_dir();
+        const fs::path candidate = fs::path(toolchain) / "bin" / "llvm-strip";
+        if (!toolchain.empty() && is_file(candidate.string())) {
+            llvmStrip = candidate.string();
+        } else {
+            mcpp::warning(std::format(
+                "mcpp.dist.apk: no llvm-strip beside the toolchain ({}); the native libraries are packed "
+                "with their debug information.", toolchain.empty() ? "none reported" : toolchain).c_str());
+        }
+    }
 
     // ── the temporary staging tree: lib/<abi>/, assets/ ─────────────────
     //
@@ -1986,9 +2023,29 @@ inline plan plan_for(options opt = {}) {
     const fs::path work = outDir / "stage";
     { std::error_code ec; fs::remove_all(work, ec); }
     std::vector<std::string> libInputs;
+    // A library reaches `lib/<abi>/` stripped, as an action of its own, or
+    // copied as it is when the debug information is kept.
+    const auto place_library = [&](const std::string& so, const std::string& abi) {
+        const fs::path dst = work / "lib" / abi / fs::path(so).filename();
+        if (llvmStrip.empty()) {
+            collect_tree(so, dst, libInputs);
+            return;
+        }
+        std::error_code ec;
+        fs::create_directories(dst.parent_path(), ec);
+        step strip;
+        strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, fs::path(so).filename().string());
+        strip.role        = "artifact";
+        strip.description = "LLVM-STRIP " + abi + "/" + fs::path(so).filename().string();
+        strip.output      = dst.string();
+        strip.argv        = { llvmStrip, "--strip-unneeded", "-o", strip.output, so };
+        strip.inputs      = { so };
+        p.steps.push_back(strip);
+        libInputs.push_back(strip.output);
+    };
     for (auto const& leg : legs)
         for (auto const& so : leg.libraries)
-            collect_tree(so, work / "lib" / leg.abi / fs::path(so).filename(), libInputs);
+            place_library(so, leg.abi);
 
     // An AAR's native libraries, for every ABI this package carries.
     for (auto const& c : contributions) {
@@ -2002,7 +2059,7 @@ inline plan plan_for(options opt = {}) {
                 continue;
             }
             for (auto const& so : shared_objects_in(abiDir))
-                collect_tree(so, work / "lib" / leg.abi / fs::path(so).filename(), libInputs);
+                place_library(so, leg.abi);
         }
     }
 
@@ -2049,17 +2106,21 @@ inline plan plan_for(options opt = {}) {
     // dex with `jar`: aapt2 has no flag for native libraries.
     // `--dex <dir>` adds every `classes*.dex` d8 wrote there: a package whose
     // classes pass the 64K-method limit of one dex gets `classes2.dex` and on,
-    // and which of them exist is known only when d8 has run.
+    // and which of them exist is known only when d8 has run. `--stored <dir>
+    // <entry>` adds an entry uncompressed, which native libraries loaded in
+    // place must be.
     const std::string copyThenJar = helper("copy-then-jar.sh",
         "#!/bin/sh\n"
         "# mcpp.dist.apk helper. Do not edit.\n"
-        "# copy-then-jar.sh <src> <dst> <jar> [--dex <dir>] <jar update arguments>...\n"
+        "# copy-then-jar.sh <src> <dst> <jar> [--dex <dir>] [--stored <dir> <entry>] <jar update arguments>...\n"
         "set -e\n"
         "src=\"$1\"; dst=\"$2\"; jar=\"$3\"; shift 3\n"
-        "dex=\"\"\n"
+        "dex=\"\"; stored_dir=\"\"; stored=\"\"\n"
         "if [ \"${1:-}\" = --dex ]; then dex=\"$2\"; shift 2; fi\n"
+        "if [ \"${1:-}\" = --stored ]; then stored_dir=\"$2\"; stored=\"$3\"; shift 3; fi\n"
         "cp \"$src\" \"$dst\"\n"
-        "\"$jar\" uf \"$dst\" \"$@\"\n"
+        "if [ -n \"$stored\" ]; then \"$jar\" --update --no-compress --file \"$dst\" -C \"$stored_dir\" \"$stored\"; fi\n"
+        "if [ \"$#\" -gt 0 ]; then \"$jar\" uf \"$dst\" \"$@\"; fi\n"
         "if [ -n \"$dex\" ]; then (cd \"$dex\" && \"$jar\" uf \"$dst\" classes*.dex); fi\n");
     const std::string runAndStamp = helper("run-and-stamp.sh",
         "#!/bin/sh\n"
@@ -2408,15 +2469,19 @@ inline plan plan_for(options opt = {}) {
     libs.role = "artifact";
     libs.description = "APK LIBS+ASSETS";
     libs.output = (outDir / "withlibs.apk").string();
-    libs.argv = { copyThenJar, link.output, libs.output, jar,
-                 "-C", work.string(), "lib",
-                 "-C", work.string(), "assets" };
+    libs.argv = { copyThenJar, link.output, libs.output, jar };
     if (!javaOutputs.empty()) {
         // After the three fixed operands and before the `jar` arguments: see
         // `copy-then-jar.sh`.
-        libs.argv.insert(libs.argv.begin() + 4, (outDir / "dex").string());
-        libs.argv.insert(libs.argv.begin() + 4, "--dex");
+        libs.argv.push_back("--dex");
+        libs.argv.push_back((outDir / "dex").string());
     }
+    if (inPlaceLibraries) {
+        libs.argv.insert(libs.argv.end(), { "--stored", work.string(), "lib" });
+    } else {
+        libs.argv.insert(libs.argv.end(), { "-C", work.string(), "lib" });
+    }
+    libs.argv.insert(libs.argv.end(), { "-C", work.string(), "assets" });
     libs.inputs = { link.output };
     for (auto const& f : libInputs)   libs.inputs.push_back(f);
     for (auto const& f : assetInputs) libs.inputs.push_back(f);
@@ -2435,7 +2500,12 @@ inline plan plan_for(options opt = {}) {
     // output already exists ("Output file '...' exists"), which every
     // rebuild after the first hits, because ninja does not delete a stale
     // output before an edge reruns it.
-    align.argv = { zipalign, "-f", "-p", "4", libs.output, align.output };
+    // A library loaded in place is aligned to a 16 KB page, which a 4 KB
+    // device reads as well; `apksigner sign` aligns a stored library to the
+    // same 16 KB by default, so a signed package keeps it.
+    align.argv = inPlaceLibraries
+        ? std::vector<std::string>{ zipalign, "-f", "-P", "16", "4", libs.output, align.output }
+        : std::vector<std::string>{ zipalign, "-f", "-p", "4", libs.output, align.output };
     align.inputs = { libs.output };
     p.steps.push_back(align);
     if (!opt.sign) {

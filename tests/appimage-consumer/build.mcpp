@@ -10,6 +10,10 @@ int main() {
     mcpp::dist::appimage::options opt;
     opt.target   = "appimage-consumer";
     opt.app_name = "AppimageConsumer";
+    // An icon a project supplies, which CI sets to an SVG and to a format a
+    // desktop entry cannot name (0.11.1); unset keeps the built-in placeholder.
+    mcpp::rerun_if_env_changed("APPIMAGE_CONSUMER_ICON");
+    if (const char* icon = std::getenv("APPIMAGE_CONSUMER_ICON"); icon && *icon) opt.icon = icon;
     // Everything else comes from `[package]`: the version, the description and
     // the licence are values mcpp has already parsed, and a copy here would
     // drift from the manifest with nothing able to detect it.
