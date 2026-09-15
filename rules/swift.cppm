@@ -308,12 +308,25 @@ inline bool compile(std::span<const std::string> sources, options opt = {}) {
     const std::string object = (gen / (module + ".o")).string();
     {
         const std::string id   = "swift-object:" + module;
+        const std::string dep  = (gen / (module + ".d")).string();
         const std::string desc = "SWIFTC " + module;
         mcpp::action o;
         o.id          = id.c_str();
         o.role        = "object";     // joins the link of every image of the package
         o.description = desc.c_str();
         common(o);
+        // WHAT THE MODULE READS BESIDES ITS OWN SOURCES, which only the
+        // compiler knows: a bridging header's own includes, and any header the
+        // module imports through it. swiftc writes the same Makefile-style
+        // dependency file clang does, so the engine's depfile handling reads it
+        // unchanged. Without it a bridged header could change with no rebuild,
+        // which is what this repository's "every rule declares a depfile"
+        // check exists to prevent.
+        // The DRIVER's spelling. `-emit-dependencies-path` is a frontend flag
+        // and `swiftc` refuses it; `-emit-dependencies` writes the file beside
+        // the output named by `-o`, which is `dep` below.
+        o.arg("-emit-dependencies");
+        o.depfile = dep.c_str();
         o.arg("-wmo").arg("-emit-object").arg("-o").arg(object.c_str());
         o.output(object.c_str());
         o.submit();
