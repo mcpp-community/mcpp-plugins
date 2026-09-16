@@ -26,10 +26,24 @@ int main() {
     // leave the options as they are, because the script passes every variable
     // to every row. The macOS runner's real pack names the first one too.
     for (const char* v : {"IOS_APP_CONSUMER_INFO_PLIST", "IOS_APP_CONSUMER_PROFILE",
-                          "IOS_APP_CONSUMER_NO_IDENTITY"})
+                          "IOS_APP_CONSUMER_NO_IDENTITY", "IOS_APP_CONSUMER_OMIT_KEYS",
+                          "IOS_APP_CONSUMER_NO_GRAPH"})
         mcpp::rerun_if_env_changed(v);
+    // 0.12.0: `options::omit_keys`, comma-separated in the variable.
+    if (const char* v = std::getenv("IOS_APP_CONSUMER_OMIT_KEYS"); v && *v) {
+        std::string list = v;
+        for (std::size_t b = 0; b <= list.size();) {
+            const auto e = list.find(',', b);
+            const auto key = list.substr(b, e == std::string::npos ? std::string::npos : e - b);
+            if (!key.empty()) opt.omit_keys.push_back(key);
+            if (e == std::string::npos) break;
+            b = e + 1;
+        }
+    }
     if (const char* v = std::getenv("IOS_APP_CONSUMER_INFO_PLIST"); v && *v) opt.info_plist = v;
     if (const char* v = std::getenv("IOS_APP_CONSUMER_PROFILE"); v && *v) opt.provisioning_profile = v;
     if (const char* v = std::getenv("IOS_APP_CONSUMER_NO_IDENTITY"); v && *v) opt.identity.clear();
+    // 0.12.0: `options::graph_info_plist = false`.
+    if (const char* v = std::getenv("IOS_APP_CONSUMER_NO_GRAPH"); v && *v) opt.graph_info_plist = false;
     return mcpp::dist::apple::generate(opt) ? 0 : 1;
 }

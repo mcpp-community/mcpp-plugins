@@ -1,0 +1,26 @@
+// dist-apk 0.12.0's graph contribution, with two configurations selected by the
+// environment check-apk-graph.sh sets:
+//
+//   APK_GRAPH_OFF  non-empty: `options::graph_libraries = false`
+//   APK_GRAPH_OWN  non-empty: an application library defining the same string
+//                  resource the graph's library defines
+import std;
+import mcpp;
+import mcpp.dist.apk;
+
+int main() {
+    for (const char* v : {"APK_GRAPH_OFF", "APK_GRAPH_OWN"}) mcpp::rerun_if_env_changed(v);
+    const auto set = [](const char* v) { const char* x = std::getenv(v); return x && *x; };
+
+    mcpp::dist::apk::options opt;
+    opt.target         = "apk-consumer-graph";
+    opt.application_id = "org.mcpp.apkgraph";
+    if (set("APK_GRAPH_OFF")) opt.graph_libraries = false;
+    if (set("APK_GRAPH_OWN")) {
+        mcpp::dist::apk::library own;
+        own.package   = "org.mcpp.apkgraph.own";
+        own.resources = "app-res";
+        opt.libraries = { own };
+    }
+    return mcpp::dist::apk::generate(opt) ? 0 : 1;
+}

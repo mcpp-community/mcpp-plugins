@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An application's own library defining the resource the graph's library
+     defines, for the check that the application's entries rank above the graph's. -->
+<resources>
+    <string name="graph_contribution_marker">from-the-application</string>
+</resources>

@@ -1,0 +1,24 @@
+# The deeper library of `tests/apk-consumer-graph`: `lib/` depends on it, so it
+# is further from the application than `lib/` is. Both contribute an asset of
+# the same name, which is how the precedence between two contributors is
+# measured: the one closer to the application decides the file they share.
+[package]
+name        = "apk-graph-lib2"
+namespace   = "mcpp"
+version     = "0.1.0"
+description = "Fixture: the deeper of two libraries contributing an asset of one name"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[package.metadata.dist-apk]
+package = "org.mcpp.apkgraph.lib2"
+assets  = "assets"
+
+[language]
+standard = "c++23"
+
+[targets.apk-graph-lib2]
+kind = "lib"
+
+[build]
+sources = ["src/lib2.cpp"]
