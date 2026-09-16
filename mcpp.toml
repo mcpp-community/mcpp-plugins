@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.11.1"
+version     = "0.12.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -93,6 +93,16 @@ sources           = ["rules/metal.cppm"]
 implies           = ["surface"]
 rule_module       = "mcpp.rules.metal"
 device_extensions = [".metal"]
+
+# `.swift` sources become one object per package through `xcrun swiftc`, with a
+# generated header for the package's C and C++ sources and the Swift runtime's
+# search directories on the link. No payload is declared, for the reason
+# `rules-metal` gives: the compiler ships with Xcode and the Command Line Tools.
+[features.rules-swift]
+sources           = ["rules/swift.cppm"]
+implies           = ["surface"]
+rule_module       = "mcpp.rules.swift"
+device_extensions = [".swift"]
 
 [features.rules-hip]
 sources           = ["rules/hip.cppm"]

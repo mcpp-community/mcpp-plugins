@@ -11,6 +11,7 @@ import mcpp.rules.hip;
 import mcpp.rules.metal;
 import mcpp.rules.slang;
 import mcpp.rules.spirv;
+import mcpp.rules.swift;
 import mcpp.rules.sycl;
 import mcpp.tools.embed;
 import mcpp.tools.island;
@@ -33,6 +34,9 @@ int main() {
            && mcpp::rules::metal::compile()
            && mcpp::rules::slang::compile()
            && mcpp::rules::spirv::compile()
+           // No `.swift` source is named, so the Swift rule plans nothing and
+           // never asks `xcrun`, as the Metal rule above.
+           && mcpp::rules::swift::compile()
            && mcpp::rules::sycl::compile();
     // `tools::embed` has no accelerator gate, so it is asked the one question
     // that writes nothing: where it WOULD put a header. `embed::file` is not

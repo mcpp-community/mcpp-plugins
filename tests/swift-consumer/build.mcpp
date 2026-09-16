@@ -1,0 +1,12 @@
+import std;
+import mcpp;
+import mcpp.rules.swift;
+
+int main() {
+    // The `.swift` files `[build] sources` names on this row, as one module named
+    // after the package (`swift_consumer`), with the C declarations of
+    // `swift/bridge.h` visible to Swift.
+    mcpp::rules::swift::options opt;
+    opt.bridging_header = "swift/bridge.h";
+    return mcpp::rules::swift::compile(opt) ? 0 : 1;
+}

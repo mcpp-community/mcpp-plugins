@@ -49,7 +49,7 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.11.1";
+inline constexpr std::string_view version = "0.12.0";
 
 } // namespace mcpp::plugins
 
@@ -262,6 +262,263 @@ inline void set_attr(node& n, const std::string& key, const std::string& value) 
 }
 
 } // namespace mcpp::plugins::xml
+
+// mcpp::plugins::json -- the JSON two dist members read.
+//
+// SHARED BECAUSE TWO DOCUMENTS ARE READ WITH IT. `dist-apk` reads coursier's
+// resolution report, and `mcpp::plugins::graph` below reads the engine's graph
+// document for `dist-apk` and `dist-apple`. A second parser for the second
+// document is how two readers come to disagree about one file, so there is one.
+// It reads objects, arrays, strings (with `\u` escapes, surrogate pairs
+// included, and a refusal for a surrogate that is not part of one), numbers,
+// `true`, `false` and `null`; a number keeps its spelling in `text`.
+export namespace mcpp::plugins::json {
+
+struct value {
+    enum class kind { null, boolean, number, string, array, object };
+    kind                                             type = kind::null;
+    std::string                                      text;    // string, number or boolean spelling
+    std::vector<value>                               items;
+    std::vector<std::pair<std::string, value>>       members;
+
+    const value* get(std::string_view key) const {
+        for (auto const& m : members) if (m.first == key) return &m.second;
+        return nullptr;
+    }
+};
+
+struct reader {
+    std::string_view s;
+    std::size_t      i = 0;
+
+    void skip_space() {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
+    }
+    // The four hexadecimal digits of one `\u` escape, `i` already past the `u`.
+    bool hex4(unsigned& cp) {
+        if (i + 4 > s.size()) return false;
+        cp = 0;
+        for (int k = 0; k < 4; ++k) {
+            const char h = s[i++];
+            cp <<= 4;
+            if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
+            else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
+            else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
+            else return false;
+        }
+        return true;
+    }
+    bool string(std::string& out) {
+        if (i >= s.size() || s[i] != '"') return false;
+        ++i;
+        while (i < s.size() && s[i] != '"') {
+            if (s[i] != '\\') { out += s[i++]; continue; }
+            if (++i >= s.size()) return false;
+            const char e = s[i++];
+            switch (e) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case 'u': {
+                    // A code point above U+FFFF reaches JSON as a surrogate
+                    // PAIR, which is two `\u` escapes. Encoding each half on its
+                    // own produces two three-byte sequences holding unpaired
+                    // surrogates -- not UTF-8, and accepted by nothing that
+                    // reads the manifest this value is written into. The pair is
+                    // combined here, and a surrogate that is not part of one is
+                    // refused, so a malformed document is a refusal rather than
+                    // a silently corrupted string.
+                    unsigned cp = 0;
+                    if (!hex4(cp)) return false;
+                    if (cp >= 0xd800 && cp <= 0xdbff) {
+                        if (i + 6 > s.size() || s[i] != '\\' || s[i + 1] != 'u') return false;
+                        i += 2;
+                        unsigned lo = 0;
+                        if (!hex4(lo)) return false;
+                        if (lo < 0xdc00 || lo > 0xdfff) return false;
+                        cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+                    } else if (cp >= 0xdc00 && cp <= 0xdfff) {
+                        return false;   // a low surrogate with no high half
+                    }
+                    if (cp < 0x80) out += static_cast<char>(cp);
+                    else if (cp < 0x800) { out += static_cast<char>(0xc0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
+                    else if (cp < 0x10000) { out += static_cast<char>(0xe0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
+                    else {
+                        out += static_cast<char>(0xf0 | (cp >> 18));
+                        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3f));
+                        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f));
+                        out += static_cast<char>(0x80 | (cp & 0x3f));
+                    }
+                    break;
+                }
+                default: out += e;
+            }
+        }
+        if (i >= s.size()) return false;
+        ++i;
+        return true;
+    }
+    bool parse_value(value& out) {
+        skip_space();
+        if (i >= s.size()) return false;
+        const char c = s[i];
+        if (c == '"') { out.type = value::kind::string; return string(out.text); }
+        if (c == '{') {
+            out.type = value::kind::object;
+            ++i;
+            skip_space();
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            for (;;) {
+                skip_space();
+                std::string key;
+                if (!string(key)) return false;
+                skip_space();
+                if (i >= s.size() || s[i] != ':') return false;
+                ++i;
+                value v;
+                if (!parse_value(v)) return false;
+                out.members.emplace_back(std::move(key), std::move(v));
+                skip_space();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; return true; }
+                return false;
+            }
+        }
+        if (c == '[') {
+            out.type = value::kind::array;
+            ++i;
+            skip_space();
+            if (i < s.size() && s[i] == ']') { ++i; return true; }
+            for (;;) {
+                value v;
+                if (!parse_value(v)) return false;
+                out.items.push_back(std::move(v));
+                skip_space();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == ']') { ++i; return true; }
+                return false;
+            }
+        }
+        const std::size_t b = i;
+        while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' &&
+               s[i] != ' ' && s[i] != '\n' && s[i] != '\r' && s[i] != '\t') ++i;
+        out.text = std::string(s.substr(b, i - b));
+        if (out.text == "null") out.type = value::kind::null;
+        else if (out.text == "true" || out.text == "false") out.type = value::kind::boolean;
+        else out.type = value::kind::number;
+        return !out.text.empty();
+    }
+};
+
+// The whole text is one value, with nothing but white space after it.
+inline bool parse_json(std::string_view text, value& out) {
+    reader r{text};
+    if (!r.parse_value(out)) return false;
+    r.skip_space();
+    return r.i == r.s.size();
+}
+
+// A string member of an object, or empty when absent or not a string.
+inline std::string string_of(const value* v) {
+    return v && v->type == value::kind::string ? v->text : std::string();
+}
+
+} // namespace mcpp::plugins::json
+
+// mcpp::plugins::graph -- the resolved dependency graph the engine states.
+//
+// mcpp 2026.9.16.1 gives the ROOT project's build program `MCPP_GRAPH_FILE`
+// (`mcpp::graph_file()`), a document naming every package of the resolved graph,
+// dependencies before their requesters, each with its manifest directory and its
+// `[package.metadata]` verbatim (mcpp docs/30, "Reading the resolved graph"). A
+// member that merges what libraries contribute reads a table of its own out of
+// that metadata: `[package.metadata.dist-apk]`, `[package.metadata.dist-apple]`.
+//
+// READ THROUGH THE ENVIRONMENT, NOT `mcpp::graph_file()`. This unit does not
+// import `mcpp` (see the top of this file), and a member that called the
+// accessor would not compile against an engine older than the one that added it.
+// An unset or empty variable is an older engine, or a dependency's program, and
+// reads as a graph with no packages, which leaves every member's behaviour as it
+// was.
+export namespace mcpp::plugins::graph {
+
+struct package {
+    std::string canonical;      // `namespace.name@version`
+    std::string name;
+    std::string namespace_;
+    std::string version;
+    bool        root = false;
+    std::string manifest_dir;   // absolute
+    json::value metadata;       // the package's [package.metadata], an object
+};
+
+struct document {
+    bool                 present = false;   // MCPP_GRAPH_FILE named a file
+    std::string          path;
+    std::vector<package> packages;          // dependencies before requesters
+};
+
+// The graph this build program was given, or the reason it cannot be read. A
+// variable naming a file that is missing or not a `mcpp.graph` document is an
+// error rather than an empty graph: the engine promised a document, and reading
+// nothing would silently drop every contribution.
+inline std::expected<document, std::string> read() {
+    document d;
+    const char* env = std::getenv("MCPP_GRAPH_FILE");
+    if (!env || !*env) return d;
+    d.present = true;
+    d.path = env;
+    std::ifstream in(d.path, std::ios::binary);
+    if (!in)
+        return std::unexpected(std::format("the graph document {} cannot be read", d.path));
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    json::value doc;
+    if (!json::parse_json(text, doc) || doc.type != json::value::kind::object)
+        return std::unexpected(std::format("the graph document {} is not JSON", d.path));
+    if (json::string_of(doc.get("kind")) != "mcpp.graph")
+        return std::unexpected(std::format("the graph document {} is not a mcpp.graph document", d.path));
+    const json::value* list = doc.get("packages");
+    if (!list || list->type != json::value::kind::array)
+        return std::unexpected(std::format("the graph document {} has no packages array", d.path));
+    for (auto const& entry : list->items) {
+        if (entry.type != json::value::kind::object) continue;
+        package p;
+        if (const json::value* id = entry.get("package")) {
+            p.canonical  = json::string_of(id->get("canonical"));
+            p.name       = json::string_of(id->get("name"));
+            p.namespace_ = json::string_of(id->get("namespace"));
+            p.version    = json::string_of(id->get("version"));
+        }
+        if (const json::value* r = entry.get("root"))
+            p.root = r->type == json::value::kind::boolean && r->text == "true";
+        p.manifest_dir = json::string_of(entry.get("manifest_dir"));
+        if (const json::value* m = entry.get("metadata"); m && m->type == json::value::kind::object)
+            p.metadata = *m;
+        d.packages.push_back(std::move(p));
+    }
+    return d;
+}
+
+// The package's `[package.metadata.<tool>]` table, or null.
+inline const json::value* table_of(const package& p, std::string_view tool) {
+    const json::value* t = p.metadata.get(tool);
+    return t && t->type == json::value::kind::object ? t : nullptr;
+}
+
+// A path a package states, made absolute against its manifest directory.
+inline std::string resolve(const package& p, const std::string& path) {
+    if (path.empty() || std::filesystem::path(path).is_absolute()) return path;
+    return (std::filesystem::path(p.manifest_dir) / path).lexically_normal().string();
+}
+
+// How a diagnostic names a package: its canonical identity, or its name.
+inline std::string label_of(const package& p) {
+    return !p.canonical.empty() ? p.canonical : p.name;
+}
+
+} // namespace mcpp::plugins::graph
 
 // mcpp::plugins::names -- the derivations that turn a path into a C++ name.
 //

@@ -73,5 +73,32 @@ out=$(node "$WEB/web-consumer.js")
 [ "$out" = "1-2-3" ] || fail "node did not print 1-2-3 (got: $out)"
 echo "ok: node $WEB/web-consumer.js prints 1-2-3"
 
+echo "== options::page names the page, and refuses a name that is not a bare *.html file =="
+# A copy of this fixture beside it, so its path dependency on the collection
+# (`../..`) still resolves; the copy's build program sets `options::page`.
+PAGE_FIXTURE="../.web-consumer-page"
+rm -rf "$PAGE_FIXTURE"
+mkdir -p "$PAGE_FIXTURE"
+cp -r mcpp.toml build.mcpp src "$PAGE_FIXTURE"/
+sed -i.bak 's|    opt.target = "web-consumer";|    opt.target = "web-consumer";\n    opt.page   = "web-consumer.html";|' "$PAGE_FIXTURE/build.mcpp"
+grep -q 'opt.page   = "web-consumer.html"' "$PAGE_FIXTURE/build.mcpp" \
+    || fail "the named-page fixture was not written" "$PAGE_FIXTURE/build.mcpp"
+( cd "$PAGE_FIXTURE" && "$MCPP" pack --format web --target wasm32-emscripten > pack.log 2>&1 ) \
+    || fail "mcpp pack --format web with options::page failed" "$PAGE_FIXTURE/pack.log"
+PWEB=$(find "$PAGE_FIXTURE/target" -type d -name web | head -1)
+[ -f "$PWEB/web-consumer.html" ] || fail "options::page = web-consumer.html produced no such page" "$PAGE_FIXTURE/pack.log"
+[ -e "$PWEB/index.html" ] && fail "options::page named another page, and index.html was written as well"
+grep -q 'web-consumer.js' "$PWEB/web-consumer.html" || fail "the named page does not load the launcher" "$PWEB/web-consumer.html"
+echo "ok: options::page = web-consumer.html writes that page and no index.html"
+
+sed -i.bak 's|    opt.page   = "web-consumer.html";|    opt.page   = "pages/web-consumer.html";|' "$PAGE_FIXTURE/build.mcpp"
+if ( cd "$PAGE_FIXTURE" && "$MCPP" pack --format web --target wasm32-emscripten > refuse.log 2>&1 ); then
+    fail "options::page = pages/web-consumer.html was accepted" "$PAGE_FIXTURE/refuse.log"
+fi
+grep -q "has a directory component" "$PAGE_FIXTURE/refuse.log" \
+    || fail "the refusal does not say why the page name was refused" "$PAGE_FIXTURE/refuse.log"
+echo "ok: a page name with a directory component is refused, and the refusal says why"
+rm -rf "$PAGE_FIXTURE"
+
 rm -f build.log pack.log
-echo "PASS: dist-web produces a static directory, node runs it, 1-2-3"
+echo "PASS: dist-web produces a static directory, node runs it, 1-2-3; options::page names the page"

@@ -221,6 +221,22 @@ struct options {
     // drops the symbol table and the debug information -- what the Android
     // Gradle plugin does to every library it packages, and what `mcpp pack`
     // reports it did.
+    //
+    // FROM 0.12.0 THE ENGINE'S DECISION GOVERNS AS WELL. An engine that strips
+    // what the graph built (mcpp 2026.9.16.1, #649 E5) tells a build program
+    // whether this packaging pass strips (`MCPP_PACK_STRIP`, "1" or "0") and
+    // where `--debug-symbols` sends the separated debug information
+    // (`MCPP_PACK_DEBUG_SYMBOLS_DIR`), so `mcpp pack --no-strip` and
+    // `--debug-symbols <dir>` reach the libraries this member packs as they
+    // reach the ones the engine stages. A library is stripped unless either
+    // this option or the engine says to keep it. An older engine publishes
+    // neither variable, and the member strips as before.
+    //
+    // THE ENGINE STRIPS FIRST. That engine strips the libraries the graph built
+    // when it stages them, before this member reads the tree, so this option
+    // keeps this member's own strip off and cannot restore what the engine
+    // removed: `mcpp pack --no-strip` is what ships the symbols. With this
+    // option set and the engine stripping, the member says so.
     bool keep_debug_symbols = false;
 
     // LEVEL 1, KOTLIN (0.11.0). One or more directories of `.kt` sources,
@@ -236,6 +252,26 @@ struct options {
     // listed earlier wins a resource both define, as Gradle's dependency order
     // does, and the application's own `resources` win over every library.
     std::vector<library> libraries;
+
+    // LIBRARIES THE GRAPH CONTRIBUTES (0.12.0). With mcpp 2026.9.16.1 the root
+    // project's build program receives the resolved graph, and every package in
+    // it other than the application that states `[package.metadata.dist-apk]`
+    // contributes a library of the shape above (`package`, `resources`,
+    // `manifest`, `assets`, `java_sources`, `kotlin_sources`) and archives
+    // (`jars`, `aars`), its paths relative to that package's directory. A
+    // framework's library therefore reaches every application that depends on
+    // it without being listed in the application's build program.
+    //
+    // RANKED BELOW THE APPLICATION'S OWN ENTRIES, and among themselves a package
+    // above the packages it depends on: the graph lists dependencies first, so
+    // contributions are taken in reverse. An application's `libraries` still win
+    // a resource any contribution defines, and a library wins over the framework
+    // beneath it, which is the order a Gradle build gives the same modules.
+    //
+    // `false` reads no contribution, for an application that lists every
+    // library itself. Under an older engine, or in a dependency's own build
+    // program, there is no graph, and nothing is contributed either way.
+    bool graph_libraries = true;
 
     // LOCAL ARCHIVES (0.11.0). A JAR joins the classpath and the dex. An AAR
     // contributes its classes, its resources (under the package its manifest
@@ -1022,120 +1058,12 @@ inline bool merge_manifests(std::string& appText, const std::vector<manifest_sou
     return true;
 }
 
-// ─── JSON, as far as coursier's report needs it ───────────────────────────
-
-struct json_value {
-    enum class kind { null, boolean, number, string, array, object };
-    kind                                             type = kind::null;
-    std::string                                      text;    // string, number or boolean spelling
-    std::vector<json_value>                          items;
-    std::vector<std::pair<std::string, json_value>>  members;
-
-    const json_value* get(std::string_view key) const {
-        for (auto const& m : members) if (m.first == key) return &m.second;
-        return nullptr;
-    }
-};
-
-struct json_reader {
-    std::string_view s;
-    std::size_t      i = 0;
-
-    void skip_space() {
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
-    }
-    bool string(std::string& out) {
-        if (i >= s.size() || s[i] != '"') return false;
-        ++i;
-        while (i < s.size() && s[i] != '"') {
-            if (s[i] != '\\') { out += s[i++]; continue; }
-            if (++i >= s.size()) return false;
-            const char e = s[i++];
-            switch (e) {
-                case 'n': out += '\n'; break;
-                case 't': out += '\t'; break;
-                case 'r': out += '\r'; break;
-                case 'b': out += '\b'; break;
-                case 'f': out += '\f'; break;
-                case 'u': {
-                    if (i + 4 > s.size()) return false;
-                    unsigned cp = 0;
-                    for (int k = 0; k < 4; ++k) {
-                        const char h = s[i++];
-                        cp <<= 4;
-                        if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
-                        else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
-                        else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
-                        else return false;
-                    }
-                    if (cp < 0x80) out += static_cast<char>(cp);
-                    else if (cp < 0x800) { out += static_cast<char>(0xc0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
-                    else { out += static_cast<char>(0xe0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
-                    break;
-                }
-                default: out += e;
-            }
-        }
-        if (i >= s.size()) return false;
-        ++i;
-        return true;
-    }
-    bool value(json_value& out) {
-        skip_space();
-        if (i >= s.size()) return false;
-        const char c = s[i];
-        if (c == '"') { out.type = json_value::kind::string; return string(out.text); }
-        if (c == '{') {
-            out.type = json_value::kind::object;
-            ++i;
-            skip_space();
-            if (i < s.size() && s[i] == '}') { ++i; return true; }
-            for (;;) {
-                skip_space();
-                std::string key;
-                if (!string(key)) return false;
-                skip_space();
-                if (i >= s.size() || s[i] != ':') return false;
-                ++i;
-                json_value v;
-                if (!value(v)) return false;
-                out.members.emplace_back(std::move(key), std::move(v));
-                skip_space();
-                if (i < s.size() && s[i] == ',') { ++i; continue; }
-                if (i < s.size() && s[i] == '}') { ++i; return true; }
-                return false;
-            }
-        }
-        if (c == '[') {
-            out.type = json_value::kind::array;
-            ++i;
-            skip_space();
-            if (i < s.size() && s[i] == ']') { ++i; return true; }
-            for (;;) {
-                json_value v;
-                if (!value(v)) return false;
-                out.items.push_back(std::move(v));
-                skip_space();
-                if (i < s.size() && s[i] == ',') { ++i; continue; }
-                if (i < s.size() && s[i] == ']') { ++i; return true; }
-                return false;
-            }
-        }
-        const std::size_t b = i;
-        while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' &&
-               s[i] != ' ' && s[i] != '\n' && s[i] != '\r' && s[i] != '\t') ++i;
-        out.text = std::string(s.substr(b, i - b));
-        if (out.text == "null") out.type = json_value::kind::null;
-        else if (out.text == "true" || out.text == "false") out.type = json_value::kind::boolean;
-        else out.type = json_value::kind::number;
-        return !out.text.empty();
-    }
-};
-
-inline bool parse_json(std::string_view text, json_value& out) {
-    json_reader r{text};
-    return r.value(out);
-}
+// ─── JSON ─────────────────────────────────────────────────────────────────
+//
+// coursier's report is read with the collection's shared reader, the one
+// `mcpp::plugins::graph` reads the engine's graph document with.
+using json_value = mcpp::plugins::json::value;
+using mcpp::plugins::json::parse_json;
 
 // ─── The Maven lock ───────────────────────────────────────────────────────
 
@@ -1478,6 +1406,88 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
+    // ── the libraries the graph contributes (0.12.0) ─────────────────────
+    //
+    // Appended after the application's own `libraries`, `jars` and `aars`,
+    // which keeps them highest; the graph's packages are taken requesters first
+    // (the reverse of the document's order). Their paths are made absolute
+    // against each package's directory here, so the manifest-relative
+    // resolution below leaves them as they are. `labels` names each library in
+    // a diagnostic: empty for the application's own.
+    std::vector<std::string> labels(opt.libraries.size());
+    if (opt.graph_libraries) {
+        auto graph = mcpp::plugins::graph::read();
+        if (!graph) {
+            return refuse(p, "unreadable graph document", std::format(
+                "mcpp.dist.apk: {}; the libraries its packages contribute cannot be collected. "
+                "Set options::graph_libraries = false to list every library in options::libraries.",
+                graph.error()));
+        }
+        for (std::size_t k = graph->packages.size(); k-- > 0;) {
+            const auto& pkg = graph->packages[k];
+            if (pkg.root) continue;
+            const json_value* t = mcpp::plugins::graph::table_of(pkg, "dist-apk");
+            if (!t) continue;
+            const std::string who = std::format("the [package.metadata.dist-apk] of {}",
+                                                mcpp::plugins::graph::label_of(pkg));
+            library l;
+            std::vector<std::string> jarList, aarList;
+            for (auto const& [key, v] : t->members) {
+                const bool isString = v.type == json_value::kind::string;
+                const bool isList   = v.type == json_value::kind::array
+                    && std::ranges::all_of(v.items, [](const json_value& e) {
+                           return e.type == json_value::kind::string; });
+                const auto wants = [&](bool ok, const char* shape) -> bool {
+                    if (!ok) {
+                        refuse(p, "malformed graph contribution", std::format(
+                            "mcpp.dist.apk: {} states `{}` as something other than {}.",
+                            who, key, shape));
+                    }
+                    return ok;
+                };
+                const auto strings = [&]() {
+                    std::vector<std::string> out;
+                    for (auto const& e : v.items) out.push_back(mcpp::plugins::graph::resolve(pkg, e.text));
+                    return out;
+                };
+                if (key == "package") {
+                    if (!wants(isString, "a string")) return p;
+                    l.package = v.text;
+                } else if (key == "resources" || key == "manifest" || key == "assets") {
+                    if (!wants(isString, "a path")) return p;
+                    const std::string path = mcpp::plugins::graph::resolve(pkg, v.text);
+                    (key == "resources" ? l.resources : key == "manifest" ? l.manifest : l.assets) = path;
+                } else if (key == "java_sources" || key == "kotlin_sources"
+                           || key == "jars" || key == "aars") {
+                    if (!wants(isList, "a list of paths")) return p;
+                    auto list = strings();
+                    if (key == "java_sources")        l.java_sources   = std::move(list);
+                    else if (key == "kotlin_sources") l.kotlin_sources = std::move(list);
+                    else if (key == "jars")           jarList          = std::move(list);
+                    else                              aarList          = std::move(list);
+                } else {
+                    // Warned, not refused: a package published for a newer
+                    // collection may state a key this one does not read, and
+                    // refusing it would break every application built with this
+                    // version.
+                    mcpp::warning(std::format(
+                        "mcpp.dist.apk: {} states `{}`, which this version of the member does "
+                        "not read; it is ignored.", who, key).c_str());
+                }
+            }
+            const bool isLibrary = !l.package.empty() || !l.resources.empty() || !l.manifest.empty()
+                || !l.assets.empty() || !l.java_sources.empty() || !l.kotlin_sources.empty();
+            if (isLibrary) {
+                opt.libraries.push_back(std::move(l));
+                labels.push_back(std::format("the library {} ({})",
+                    opt.libraries.back().package.empty() ? mcpp::plugins::graph::label_of(pkg)
+                                                         : opt.libraries.back().package, who));
+            }
+            for (auto& j : jarList) opt.jars.push_back(std::move(j));
+            for (auto& a : aarList) opt.aars.push_back(std::move(a));
+        }
+    }
+
     // Every path option, resolved against the manifest once (`resolve_path`).
     opt.resources = resolve_path(opt.resources);
     resolve_paths(opt.java_sources);
@@ -1622,7 +1632,9 @@ inline plan plan_for(options opt = {}) {
     for (std::size_t i = 0; i < opt.libraries.size(); ++i) {
         const auto& l = opt.libraries[i];
         library_input in;
-        in.label   = l.package.empty() ? std::format("options::libraries[{}]", i)
+        in.label   = i < labels.size() && !labels[i].empty()
+                   ? labels[i]
+                   : l.package.empty() ? std::format("options::libraries[{}]", i)
                                        : std::format("the library {}", l.package);
         in.package = l.package;
         if (!l.resources.empty()) {
@@ -1632,9 +1644,14 @@ inline plan plan_for(options opt = {}) {
                     in.label, l.resources));
             }
             if (l.package.empty()) {
-                return refuse(p, "library resources without a package", std::format(
-                    "mcpp.dist.apk: options::libraries[{}] has resources and no package; its "
-                    "R class needs one. Set options::libraries[{}].package.", i, i));
+                return refuse(p, "library resources without a package",
+                    i < labels.size() && !labels[i].empty()
+                    ? std::format(
+                        "mcpp.dist.apk: {} has resources and no package; its R class needs "
+                        "one. Set `package` in that [package.metadata.dist-apk] table.", labels[i])
+                    : std::format(
+                        "mcpp.dist.apk: options::libraries[{}] has resources and no package; its "
+                        "R class needs one. Set options::libraries[{}].package.", i, i));
             }
             in.resources = l.resources;
         }
@@ -1998,10 +2015,29 @@ inline plan plan_for(options opt = {}) {
     }
     const bool inPlaceLibraries = loads_native_libraries_in_place(manifestBytes);
 
+    // THE ENGINE'S STRIP DECISION (0.12.0), read through the environment
+    // rather than an `mcpp::` accessor so the member still builds, and still
+    // strips, under an engine that predates the accessor. See
+    // `options::keep_debug_symbols`.
+    const char* engineStrip = std::getenv("MCPP_PACK_STRIP");
+    const bool engineKeeps = engineStrip && std::string_view(engineStrip) == "0";
+    if (opt.keep_debug_symbols && engineStrip && std::string_view(engineStrip) == "1") {
+        mcpp::warning("mcpp.dist.apk: options::keep_debug_symbols is set, and the engine stripped "
+                      "the libraries it staged before this member read them; pass "
+                      "`mcpp pack --no-strip` to ship their symbols.");
+    }
+    const char* engineDebugDir = std::getenv("MCPP_PACK_DEBUG_SYMBOLS_DIR");
+    const std::string debugDir = engineDebugDir ? engineDebugDir : "";
+
     // THE BUILD'S OWN llvm-strip (0.11.1): the one beside the compiler mcpp
-    // resolved for this row, the NDK's.
+    // resolved for this row, the NDK's. With a debug-symbols directory,
+    // `llvm-objcopy` beside it separates the debug information first, in the
+    // order the engine's own strip uses (`src/pack/strip.cppm`): a copy of the
+    // debug sections while the library still has them, then the stripped
+    // library with a `.gnu_debuglink` naming that copy.
     std::string llvmStrip;
-    if (!opt.keep_debug_symbols) {
+    std::string llvmObjcopy;
+    if (!opt.keep_debug_symbols && !engineKeeps) {
         const std::string toolchain = mcpp::toolchain_dir();
         const fs::path candidate = fs::path(toolchain) / "bin" / "llvm-strip";
         if (!toolchain.empty() && is_file(candidate.string())) {
@@ -2010,6 +2046,17 @@ inline plan plan_for(options opt = {}) {
             mcpp::warning(std::format(
                 "mcpp.dist.apk: no llvm-strip beside the toolchain ({}); the native libraries are packed "
                 "with their debug information.", toolchain.empty() ? "none reported" : toolchain).c_str());
+        }
+        if (!llvmStrip.empty() && !debugDir.empty()) {
+            const fs::path objcopy = fs::path(toolchain) / "bin" / "llvm-objcopy";
+            if (is_file(objcopy.string())) {
+                llvmObjcopy = objcopy.string();
+            } else {
+                mcpp::warning(std::format(
+                    "mcpp.dist.apk: --debug-symbols names {}, and there is no llvm-objcopy beside the "
+                    "toolchain ({}) to separate the libraries' debug information; they are stripped "
+                    "without it.", debugDir, toolchain).c_str());
+            }
         }
     }
 
@@ -2033,9 +2080,37 @@ inline plan plan_for(options opt = {}) {
         char magic[4] = {};
         return in.read(magic, 4) && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
     };
-    const auto place_library = [&](const std::string& so, const std::string& abi) {
+    // A LIBRARY THE ENGINE STAGED IS ALREADY WHAT THE ENGINE DECIDED. An engine
+    // that publishes its strip decision (`MCPP_PACK_STRIP` is set) has stripped
+    // those libraries, and separated their debug information into
+    // `--debug-symbols`, before this member reads the tree; stripping them again
+    // finds no debug information, writes an empty `.debug` file and points the
+    // packed copy at it (measured with mcpp 2026.9.16.1). They are packed as
+    // staged. The member's own strip applies to what the engine did not stage --
+    // an archive's native libraries -- and to every library under an older
+    // engine, which decides nothing.
+    const bool engineDecided = engineStrip && *engineStrip;
+    // ONE DESTINATION HAS ONE CLAIMANT, AND THE FIRST CLAIM WINS. `lib/<abi>/`
+    // is flat, so the application's own library and an archive's native library
+    // of the same name address one file; so do two archives that carry it. Both
+    // loops below walk highest priority first -- the application's staged
+    // libraries, then `contributions`, which is ordered application first and
+    // each package above the packages it depends on -- so the first claim is the
+    // one the priority order names, and a later one is reported rather than
+    // written. Writing it would place two steps with one id and one output.
+    std::map<std::string, std::string> claimed;   // "<abi>/<leaf>" -> claimant
+    const auto place_library = [&](const std::string& so, const std::string& abi,
+                                   bool staged, std::string_view claimant) {
+        const std::string leafKey = abi + "/" + fs::path(so).filename().string();
+        if (auto [it, fresh] = claimed.try_emplace(leafKey, std::string(claimant)); !fresh) {
+            mcpp::warning(std::format(
+                "mcpp.dist.apk: {} and {} both carry lib/{}; {} is packed, because it comes "
+                "first in the priority order, and {} is left out.",
+                it->second, claimant, leafKey, it->second, claimant).c_str());
+            return;
+        }
         const fs::path dst = work / "lib" / abi / fs::path(so).filename();
-        if (llvmStrip.empty()) {
+        if (llvmStrip.empty() || (staged && engineDecided)) {
             collect_tree(so, dst, libInputs);
             return;
         }
@@ -2047,10 +2122,38 @@ inline plan plan_for(options opt = {}) {
         }
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
+        const std::string leaf = fs::path(so).filename().string();
+        if (!llvmObjcopy.empty()) {
+            // One subdirectory per ABI: a package carries the same library name
+            // once for every ABI, and a flat directory would let the last one
+            // overwrite the others' debug information.
+            const fs::path debugFile = fs::path(debugDir) / abi / (leaf + ".debug");
+            fs::create_directories(debugFile.parent_path(), ec);
+            step keep;
+            keep.id          = std::format("{}:debug:{}:{}", bundle ? "aab" : "apk", abi, leaf);
+            keep.role        = "artifact";
+            keep.description = "LLVM-OBJCOPY --only-keep-debug " + abi + "/" + leaf;
+            keep.output      = debugFile.string();
+            keep.argv        = { llvmObjcopy, "--only-keep-debug", so, keep.output };
+            keep.inputs      = { so };
+            p.steps.push_back(keep);
+
+            step strip;
+            strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, leaf);
+            strip.role        = "artifact";
+            strip.description = "LLVM-OBJCOPY --strip-unneeded " + abi + "/" + leaf;
+            strip.output      = dst.string();
+            strip.argv        = { llvmObjcopy, "--strip-unneeded",
+                                  "--add-gnu-debuglink=" + debugFile.string(), so, strip.output };
+            strip.inputs      = { so, keep.output };
+            p.steps.push_back(strip);
+            libInputs.push_back(strip.output);
+            return;
+        }
         step strip;
-        strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, fs::path(so).filename().string());
+        strip.id          = std::format("{}:strip:{}:{}", bundle ? "aab" : "apk", abi, leaf);
         strip.role        = "artifact";
-        strip.description = "LLVM-STRIP " + abi + "/" + fs::path(so).filename().string();
+        strip.description = "LLVM-STRIP " + abi + "/" + leaf;
         strip.output      = dst.string();
         strip.argv        = { llvmStrip, "--strip-unneeded", "-o", strip.output, so };
         strip.inputs      = { so };
@@ -2059,7 +2162,7 @@ inline plan plan_for(options opt = {}) {
     };
     for (auto const& leg : legs)
         for (auto const& so : leg.libraries)
-            place_library(so, leg.abi);
+            place_library(so, leg.abi, /*staged=*/true, "the application");
 
     // An AAR's native libraries, for every ABI this package carries.
     for (auto const& c : contributions) {
@@ -2073,16 +2176,20 @@ inline plan plan_for(options opt = {}) {
                 continue;
             }
             for (auto const& so : shared_objects_in(abiDir))
-                place_library(so, leg.abi);
+                place_library(so, leg.abi, /*staged=*/false, c.label);
         }
     }
 
     const fs::path assetsDir = work / "assets";
     std::vector<std::string> assetInputs;
     // Library and archive assets first, so a file the build program deploys
-    // under the same name replaces theirs.
-    for (auto const& c : contributions)
-        if (!c.assets.empty()) collect_tree(c.assets, assetsDir, assetInputs);
+    // under the same name replaces theirs. `collect_tree` overwrites, so the
+    // last write wins; `contributions` is highest priority first, and is walked
+    // backwards here for the same reason the resources below are -- a package
+    // above the packages it depends on decides the file they share.
+    for (std::size_t k = contributions.size(); k-- > 0;)
+        if (!contributions[k].assets.empty())
+            collect_tree(contributions[k].assets, assetsDir, assetInputs);
     { // every deploy'd file, `<stage>/bin/<rel>` -> `assets/<rel>`: the engine
       // stages `mcpp::deploy`'s destinations under `bin/` on this row as on
       // every other.
