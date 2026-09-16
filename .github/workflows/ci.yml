@@ -44,7 +44,7 @@ env:
   # through the runner named after its format, which is how `mcpp run --format
   # app` reaches `macapp-run`. An engine below it stages no `needs` lines, and
   # `dist-apk` refuses its tree naming this release.
-  MCPP_VERSION: 2026.9.14.2
+  MCPP_VERSION: 2026.9.16.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
@@ -1249,11 +1249,12 @@ jobs:
       # does; `dist-apk` provisions the four payloads on its own
       # `feature-xlings.dist-apk` table (`xim:android-build-tools`, `xim:
       # android-platform`, `xim:jdk-temurin`, `xim:android-debug-keystore`).
-      # NOT YET GREEN under this job's pinned `MCPP_VERSION`: `kind = "app"`
-      # and `mcpp::min_platform_version()` are #622 engine additions, and
-      # this step needs the release that carries them (see this repository's
-      # README, `dist-apk`'s own row) -- raising the pin is P5's own change,
-      # together with the rest of this collection's release.
+      # `kind = "app"` and `mcpp::min_platform_version()` are #622 engine
+      # additions, and this step needed the release that carries them; the pin
+      # has been above it since 2026.9.14.2 and the step is green. From
+      # 2026.9.16.1 the pin also carries the engine's strip decision
+      # (`MCPP_PACK_STRIP`, `MCPP_PACK_DEBUG_SYMBOLS_DIR`), which is what lets
+      # legs (m) and (n) below run rather than report themselves skipped.
       #
       # THIS STEP ASSERTS PACKAGING ONLY, DELIBERATELY, NOT `mcpp run
       # --format apk`. This fixture's own `main.cpp` and `mcpp.toml` DO wire
