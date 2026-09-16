@@ -2090,7 +2090,25 @@ inline plan plan_for(options opt = {}) {
     // an archive's native libraries -- and to every library under an older
     // engine, which decides nothing.
     const bool engineDecided = engineStrip && *engineStrip;
-    const auto place_library = [&](const std::string& so, const std::string& abi, bool staged) {
+    // ONE DESTINATION HAS ONE CLAIMANT, AND THE FIRST CLAIM WINS. `lib/<abi>/`
+    // is flat, so the application's own library and an archive's native library
+    // of the same name address one file; so do two archives that carry it. Both
+    // loops below walk highest priority first -- the application's staged
+    // libraries, then `contributions`, which is ordered application first and
+    // each package above the packages it depends on -- so the first claim is the
+    // one the priority order names, and a later one is reported rather than
+    // written. Writing it would place two steps with one id and one output.
+    std::map<std::string, std::string> claimed;   // "<abi>/<leaf>" -> claimant
+    const auto place_library = [&](const std::string& so, const std::string& abi,
+                                   bool staged, std::string_view claimant) {
+        const std::string leafKey = abi + "/" + fs::path(so).filename().string();
+        if (auto [it, fresh] = claimed.try_emplace(leafKey, std::string(claimant)); !fresh) {
+            mcpp::warning(std::format(
+                "mcpp.dist.apk: {} and {} both carry lib/{}; {} is packed, because it comes "
+                "first in the priority order, and {} is left out.",
+                it->second, claimant, leafKey, it->second, claimant).c_str());
+            return;
+        }
         const fs::path dst = work / "lib" / abi / fs::path(so).filename();
         if (llvmStrip.empty() || (staged && engineDecided)) {
             collect_tree(so, dst, libInputs);
@@ -2144,7 +2162,7 @@ inline plan plan_for(options opt = {}) {
     };
     for (auto const& leg : legs)
         for (auto const& so : leg.libraries)
-            place_library(so, leg.abi, /*staged=*/true);
+            place_library(so, leg.abi, /*staged=*/true, "the application");
 
     // An AAR's native libraries, for every ABI this package carries.
     for (auto const& c : contributions) {
@@ -2158,16 +2176,20 @@ inline plan plan_for(options opt = {}) {
                 continue;
             }
             for (auto const& so : shared_objects_in(abiDir))
-                place_library(so, leg.abi, /*staged=*/false);
+                place_library(so, leg.abi, /*staged=*/false, c.label);
         }
     }
 
     const fs::path assetsDir = work / "assets";
     std::vector<std::string> assetInputs;
     // Library and archive assets first, so a file the build program deploys
-    // under the same name replaces theirs.
-    for (auto const& c : contributions)
-        if (!c.assets.empty()) collect_tree(c.assets, assetsDir, assetInputs);
+    // under the same name replaces theirs. `collect_tree` overwrites, so the
+    // last write wins; `contributions` is highest priority first, and is walked
+    // backwards here for the same reason the resources below are -- a package
+    // above the packages it depends on decides the file they share.
+    for (std::size_t k = contributions.size(); k-- > 0;)
+        if (!contributions[k].assets.empty())
+            collect_tree(contributions[k].assets, assetsDir, assetInputs);
     { // every deploy'd file, `<stage>/bin/<rel>` -> `assets/<rel>`: the engine
       // stages `mcpp::deploy`'s destinations under `bin/` on this row as on
       // every other.

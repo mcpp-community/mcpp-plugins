@@ -269,7 +269,8 @@ inline void set_attr(node& n, const std::string& key, const std::string& value) 
 // resolution report, and `mcpp::plugins::graph` below reads the engine's graph
 // document for `dist-apk` and `dist-apple`. A second parser for the second
 // document is how two readers come to disagree about one file, so there is one.
-// It reads objects, arrays, strings (with `\u` escapes below U+10000), numbers,
+// It reads objects, arrays, strings (with `\u` escapes, surrogate pairs
+// included, and a refusal for a surrogate that is not part of one), numbers,
 // `true`, `false` and `null`; a number keeps its spelling in `text`.
 export namespace mcpp::plugins::json {
 
@@ -293,6 +294,20 @@ struct reader {
     void skip_space() {
         while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
     }
+    // The four hexadecimal digits of one `\u` escape, `i` already past the `u`.
+    bool hex4(unsigned& cp) {
+        if (i + 4 > s.size()) return false;
+        cp = 0;
+        for (int k = 0; k < 4; ++k) {
+            const char h = s[i++];
+            cp <<= 4;
+            if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
+            else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
+            else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
+            else return false;
+        }
+        return true;
+    }
     bool string(std::string& out) {
         if (i >= s.size() || s[i] != '"') return false;
         ++i;
@@ -307,19 +322,35 @@ struct reader {
                 case 'b': out += '\b'; break;
                 case 'f': out += '\f'; break;
                 case 'u': {
-                    if (i + 4 > s.size()) return false;
+                    // A code point above U+FFFF reaches JSON as a surrogate
+                    // PAIR, which is two `\u` escapes. Encoding each half on its
+                    // own produces two three-byte sequences holding unpaired
+                    // surrogates -- not UTF-8, and accepted by nothing that
+                    // reads the manifest this value is written into. The pair is
+                    // combined here, and a surrogate that is not part of one is
+                    // refused, so a malformed document is a refusal rather than
+                    // a silently corrupted string.
                     unsigned cp = 0;
-                    for (int k = 0; k < 4; ++k) {
-                        const char h = s[i++];
-                        cp <<= 4;
-                        if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
-                        else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
-                        else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
-                        else return false;
+                    if (!hex4(cp)) return false;
+                    if (cp >= 0xd800 && cp <= 0xdbff) {
+                        if (i + 6 > s.size() || s[i] != '\\' || s[i + 1] != 'u') return false;
+                        i += 2;
+                        unsigned lo = 0;
+                        if (!hex4(lo)) return false;
+                        if (lo < 0xdc00 || lo > 0xdfff) return false;
+                        cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+                    } else if (cp >= 0xdc00 && cp <= 0xdfff) {
+                        return false;   // a low surrogate with no high half
                     }
                     if (cp < 0x80) out += static_cast<char>(cp);
                     else if (cp < 0x800) { out += static_cast<char>(0xc0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
-                    else { out += static_cast<char>(0xe0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
+                    else if (cp < 0x10000) { out += static_cast<char>(0xe0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f)); out += static_cast<char>(0x80 | (cp & 0x3f)); }
+                    else {
+                        out += static_cast<char>(0xf0 | (cp >> 18));
+                        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3f));
+                        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f));
+                        out += static_cast<char>(0x80 | (cp & 0x3f));
+                    }
                     break;
                 }
                 default: out += e;

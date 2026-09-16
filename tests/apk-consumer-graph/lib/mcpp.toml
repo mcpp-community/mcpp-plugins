@@ -11,9 +11,13 @@ authors     = ["mcpp-community"]
 [package.metadata.dist-apk]
 package   = "org.mcpp.apkgraph.lib"
 resources = "res"
+assets    = "assets"
 
 [language]
 standard = "c++23"
+
+[dependencies]
+mcpp.apk-graph-lib2 = { path = "../lib2" }
 
 [targets.apk-graph-lib]
 kind = "lib"

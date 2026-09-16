@@ -8,7 +8,9 @@
 #     1. the library's string resource is in the APK with the library's value;
 #     2. `options::graph_libraries = false` packs no contribution;
 #     3. an application library defining the same resource wins it;
-#     4. a malformed contribution is refused, naming the package and the key.
+#     4. a malformed contribution is refused, naming the package and the key;
+#     6. of two contributors naming one asset, the one closer to the
+#        application decides it -- `lib/` over the `lib2/` it depends on.
 #   an older engine (no graph):
 #     5. the pack succeeds, and the APK carries no contribution.
 #
@@ -81,7 +83,7 @@ echo "== (4) a malformed contribution is refused, naming the package and the key
 COPY="../.apk-consumer-graph-malformed"
 rm -rf "$COPY"
 mkdir -p "$COPY"
-cp -r mcpp.toml build.mcpp src app-res lib "$COPY"/
+cp -r mcpp.toml build.mcpp src app-res lib lib2 "$COPY"/
 sed -i.bak 's/^resources = "res"$/resources = 3/' "$COPY/lib/mcpp.toml"
 grep -q '^resources = 3$' "$COPY/lib/mcpp.toml" || fail "the malformed copy was not written" "$COPY/lib/mcpp.toml"
 if ( cd "$COPY" && "$MCPP" pack --format apk --target "$TARGET" > refuse.log 2>&1 ); then
@@ -91,6 +93,20 @@ grep -q 'mcpp.apk-graph-lib@0.1.0 states `resources` as something other than a p
     || fail "the refusal does not name the package and the key" "$COPY/refuse.log"
 rm -rf "$COPY"
 echo "ok: the refusal names mcpp.apk-graph-lib@0.1.0 and resources"
+
+echo "== (6) of two contributors naming one asset, the closer one decides it =="
+# `contributions` is highest priority first, and `collect_tree` overwrites, so a
+# forward walk would let the DEEPEST contributor win. lib/ requests lib2/, so
+# lib/ is closer to the application and its asset is the one that must survive.
+apk=$(pack graph-6.log)
+rm -rf graph-assets && mkdir -p graph-assets
+unzip -q -o "$apk" "assets/graph-asset.txt" -d graph-assets \
+    || fail "assets/graph-asset.txt is not in the APK" graph-6.log
+value=$(tr -d '\r\n' < graph-assets/assets/graph-asset.txt)
+[ "$value" = "from-the-requester" ] \
+    || fail "the deeper library won an asset the closer one names (got: '${value}')" graph-6.log
+rm -rf graph-assets
+echo "ok: assets/graph-asset.txt = from-the-requester"
 
 rm -rf target graph-*.log
 echo "PASS: dist-apk collects library contributions from the resolved graph ($engine)"
