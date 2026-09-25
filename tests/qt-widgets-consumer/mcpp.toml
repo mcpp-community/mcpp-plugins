@@ -1,0 +1,41 @@
+# Fixture: a Qt Widgets program -- a `.ui` form through `uic`, and the platform
+# plugin placed beside the program, which is what `windeployqt` is for and what
+# no import table names.
+#
+# Run under `QT_QPA_PLATFORM=offscreen`: the runners have no display, and the
+# offscreen plugin is one of the files `deploy_plugins = { "platforms" }`
+# places, so a program that finds it has found the directory. A program that
+# does not exits in QGuiApplication's constructor with "Could not find the Qt
+# platform plugin", which is the failure this fixture exists to catch.
+[package]
+name        = "qt-widgets-consumer"
+version     = "0.1.0"
+description = "Fixture: a Qt Widgets program with a .ui form, built through rules-qt"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
+
+[build]
+sources = ["src/*.cpp", "ui/*.ui"]
+
+# Built and run on Windows by CI; on Linux QtGui needs libdbus, which the
+# ecosystem does not publish. The Linux runtime contract below states what a
+# Linux build of it will need once it does.
+#
+# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so a
+# program that links them uses the toolchain's shared C++ runtime rather than
+# embedding one: two C++ runtimes in one process is the hazard mcpp's docs/20
+# describes, and mcpp reports it when the default applies.
+[target.x86_64-linux-gnu]
+cxx_runtime = "toolchain-coupled"
+
+[targets.qt-widgets-consumer]
+kind = "bin"
+main = "src/main.cpp"
