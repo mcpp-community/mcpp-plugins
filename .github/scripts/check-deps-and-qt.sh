@@ -21,6 +21,12 @@ is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return
 # installation did not run again".
 stamp_of() { find target -path "*$1*" -name '*.stamp' | head -1; }
 
+# Whether the engine under test is at least the given release.
+engine_at_least() {
+    local have; have=$("$MCPP" --version | head -1 | awk '{print $2}')
+    [ "$(printf '%s\n%s\n' "$1" "$have" | sort -V | head -1)" = "$1" ]
+}
+
 # A second build with nothing changed must not run the installation again.
 assert_not_rerun() {
     local stamp="$1"
@@ -53,8 +59,8 @@ vcpkg_consumer() {
     assert_not_rerun "$(stamp_of deps-vcpkg)"
 
     if is_windows; then
-        # The DLL reached the run through the runtime library directory; the
-        # pack must carry it, which only the same directory can make it do.
+        # The DLL reached the run deployed beside the program; the pack must
+        # carry it from there.
         ls vcpkg_installed/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
         "$MCPP" pack --format dir | tee pack.log
         find target/dist -iname 'fmt.dll' | grep -q . || fail "the packed tree carries no fmt.dll"
@@ -85,11 +91,19 @@ cmake_consumer() {
     assert_not_rerun "$(stamp_of deps-cmake)"
     touch greet/greet.c
     "$MCPP" build > target/ci/third-build.log 2>&1 || { cat target/ci/third-build.log; fail "the rebuild failed"; }
-    [ -n "$(find "$(stamp_of deps-cmake)" -newer target/ci/before-second-build)" ] ||
+    # The installed library is the product of the rebuild, whatever the engine
+    # does with the action's stamp.
+    [ -n "$(find target -path '*deps-cmake*/install/*' -name '*greet*' -newer target/ci/before-second-build)" ] ||
         fail "an edited subproject source did not rebuild the subproject"
     echo "ok: an edited subproject source rebuilt the subproject"
-    # And not again: the stamp moved past the edited file (mcpp 2026.9.27.1).
-    assert_not_rerun "$(stamp_of deps-cmake)"
+    # And not again, from the engine that moves a check's stamp past the input
+    # that changed (mcpp-community/mcpp#701). Before it, the installation runs
+    # on every build after the edit -- incremental, but not skipped.
+    if engine_at_least 2026.9.27.1; then
+        assert_not_rerun "$(stamp_of deps-cmake)"
+    else
+        echo "reading: $("$MCPP" --version | head -1) re-runs a passed check after an input changed (mcpp#701)"
+    fi
 }
 
 qt_consumer() {

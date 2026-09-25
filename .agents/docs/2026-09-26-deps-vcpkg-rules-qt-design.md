@@ -35,7 +35,7 @@ mcpp-language-server issue 23 时，整理出一批**与该项目无关、任何
 | D6 | 2 | 附加模块能否做成一个包 | **能，建议做成一个包 `xim:qt-addons`**（依据与代价见 §6.2；待确认，§10-1） |
 | D7 | 2 | registry 共享克隆放哪 | vcpkg 的每用户目录（§3.6）；第 4 版起不再有托管克隆，见 §0.1 |
 | D6′ | 3 | D6 确认 | `xim:qt-addons` 为一个包，**自有前缀**（xim 载荷私有），`rules-qt` 同时加入两个前缀 |
-| D8 | 3 | 生态通用能力先行 | 引擎需求 2 在 mcpp 中实现（`mcpp::runtime_library_dir`）；GalTranslPP 的 D 阶段在 fork 上初步验证 |
+| D8 | 3 | 生态通用能力先行 | 引擎需求 2 已在 mcpp#702 实现但暂不合入；插件以 `mcpp::deploy` 实现，下界为已发布的 2026.9.26.1（§0.1-5）；GalTranslPP 的 D 阶段在 fork 上初步验证 |
 | D9 | 3 | 免装 VS | 不是目标；删除 `toolchain::msvc_xim`，`xim:msvc` 由 mcpp 自动匹配 |
 
 ### 0.1 第 4 版更正（实现时的决定，取代正文中冲突的部分）
@@ -56,11 +56,19 @@ mcpp-language-server issue 23 时，整理出一批**与该项目无关、任何
    zip、unzip、tar 与 C 编译器按 vcpkg 文档属于主机前提。
 4. **工具链选项 v1 只保留 vcpkg 默认**（取代 §3.3(4) 的三选项表）。自定义工具链经项目自己的 overlay triplet
    （`VCPKG_CHAINLOAD_TOOLCHAIN_FILE`）表达，插件不生成。
-5. **运行时目录经引擎通道**（取代 §3.3(3) 的逐 DLL deploy 过渡方案）。mcpp 新增构建程序指令
-   `mcpp::runtime_library_dir(dir)`，是 `[runtime] library_dirs` 的构建程序形式：进入 `mcpp run` 的库搜索路径与
-   `mcpp pack` 的闭包搜索目录。【已核实】引擎源码：pack 闭包只读 `plan.runtimeLibraryDirs`，`link_search`/`link_flag`
-   不进入（`src/pack/pipeline.cppm`、`src/build/plan.cppm`）。插件下界因此为 mcpp 2026.9.27.1；非 Windows 另加
-   `-Wl,-rpath`，使程序在 `mcpp run` 之外同样能启动。
+5. **运行时文件放到程序旁边，插件以已发布的 mcpp 2026.9.26.1 为下界**（取代 §3.3(3) 的"根本方案"）。第 4 版起初
+   在 mcpp 中实现了 `mcpp::runtime_library_dir(dir)`（`[runtime] library_dirs` 的构建程序形式），并修复了"check 通过后
+   stamp 不前移、此后每次构建重跑"的缺陷（mcpp-community/mcpp#701、#702）；按第 3 轮后的决定，该引擎 PR **暂不合入**，
+   插件不依赖它：
+   - Windows：vcpkg/CMake 前缀 `bin/` 中的 DLL、所链接 Qt 模块及其依赖模块（读自各模块 CMake 包的
+     `__qt_<Module>_target_deps`）的 DLL，逐个 `mcpp::deploy` 到程序旁边；`mcpp run`、直接启动与 `mcpp pack` 看到同一目录。
+     安装产生的 DLL 在安装后的下一次规划中放置，`mcpp run` 会执行这次规划。
+   - Linux：QtCore 的 `RUNPATH $ORIGIN` 使程序自身的 RPATH 不作用于 QtCore 的依赖，程序因此以 `--no-as-needed` 按完整
+     路径直接链接 xim 的 glib/gthread/zstd/zlib，加载器先按 SONAME 载入它们，QtCore 再请求时已满足。`$ORIGIN` 方案被
+     放弃：构建程序的 `link_flag` 经 ninja 与 shell 两次展开，`$ORIGIN` 被吞掉（实测 RPATH 中出现空项），而按引擎内部的
+     转义写法（`'$$ORIGIN'`）耦合引擎实现。Linux 上 `mcpp pack` 不携带 Qt SDK。
+   - 引擎 #702 合入后，插件在后续版本改用 `runtime_library_dir`，CMake 子项目编辑后的重跑随之消失（CI 已按引擎版本
+     区分这一断言）。
 6. **工作区**（§3.3(5)）：每个调用 `use()` 的成员各声明一条安装边；【已核实】引擎 `blocking` 只排序本包的编译边
    （`src/build/ninja_backend.cppm`）。并发由启动器的安装根锁串行化，不依赖 vcpkg 自身的锁。
 7. **依赖方的 deploy 会进入可执行文件布局**（关闭 §4.3 的【待验证】）：【已核实】`deploy` 与 `link-*` 同属

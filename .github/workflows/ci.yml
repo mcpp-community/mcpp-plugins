@@ -45,13 +45,12 @@ env:
   # app` reaches `macapp-run`. An engine below it stages no `needs` lines, and
   # `dist-apk` refuses its tree naming this release.
   #
-  # 2026.9.27.1 IS WHAT THE `deps-*` MEMBERS AND `rules-qt` NEED (0.13.0). They
-  # state a prefix's shared-library directory with `mcpp::runtime_library_dir`,
-  # the build-program form of `[runtime] library_dirs`, which is the one field
-  # `mcpp run`'s loader path and `mcpp pack`'s closure read; and an installation
-  # is a check whose command writes no stamp, which before that release re-ran on
-  # every build after one of its inputs changed (mcpp-community/mcpp#701).
-  MCPP_VERSION: 2026.9.27.1
+  # 2026.9.26.1 IS THE RELEASE THE `deps-*` MEMBERS AND `rules-qt` ARE MEASURED
+  # ON (0.13.0). They need nothing that release lacks -- `mcpp::deploy` placing
+  # a dependency's file beside the program, a check whose stamp the engine
+  # writes, `xpkg_dir` for a payload a dependency declares -- and it is the
+  # engine whose runtime closure check the Linux Qt program has to pass.
+  MCPP_VERSION: 2026.9.26.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
@@ -2312,8 +2311,8 @@ jobs:
       #
       # The same criteria as the Linux job, from the same script. On Windows the
       # default triplet builds fmt as a DLL and the Qt modules are DLLs, so the
-      # runtime library directory is measured twice: `mcpp run` finds them, and
-      # `mcpp pack` carries them.
+      # deployed runtime is measured twice: `mcpp run` finds it, and `mcpp pack`
+      # carries it.
       - name: Cache vcpkg's per-user directory
         uses: actions/cache@v4
         with:

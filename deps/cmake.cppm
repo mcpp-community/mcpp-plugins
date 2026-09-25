@@ -15,8 +15,8 @@
 // this package's output directory by ONE `blocking` check action, whose inputs
 // are the subproject's files, so an edit to it rebuilds it and nothing else
 // does. The prefix is then mapped exactly as `mcpp.deps.vcpkg` maps its own:
-// include directory, libraries by full path, the shared-library directory as a
-// runtime library directory.
+// include directory, libraries by full path, the shared libraries deployed
+// beside the program.
 //
 // THE COMPILER IS CMAKE'S OWN CHOICE. A subproject is configured the way its
 // authors build it -- on Windows, CMake's default generator and the Visual
@@ -157,7 +157,7 @@ inline prefix use(const options& opt) {
 
     mcpp::include_dir(p.include.c_str());
     mcpp::deps::link_libraries(root / opt.dirs.lib, opt.libraries, opt.shared, p.installed, who);
-    if (opt.shared) mcpp::deps::runtime_directory(p.bin, p.lib);
+    if (opt.shared) mcpp::deps::deploy_shared(p.bin, p.lib);
     if (!p.installed)
         mcpp::deps::warn(std::format("{}: {} is not built yet; the paths above are where `mcpp "
                                      "build` installs it.", who, p.root));

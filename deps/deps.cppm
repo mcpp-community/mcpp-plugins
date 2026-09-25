@@ -177,19 +177,37 @@ inline void link_libraries(const std::filesystem::path& lib_dir,
                      generic(lib_dir), present.empty() ? std::string(" (none)") : present));
 }
 
-// The directory a prefix's shared libraries are loaded from at run time:
-// `mcpp run` searches it, `mcpp pack` collects from it, and off Windows the
-// program also carries it as a run path, so it starts outside `mcpp run` the
-// way it does inside -- a shared library installed with CMake's default
-// `@rpath/` install name is found by nothing else on macOS.
-inline void runtime_directory(const std::string& bin, const std::string& lib) {
-    if (is_windows()) {
-        mcpp::runtime_library_dir(bin.c_str());
-        return;
+// The prefix's shared libraries, placed beside the program: `mcpp run` and a
+// program started by hand find them there, and `mcpp pack` carries every
+// deployed file. Off Windows the program also carries the library directory as
+// a run path, so a library installed with CMake's default `@rpath/` install
+// name is found on macOS.
+//
+// PLACED, NOT SEARCHED. A build program on a released engine has no directive
+// that adds a directory to the program's run-time search set (the manifest's
+// `[runtime] library_dirs` is a fixed list); `mcpp::deploy` is the channel it
+// has. A file is deployed when it exists at
+// plan time, so on a project's first build the libraries an installation is
+// about to produce are placed by the next plan -- which `mcpp run` performs,
+// because the installation changed the files this program declared it reads.
+inline void deploy_shared(const std::string& bin, const std::string& lib) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path dir = is_windows() ? fs::path(bin) : fs::path(lib);
+    std::vector<fs::path> files;
+    for (auto const& e : fs::directory_iterator(dir, ec)) {
+        const auto name = e.path().filename().string();
+        const bool shared = is_windows() ? e.path().extension() == ".dll"
+                          : is_macos()   ? e.path().extension() == ".dylib"
+                                         : (name.ends_with(".so") || name.find(".so.") != std::string::npos);
+        if (shared && (e.is_regular_file(ec) || e.is_symlink(ec))) files.push_back(e.path());
     }
-    mcpp::runtime_library_dir(lib.c_str());
-    const std::string rpath = "-Wl,-rpath," + lib;
-    mcpp::link_flag(rpath.c_str());
+    std::ranges::sort(files);
+    for (auto const& f : files) mcpp::deploy(generic(f).c_str(), ".");
+    if (!is_windows()) {
+        const std::string rpath = "-Wl,-rpath," + lib;
+        mcpp::link_flag(rpath.c_str());
+    }
 }
 
 } // namespace mcpp::deps

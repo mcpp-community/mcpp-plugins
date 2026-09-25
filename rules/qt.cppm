@@ -20,11 +20,12 @@
 // `xim:qt-addons` beside it when `rules-qt-xim-addons` declares that. A project
 // using a Qt from elsewhere names `rules-qt` alone and downloads nothing.
 //
-// THE MODULES' SHARED LIBRARIES ARE A RUNTIME LIBRARY DIRECTORY, not copies:
-// `<root>/bin` on Windows and `<root>/lib` elsewhere reach `mcpp run`'s library
-// path and `mcpp pack`'s closure through `mcpp::runtime_library_dir` (mcpp
-// 2026.9.27.1+). The plugins are copied, because Qt finds them relative to the
-// program and no import table names them.
+// WHAT THE PROGRAM LOADS IS PLACED BESIDE IT on Windows, as `windeployqt`
+// places it: the modules the program links and the modules those depend on
+// (read from each module's CMake package, `__qt_<Module>_target_deps`). On
+// every platform the plugin directories `deploy_plugins` names are placed
+// beside the program: Qt finds them relative to it, and no import table names
+// them. Linux and macOS reach the SDK through run paths (`deploy_runtime`).
 //
 // A MISSING SDK IS A WARNING. `mcpp emit build-database` plans a project on
 // machines that never built it; the rule says what it could not find and
@@ -262,6 +263,106 @@ inline std::string root(const options& opt = {}) {
     return r.empty() ? std::string() : detail::generic(r.front());
 }
 
+// ─── What the program loads ────────────────────────────────────────────────
+
+// The Qt modules `modules` depend on, themselves included, in a stable order.
+// Each module's CMake package states its Qt dependencies as
+// `set(__qt_<Module>_target_deps "Qt6Core\;6.11.1;Qt6Gui\;6.11.1")`; a
+// `…Private` target names its public module's library.
+inline std::vector<std::string> module_closure(std::span<const std::filesystem::path> roots,
+                                               std::span<const std::string> modules) {
+    std::vector<std::string> order;
+    std::vector<std::string> pending(modules.begin(), modules.end());
+    while (!pending.empty()) {
+        std::string m = pending.back();
+        pending.pop_back();
+        if (m.ends_with("Private")) m.resize(m.size() - 7);
+        if (m.empty() || std::ranges::find(order, m) != order.end()) continue;
+        order.push_back(m);
+        for (auto const& r : roots) {
+            const auto file = r / "lib" / "cmake" / ("Qt6" + m) / ("Qt6" + m + "Dependencies.cmake");
+            const std::string text = detail::read_file(file);
+            const std::string key = "set(__qt_" + m + "_target_deps \"";
+            const auto at = text.find(key);
+            if (at == std::string::npos) continue;
+            const auto end = text.find('"', at + key.size());
+            std::string_view deps(text.data() + at + key.size(), end - at - key.size());
+            for (std::size_t q = deps.find("Qt6"); q != std::string_view::npos; q = deps.find("Qt6", q + 3)) {
+                std::size_t e = q + 3;
+                while (e < deps.size() && (std::isalnum(static_cast<unsigned char>(deps[e])) || deps[e] == '_')) ++e;
+                pending.emplace_back(deps.substr(q + 3, e - q - 3));
+            }
+            break;
+        }
+    }
+    std::ranges::sort(order);
+    return order;
+}
+
+// How the program finds what it loads at run time.
+//
+// WINDOWS: the modules' DLLs (`bin/Qt6<M>.dll`, the linked modules and every
+// module they depend on) are deployed beside the program, as `windeployqt`
+// places them; `mcpp run`, a program started by hand and `mcpp pack` then see
+// one directory.
+//
+// LINUX: the program carries the SDK's `lib/` as a run path. Qt's official
+// QtCore also loads glib, zstd and zlib, which it expects the distribution to
+// provide and finds through its own `RUNPATH $ORIGIN` -- the SDK's `lib/`,
+// where they are not -- and a library's RUNPATH stops the program's run path
+// from applying to that library's dependencies. So the program names their
+// first libraries itself (`--no-as-needed`, by full path, with their
+// directories as run paths): the loader maps a program's own dependencies
+// first, and QtCore's requests for the same names are then already satisfied.
+// `rules-qt-xim` declares the three packages from xim. `mcpp pack` of a Linux
+// Qt program does not carry the SDK.
+//
+// macOS: the modules are frameworks, found through a run path to `lib/`.
+inline void deploy_runtime(std::span<const std::filesystem::path> roots,
+                           std::span<const std::string> modules) {
+    namespace fs = std::filesystem;
+    using detail::generic;
+    std::error_code ec;
+    if (!detail::is_windows()) {
+        for (auto const& r : roots) {
+            const std::string rpath = "-Wl,-rpath," + generic(r / "lib");
+            mcpp::link_flag(rpath.c_str());
+        }
+    }
+    if (detail::is_macos()) return;
+    const auto closure = module_closure(roots, modules);
+    if (detail::is_windows()) {
+        for (auto const& m : closure)
+            for (auto const& r : roots) {
+                const fs::path f = r / "bin" / ("Qt6" + m + ".dll");
+                if (!fs::exists(f, ec)) continue;
+                mcpp::deploy(generic(f).c_str(), ".");
+                break;
+            }
+        return;
+    }
+    if (std::ranges::find(closure, "Core") == closure.end()) return;
+    const std::pair<const char*, std::initializer_list<const char*>> host[] = {
+        { "glib", { "libglib-2.0.so.0", "libgthread-2.0.so.0" } },
+        { "zstd", { "libzstd.so.1" } },
+        { "zlib", { "libz.so.1" } },
+    };
+    mcpp::link_flag("-Wl,--no-as-needed");
+    for (auto const& [pkg, files] : host) {
+        const std::string dir = mcpp::xpkg_dir("xim", pkg);
+        if (dir.empty()) {
+            detail::warn(std::format("mcpp.rules.qt: xim:{} is not installed, and QtCore on Linux "
+                                     "loads it; `rules-qt-xim` declares it.", pkg));
+            continue;
+        }
+        const fs::path lib = fs::path(dir) / "lib";
+        for (auto const* f : files)
+            if (fs::exists(lib / f, ec)) mcpp::link_flag(generic(lib / f).c_str());
+        const std::string rpath = "-Wl,-rpath," + generic(lib);
+        mcpp::link_flag(rpath.c_str());
+    }
+}
+
 // ─── The rule ──────────────────────────────────────────────────────────────
 
 inline bool compile(options opt = {}) {
@@ -359,34 +460,7 @@ inline bool compile(options opt = {}) {
         // package requires of every consumer.
         mcpp::cxxflag("-fPIC");
     }
-    // THE LIBRARIES QT'S OWN LINUX BUILD NAMES. Qt's official Linux QtCore
-    // links the distribution's glib, zstd and zlib and finds them through
-    // `RUNPATH $ORIGIN` and the host loader's default directories. A program
-    // mcpp links runs under the ecosystem's glibc loader, which does not search
-    // the host's directories, and a RUNPATH in the library stops the program's
-    // own RPATH from applying to the library's dependencies. So the directories
-    // are stated here: `rules-qt-xim` declares these packages on Linux, and each
-    // one present is a runtime library directory -- found by `mcpp run` and
-    // carried by `mcpp pack`. QtGui additionally loads QtDBus and through it
-    // `libdbus-1.so.3`, which the ecosystem does not publish, so a program
-    // linking QtGui on Linux is refused by mcpp's runtime closure check.
-    if (!detail::is_windows() && !detail::is_macos()) {
-        for (auto const* pkg : { "glib", "zstd", "zlib" }) {
-            const std::string dir = mcpp::xpkg_dir("xim", pkg);
-            if (dir.empty()) continue;
-            for (auto const* sub : { "lib", "lib64" })
-                if (fs::is_directory(fs::path(dir) / sub, ec))
-                    mcpp::runtime_library_dir(generic(fs::path(dir) / sub).c_str());
-        }
-    }
-    for (auto const& r : sdks) {
-        const std::string rt = generic(r / (detail::is_windows() ? "bin" : "lib"));
-        mcpp::runtime_library_dir(rt.c_str());
-        if (!detail::is_windows()) {
-            const std::string rpath = "-Wl,-rpath," + generic(r / "lib");
-            mcpp::link_flag(rpath.c_str());
-        }
-    }
+    deploy_runtime(sdks, modules);
 
     // ── moc ──
     const std::string moc = detail::tool(sdks, "moc");

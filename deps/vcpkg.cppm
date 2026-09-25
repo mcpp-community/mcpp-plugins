@@ -16,8 +16,7 @@
 //      overlay changes, and never under `mcpp emit build-database`.
 //   2. THE PREFIX REACHES THE BUILD. `<install root>/<triplet>/include` is an
 //      include directory; each listed library is linked by its full path; the
-//      directory holding the prefix's shared libraries is a runtime library
-//      directory (`mcpp::runtime_library_dir`, mcpp 2026.9.27.1+), so `mcpp
+//      prefix's shared libraries are deployed beside the program, so `mcpp
 //      run` finds them and `mcpp pack` carries them.
 //   3. THE TOOL IS A PAYLOAD. `xim:vcpkg` is the tool together with the
 //      scripts released with it (vcpkg-tool's standalone bundle), declared by
@@ -273,7 +272,7 @@ inline prefix use(const options& opt = {}) {
     // ── the prefix, into the build ──
     mcpp::include_dir(p.include.c_str());
     mcpp::deps::link_libraries(root / "lib", opt.libraries, shared, p.installed, who);
-    if (shared) mcpp::deps::runtime_directory(p.bin, p.lib);
+    if (shared) mcpp::deps::deploy_shared(p.bin, p.lib);
     if (!p.installed)
         mcpp::deps::warn(std::format(
             "{}: {} is not installed yet; the paths above are where `mcpp build` installs "
