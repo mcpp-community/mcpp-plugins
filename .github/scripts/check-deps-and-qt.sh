@@ -21,10 +21,13 @@ is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return
 # installation did not run again".
 stamp_of() { find target -path "*$1*" -name '*.stamp' | head -1; }
 
-# Whether the engine under test is at least the given release.
-engine_at_least() {
-    local have; have=$("$MCPP" --version | head -1 | awk '{print $2}')
-    [ "$(printf '%s\n%s\n' "$1" "$have" | sort -V | head -1)" = "$1" ]
+# The program as the build left it, started without `mcpp run`: on Windows the
+# engine has placed the DLLs it imports beside it (SPEC-007 R4.3), so it starts
+# from the build directory as it does from the packed tree.
+run_directly() {
+    local exe; exe=$(find target -path '*/bin/*' -name "$1.exe" | head -1)
+    [ -n "$exe" ] || fail "no $1.exe under target/"
+    "$exe"
 }
 
 # A second build with nothing changed must not run the installation again.
@@ -59,9 +62,11 @@ vcpkg_consumer() {
     assert_not_rerun "$(stamp_of deps-vcpkg)"
 
     if is_windows; then
-        # The DLL reached the run deployed beside the program; the pack must
-        # carry it from there.
+        # The pack collects it from the runtime search directory.
         ls vcpkg_installed/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
+        run_directly vcpkg-consumer | tee direct.log
+        grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' direct.log ||
+            fail "started from the build directory, the program did not find fmt.dll"
         "$MCPP" pack --format dir | tee pack.log
         find target/dist -iname 'fmt.dll' | grep -q . || fail "the packed tree carries no fmt.dll"
         echo "ok: the packed tree carries fmt.dll"
@@ -96,14 +101,9 @@ cmake_consumer() {
     [ -n "$(find target -path '*deps-cmake*/install/*' -name '*greet*' -newer target/ci/before-second-build)" ] ||
         fail "an edited subproject source did not rebuild the subproject"
     echo "ok: an edited subproject source rebuilt the subproject"
-    # And not again, from the engine that moves a check's stamp past the input
-    # that changed (mcpp-community/mcpp#701). Before it, the installation runs
-    # on every build after the edit -- incremental, but not skipped.
-    if engine_at_least 2026.9.27.1; then
-        assert_not_rerun "$(stamp_of deps-cmake)"
-    else
-        echo "reading: $("$MCPP" --version | head -1) re-runs a passed check after an input changed (mcpp#701)"
-    fi
+    # And not again: the engine moves the stamp past the input that changed
+    # (mcpp's SPEC-007 R3.5).
+    assert_not_rerun "$(stamp_of deps-cmake)"
 }
 
 qt_consumer() {
@@ -125,6 +125,9 @@ qt_widgets_consumer() {
     grep -q "^qt-widgets-consumer: platform offscreen, label 'made by uic'$" run.log ||
         fail "the platform plugin or the uic form did not reach the program"
     if is_windows; then
+        QT_QPA_PLATFORM=offscreen run_directly qt-widgets-consumer | tee direct.log
+        grep -q "^qt-widgets-consumer: platform offscreen" direct.log ||
+            fail "started from the build directory, the program did not find the Qt DLLs"
         "$MCPP" pack --format dir | tee pack.log
         find target/dist -iname 'Qt6Widgets.dll' | grep -q . || fail "the packed tree carries no Qt6Widgets.dll"
         find target/dist -ipath '*platforms/qoffscreen.dll' | grep -q . ||

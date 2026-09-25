@@ -12,9 +12,9 @@
 //   return mcpp::deps::cmake::use(o) ? 0 : 1;
 //
 // and the subproject is configured, built and installed into a prefix under
-// this package's output directory by ONE `blocking` check action, whose inputs
-// are the subproject's files, so an edit to it rebuilds it and nothing else
-// does. The prefix is then mapped exactly as `mcpp.deps.vcpkg` maps its own:
+// this package's output directory by ONE `prepare` action (mcpp's SPEC-007
+// R3.3) whose `output_dir` is that prefix and whose inputs are the
+// subproject's files, so an edit to it rebuilds it and nothing else does. The prefix is then mapped exactly as `mcpp.deps.vcpkg` maps its own:
 // include directory, libraries by full path, the shared libraries deployed
 // beside the program.
 //
@@ -67,9 +67,9 @@ struct options {
     std::string cmake;
 };
 
+// The prefix, by name (SPEC-007 R1.3).
 struct prefix {
     std::string root, include, lib, bin;
-    bool installed = false;
     explicit operator bool() const { return !root.empty(); }
 };
 
@@ -111,9 +111,6 @@ inline prefix use(const options& opt) {
     p.include = mcpp::deps::generic(root / opt.dirs.include);
     p.lib     = mcpp::deps::generic(root / opt.dirs.lib);
     p.bin     = mcpp::deps::generic(root / opt.dirs.bin);
-    // `install_manifest.txt` is written by `cmake --install` when it finishes.
-    p.installed = fs::is_regular_file(build / "install_manifest.txt", ec);
-    mcpp::rerun_if_changed(mcpp::deps::generic(build / "install_manifest.txt").c_str());
 
     const std::string cmake = cmake_exe(opt);
     if (cmake.empty()) {
@@ -129,8 +126,7 @@ inline prefix use(const options& opt) {
         const std::string desc  = "CMAKE " + name;
         mcpp::action a;
         a.id          = id.c_str();
-        a.role        = "check";
-        a.blocking    = true;
+        a.role        = mcpp::roles::prepare;
         a.description = desc.c_str();
         a.arg(tool.c_str()).arg("cmake")
          .arg("--cmake").arg(cmake.c_str())
@@ -151,16 +147,13 @@ inline prefix use(const options& opt) {
         a.input(tool.c_str());
         for (auto const& f : mcpp::deps::files_under(source)) a.input(f.c_str());
         a.output(stamp.c_str());
+        a.output_dir(p.root.c_str());
         a.submit();
-        mcpp::rerun_if_changed(stamp.c_str());
     }
 
     mcpp::include_dir(p.include.c_str());
-    mcpp::deps::link_libraries(root / opt.dirs.lib, opt.libraries, opt.shared, p.installed, who);
-    if (opt.shared) mcpp::deps::deploy_shared(p.bin, p.lib);
-    if (!p.installed)
-        mcpp::deps::warn(std::format("{}: {} is not built yet; the paths above are where `mcpp "
-                                     "build` installs it.", who, p.root));
+    mcpp::deps::link_libraries(root / opt.dirs.lib, opt.libraries, opt.shared);
+    if (opt.shared) mcpp::deps::runtime_directory(p.bin, p.lib);
     return p;
 }
 

@@ -11,15 +11,16 @@
 //
 //   - a LOCK on the installation root, because two workspace members that
 //     both use one prefix each declare the installation (the engine orders
-//     `blocking` actions per package), and two installers writing one tree at
-//     once is a corrupt tree;
+//     construction actions per package), and two installers writing one tree
+//     at once is a corrupt tree;
 //   - SHORT scratch directories for vcpkg's build trees, outside the project,
 //     because a port's build nests deep and Windows still enforces MAX_PATH on
 //     many of the tools a port runs.
 //
 // This program sets those up and runs the installer as a child, waiting for it
-// and returning its status; the action is a `check`, whose stamp mcpp writes
-// when the status is 0. It holds no knowledge of any project: every value
+// and returning its status; the action is a `prepare` (mcpp's SPEC-007 R3.3),
+// whose stamp mcpp writes when the status is 0 and whose declared output
+// directory the installation fills. It holds no knowledge of any project: every value
 // arrives on its command line from the member that planned the action.
 //
 // Usage:

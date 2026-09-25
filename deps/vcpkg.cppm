@@ -10,14 +10,16 @@
 //
 // and three things follow, none of which the project states again:
 //
-//   1. INSTALLATION IS AN EDGE. One `role = "check"`, `blocking = true` action
-//      runs `vcpkg install` for the manifest; this package's compile edges wait
+//   1. INSTALLATION IS AN EDGE. One `prepare` action (mcpp's SPEC-007 R3.3)
+//      runs `vcpkg install` for the manifest and fills `<install root>/<triplet>`,
+//      its declared `output_dir`; this package's compile and link edges wait
 //      for it. It re-runs when `vcpkg.json`, `vcpkg-configuration.json` or an
 //      overlay changes, and never under `mcpp emit build-database`.
-//   2. THE PREFIX REACHES THE BUILD. `<install root>/<triplet>/include` is an
-//      include directory; each listed library is linked by its full path; the
-//      prefix's shared libraries are deployed beside the program, so `mcpp
-//      run` finds them and `mcpp pack` carries them.
+//   2. THE PREFIX REACHES THE BUILD BY NAME. `<install root>/<triplet>/include`
+//      is an include directory; each listed library is linked by its full path;
+//      `bin/` (Windows) or `lib/` is a runtime search directory, so the
+//      program's run path, `mcpp run`, `mcpp pack` and -- on Windows -- the
+//      DLLs placed beside the program all come from the engine (R4.1, R4.3).
 //   3. THE TOOL IS A PAYLOAD. `xim:vcpkg` is the tool together with the
 //      scripts released with it (vcpkg-tool's standalone bundle), declared by
 //      this feature. A `builtin-baseline` manifest resolves through vcpkg's
@@ -27,8 +29,8 @@
 // THE LIBRARY LIST IS EXPLICIT. On a project's first build the build program
 // runs before the installation, when vcpkg's own record of what it installed
 // does not exist yet; a link line derived from it would differ between the
-// first build and the second. The names are the files under `<prefix>/lib`,
-// and a name that does not match one is reported with the files that do.
+// first build and the second (R1.3). The names are the files under
+// `<prefix>/lib`; a name that matches none fails the link, naming the path.
 //
 // NOT HERE: vcpkg's classic mode; a second resolver of versions (vcpkg's
 // baseline and overrides decide them); modules for the libraries' headers.
@@ -67,7 +69,8 @@ struct options {
     std::string vcpkg_root;
 };
 
-// The installed prefix, stated whether or not it exists yet.
+// The prefix, by name: the installation fills it during the build, and the
+// build program refers to it without looking inside (SPEC-007 R1.3).
 struct prefix {
     std::string root;       // <install root>/<triplet>
     std::string include;    // root/include
@@ -75,7 +78,6 @@ struct prefix {
     std::string bin;        // root/bin
     std::string share;      // root/share
     std::string triplet;
-    bool        installed = false;   // the prefix existed when this program ran
     explicit operator bool() const { return !root.empty(); }
 };
 
@@ -192,11 +194,6 @@ inline prefix use(const options& opt = {}) {
     p.bin       = mcpp::deps::generic(root / "bin");
     p.share     = mcpp::deps::generic(root / "share");
     p.triplet   = triplet;
-    // `vcpkg/status` is written by a completed installation, so an install
-    // root that a failed first run left behind does not count as installed.
-    const fs::path status = installRoot / "vcpkg" / "status";
-    p.installed = fs::is_regular_file(status, ec) && fs::is_directory(root, ec);
-    mcpp::rerun_if_changed(mcpp::deps::generic(status).c_str());
 
     // ── the tool ──
     const std::string vcpkgRoot = opt.vcpkg_root.empty()
@@ -238,8 +235,7 @@ inline prefix use(const options& opt = {}) {
         const std::string iRoot = mcpp::deps::generic(installRoot);
         mcpp::action a;
         a.id          = id.c_str();
-        a.role        = "check";
-        a.blocking    = true;
+        a.role        = mcpp::roles::prepare;
         a.description = desc.c_str();
         a.arg(tool.c_str()).arg("vcpkg")
          .arg("--vcpkg").arg(exeS.c_str())
@@ -265,18 +261,14 @@ inline prefix use(const options& opt = {}) {
         for (auto const& d : overlayPorts)
             for (auto const& f : mcpp::deps::files_under(d)) a.input(f.c_str());
         a.output(stamp.c_str());
+        a.output_dir(p.root.c_str());
         a.submit();
-        mcpp::rerun_if_changed(stamp.c_str());
     }
 
     // ── the prefix, into the build ──
     mcpp::include_dir(p.include.c_str());
-    mcpp::deps::link_libraries(root / "lib", opt.libraries, shared, p.installed, who);
-    if (shared) mcpp::deps::deploy_shared(p.bin, p.lib);
-    if (!p.installed)
-        mcpp::deps::warn(std::format(
-            "{}: {} is not installed yet; the paths above are where `mcpp build` installs "
-            "it (triplet {}).", who, p.root, triplet));
+    mcpp::deps::link_libraries(root / "lib", opt.libraries, shared);
+    if (shared) mcpp::deps::runtime_directory(p.bin, p.lib);
     return p;
 }
 

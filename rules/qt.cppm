@@ -20,19 +20,21 @@
 // `xim:qt-addons` beside it when `rules-qt-xim-addons` declares that. A project
 // using a Qt from elsewhere names `rules-qt` alone and downloads nothing.
 //
-// WHAT THE PROGRAM LOADS IS PLACED BESIDE IT on Windows, as `windeployqt`
-// places it: the modules the program links and the modules those depend on
-// (read from each module's CMake package, `__qt_<Module>_target_deps`). On
-// every platform the plugin directories `deploy_plugins` names are placed
-// beside the program: Qt finds them relative to it, and no import table names
-// them. Linux and macOS reach the SDK through run paths (`deploy_runtime`).
+// WHAT THE PROGRAM LOADS, THE ENGINE FINDS. The SDK's shared-library directory
+// is a runtime search directory (mcpp's SPEC-007 R4.1): the program's run path
+// on ELF and Mach-O, `mcpp run`'s load path, `mcpp pack`'s closure, and on
+// Windows the DLLs the program imports placed beside it (R4.3) -- the part of
+// `windeployqt`'s job an import table can answer. The rest of it the rule does:
+// the plugin directories `deploy_plugins` names are deployed beside the
+// program (R4.2), because Qt finds them relative to it and no import table
+// names them.
 //
 // A MISSING SDK IS A WARNING. `mcpp emit build-database` plans a project on
 // machines that never built it; the rule says what it could not find and
 // declares nothing, so the plan succeeds and the build is where it fails.
 //
 // `lupdate` REWRITES SOURCES, so it is off unless `translations::update_sources`
-// asks for it; then it is a `blocking` check whose stamp `lrelease` waits for,
+// asks for it; then it is a `prepare` action whose stamp `lrelease` waits for,
 // the order Qt's Visual Studio integration runs them in.
 
 module;
@@ -265,101 +267,31 @@ inline std::string root(const options& opt = {}) {
 
 // ─── What the program loads ────────────────────────────────────────────────
 
-// The Qt modules `modules` depend on, themselves included, in a stable order.
-// Each module's CMake package states its Qt dependencies as
-// `set(__qt_<Module>_target_deps "Qt6Core\;6.11.1;Qt6Gui\;6.11.1")`; a
-// `…Private` target names its public module's library.
-inline std::vector<std::string> module_closure(std::span<const std::filesystem::path> roots,
-                                               std::span<const std::string> modules) {
-    std::vector<std::string> order;
-    std::vector<std::string> pending(modules.begin(), modules.end());
-    while (!pending.empty()) {
-        std::string m = pending.back();
-        pending.pop_back();
-        if (m.ends_with("Private")) m.resize(m.size() - 7);
-        if (m.empty() || std::ranges::find(order, m) != order.end()) continue;
-        order.push_back(m);
-        for (auto const& r : roots) {
-            const auto file = r / "lib" / "cmake" / ("Qt6" + m) / ("Qt6" + m + "Dependencies.cmake");
-            const std::string text = detail::read_file(file);
-            const std::string key = "set(__qt_" + m + "_target_deps \"";
-            const auto at = text.find(key);
-            if (at == std::string::npos) continue;
-            const auto end = text.find('"', at + key.size());
-            std::string_view deps(text.data() + at + key.size(), end - at - key.size());
-            for (std::size_t q = deps.find("Qt6"); q != std::string_view::npos; q = deps.find("Qt6", q + 3)) {
-                std::size_t e = q + 3;
-                while (e < deps.size() && (std::isalnum(static_cast<unsigned char>(deps[e])) || deps[e] == '_')) ++e;
-                pending.emplace_back(deps.substr(q + 3, e - q - 3));
-            }
-            break;
-        }
-    }
-    std::ranges::sort(order);
-    return order;
-}
-
-// How the program finds what it loads at run time.
-//
-// WINDOWS: the modules' DLLs (`bin/Qt6<M>.dll`, the linked modules and every
-// module they depend on) are deployed beside the program, as `windeployqt`
-// places them; `mcpp run`, a program started by hand and `mcpp pack` then see
-// one directory.
-//
-// LINUX: the program carries the SDK's `lib/` as a run path. Qt's official
-// QtCore also loads glib, zstd and zlib, which it expects the distribution to
-// provide and finds through its own `RUNPATH $ORIGIN` -- the SDK's `lib/`,
-// where they are not -- and a library's RUNPATH stops the program's run path
-// from applying to that library's dependencies. So the program names their
-// first libraries itself (`--no-as-needed`, by full path, with their
-// directories as run paths): the loader maps a program's own dependencies
-// first, and QtCore's requests for the same names are then already satisfied.
-// `rules-qt-xim` declares the three packages from xim. `mcpp pack` of a Linux
-// Qt program does not carry the SDK.
-//
-// macOS: the modules are frameworks, found through a run path to `lib/`.
-inline void deploy_runtime(std::span<const std::filesystem::path> roots,
-                           std::span<const std::string> modules) {
+// The SDK's shared-library directories, and on Linux those of the libraries
+// Qt's official QtCore expects the distribution to provide (glib, zstd, zlib,
+// declared from xim by `rules-qt-xim`), as runtime search directories
+// (SPEC-007 R4.1). The engine renders them as the program's run path, puts
+// them on `mcpp run`'s load path -- which reaches a library's dependencies
+// where the program's run path does not, because QtCore carries a RUNPATH of
+// its own -- searches them for `mcpp pack`'s closure, and on Windows places
+// the Qt DLLs the program imports beside it (R4.3).
+inline void runtime_directories(std::span<const std::filesystem::path> roots) {
     namespace fs = std::filesystem;
-    using detail::generic;
     std::error_code ec;
-    if (!detail::is_windows()) {
-        for (auto const& r : roots) {
-            const std::string rpath = "-Wl,-rpath," + generic(r / "lib");
-            mcpp::link_flag(rpath.c_str());
-        }
+    for (auto const& r : roots) {
+        const std::string dir = detail::generic(r / (detail::is_windows() ? "bin" : "lib"));
+        mcpp::runtime_search_dir(dir.c_str());
     }
-    if (detail::is_macos()) return;
-    const auto closure = module_closure(roots, modules);
-    if (detail::is_windows()) {
-        for (auto const& m : closure)
-            for (auto const& r : roots) {
-                const fs::path f = r / "bin" / ("Qt6" + m + ".dll");
-                if (!fs::exists(f, ec)) continue;
-                mcpp::deploy(generic(f).c_str(), ".");
-                break;
-            }
-        return;
-    }
-    if (std::ranges::find(closure, "Core") == closure.end()) return;
-    const std::pair<const char*, std::initializer_list<const char*>> host[] = {
-        { "glib", { "libglib-2.0.so.0", "libgthread-2.0.so.0" } },
-        { "zstd", { "libzstd.so.1" } },
-        { "zlib", { "libz.so.1" } },
-    };
-    mcpp::link_flag("-Wl,--no-as-needed");
-    for (auto const& [pkg, files] : host) {
+    if (detail::is_windows() || detail::is_macos()) return;
+    for (auto const* pkg : { "glib", "zstd", "zlib" }) {
         const std::string dir = mcpp::xpkg_dir("xim", pkg);
         if (dir.empty()) {
             detail::warn(std::format("mcpp.rules.qt: xim:{} is not installed, and QtCore on Linux "
                                      "loads it; `rules-qt-xim` declares it.", pkg));
             continue;
         }
-        const fs::path lib = fs::path(dir) / "lib";
-        for (auto const* f : files)
-            if (fs::exists(lib / f, ec)) mcpp::link_flag(generic(lib / f).c_str());
-        const std::string rpath = "-Wl,-rpath," + generic(lib);
-        mcpp::link_flag(rpath.c_str());
+        if (fs::is_directory(fs::path(dir) / "lib", ec))
+            mcpp::runtime_search_dir(detail::generic(fs::path(dir) / "lib").c_str());
     }
 }
 
@@ -436,15 +368,16 @@ inline bool compile(options opt = {}) {
         }
     }
     if (!missing.empty()) {
+        // An incomplete SDK is a state of the machine: said, and the rest of
+        // the configuration stated, so the link is where it fails (R1.2).
         std::string list;
         for (auto const& m : missing) list += " " + m;
-        std::cerr << std::format(
+        detail::warn(std::format(
             "{}: module(s){} not found in {}. The base package carries Core, Gui, Widgets, "
             "Network, Svg, Qml, Quick and the other qtbase/qtdeclarative modules; the "
-            "additional libraries (Multimedia, Charts, WebSockets, …) are `xim:qt-addons`, "
-            "which the `rules-qt-xim-addons` feature declares.\n",
-            who, list, generic(main));
-        return false;
+            "additional libraries (Multimedia, Charts, WebSockets, ...) are `xim:qt-addons`, "
+            "which the `rules-qt-xim-addons` feature declares.",
+            who, list, generic(main)));
     }
 
     // ── the compiler and the loader ──
@@ -460,7 +393,7 @@ inline bool compile(options opt = {}) {
         // package requires of every consumer.
         mcpp::cxxflag("-fPIC");
     }
-    deploy_runtime(sdks, modules);
+    runtime_directories(sdks);
 
     // ── moc ──
     const std::string moc = detail::tool(sdks, "moc");
@@ -487,8 +420,10 @@ inline bool compile(options opt = {}) {
         }
     }
     if ((!headers.empty() || !inlineMoc.empty()) && moc.empty()) {
-        std::cerr << std::format("{}: `moc` not found under {} (bin/ or libexec/).\n", who, generic(main));
-        return false;
+        detail::warn(std::format("{}: `moc` not found under {} (bin/ or libexec/); no meta-object "
+                                 "code is generated.", who, generic(main)));
+        headers.clear();
+        inlineMoc.clear();
     }
     std::map<std::string, fs::path> mocNames;
     auto mocOne = [&](const fs::path& in, const std::string& outName) -> bool {
@@ -525,8 +460,8 @@ inline bool compile(options opt = {}) {
     if (!forms.empty()) {
         const std::string uic = detail::tool(sdks, "uic");
         if (uic.empty()) {
-            std::cerr << std::format("{}: `uic` not found under {}.\n", who, generic(main));
-            return false;
+            detail::warn(std::format("{}: `uic` not found under {}; no form is generated.", who, generic(main)));
+            forms.clear();
         }
         for (auto const& f : forms) {
             const std::string in  = generic(detail::absolute_from_root(f));
@@ -549,8 +484,8 @@ inline bool compile(options opt = {}) {
     if (!resources.empty()) {
         const std::string rcc = detail::tool(sdks, "rcc");
         if (rcc.empty()) {
-            std::cerr << std::format("{}: `rcc` not found under {}.\n", who, generic(main));
-            return false;
+            detail::warn(std::format("{}: `rcc` not found under {}; no resource is compiled.", who, generic(main)));
+            resources.clear();
         }
         for (auto const& r : resources) {
             const fs::path qrc = detail::absolute_from_root(r);
@@ -578,9 +513,10 @@ inline bool compile(options opt = {}) {
         const std::string lrelease = detail::tool(sdks, "lrelease");
         const std::string lupdate  = detail::tool(sdks, "lupdate");
         if (lrelease.empty() || (opt.i18n.update_sources && lupdate.empty())) {
-            std::cerr << std::format("{}: `{}` not found under {}; it is part of qttools.\n",
-                                     who, lrelease.empty() ? "lrelease" : "lupdate", generic(main));
-            return false;
+            detail::warn(std::format("{}: `{}` not found under {}; it is part of qttools, and no "
+                                     "translation is released.",
+                                     who, lrelease.empty() ? "lrelease" : "lupdate", generic(main)));
+            ts.clear();
         }
         std::vector<std::string> sources;
         if (opt.i18n.update_sources) {
@@ -607,16 +543,19 @@ inline bool compile(options opt = {}) {
                 const std::string desc = "LUPDATE " + file.filename().string();
                 mcpp::action u;
                 u.id = id.c_str();
-                u.role = "check";
-                u.blocking = true;
+                // Construction, not validation (SPEC-007 R3.4): lupdate
+                // rewrites the `.ts` files in their directory, which lrelease
+                // reads, so it is a `prepare` whose output directory is theirs.
+                u.role = mcpp::roles::prepare;
                 u.description = desc.c_str();
                 u.arg(lupdate.c_str()).arg("-silent").arg("-extensions").arg("cpp,h,hpp,ixx,cppm");
                 for (auto const& a : opt.i18n.tr_function_alias) u.arg("-tr-function-alias").arg(a.c_str());
                 for (auto const& s : sources) u.arg(s.c_str()).input(s.c_str());
-                // The stamp is written by mcpp when lupdate succeeds (a check's
-                // command need not write its own); `lrelease` takes it as an
+                // The stamp is written by mcpp when lupdate succeeds (a
+                // prepare's command need not write its own); `lrelease` takes it as an
                 // input, so it reads the `.ts` lupdate has rewritten.
-                u.arg("-ts").arg(in.c_str()).output(stamp.c_str()).submit();
+                u.arg("-ts").arg(in.c_str()).output(stamp.c_str())
+                 .output_dir(generic(file.parent_path()).c_str()).submit();
             }
             const std::string id = "qt:lrelease:" + stem;
             const std::string desc = "LRELEASE " + file.filename().string();

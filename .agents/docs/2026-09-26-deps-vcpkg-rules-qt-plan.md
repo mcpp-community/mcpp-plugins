@@ -20,7 +20,7 @@ baseline `ea1a7396` 执行 `vcpkg install --dry-run` 解析出 `fmt 12.2.0`，�
 
 | 仓库 | 单个 PR 的内容 | 发布 |
 |---|---|---|
-| mcpp-community/mcpp | `mcpp::runtime_library_dir()` 与 check stamp 前移（#701、#702，CI 除 main 上既有的 xcode-27 失败外全绿） | **暂不合入**（2026-09-26 决定）；插件不依赖它 |
+| mcpp-community/mcpp | SPEC-007 与 #702 的合规设计（`runtime_search_dir`、`prepare`、stamp 规则、Windows DLL 放置），由 mcpp 侧实现 | 下一个 mcpp 发布；插件 PR 等待它 |
 | openxlings/xim-pkgindex | `xim:vcpkg` 2026.7.27（工具 + standalone bundle）、`xim:qt` 6.11.1、`xim:qt-addons` 6.11.1；`xim:7zip` 说明 `7z.dll` 位置；测试 | 合入即发布索引；`xlings-res/vcpkg` 资源用 `gh` 与 `gtc` 双端上传 |
 | mcpp-community/mcpp-plugins | `0.13.0`：`deps-vcpkg` + `mcpp-vcpkg`、`rules-qt` + `rules-qt-xim` + `rules-qt-xim-addons`、`deps-cmake` + `mcpp-cmake`；fixtures；CI 引擎版本；README | tag `v0.13.0`，GitHub release，`gtc` 上传 `mcpp-res/mcpp-plugins` |
 | mcpp-community/mcpp-index | 登记 `mcpp:plugins 0.13.0` | 合入即发布 |
@@ -29,9 +29,9 @@ baseline `ea1a7396` 执行 `vcpkg install --dry-run` 解析出 `fmt 12.2.0`，�
 ## 3. 依赖关系
 
 ```
-T2 xim 包（vcpkg/qt/qt-addons）──► T2r 索引合入 ──┐
-T3 插件实现（以 mcpp 2026.9.26.1 为下界）──────────┴──► T3c 插件 CI 全绿 ──► T3r 插件发布 0.13.0 ──► T4 mcpp-index ──► T5 GalTranslPP PR 2
-T1 引擎 #702（暂不合入；合入后插件后续版本改用 runtime_library_dir）
+T2 xim 包（vcpkg/qt/qt-addons）──► T2r 索引合入（xim-pkgindex#878，已合入）
+T3 插件按 SPEC-007 实现（PR 已开，等待）──┐
+T1 mcpp#702 实现并发布（mcpp 侧）─────────┴──► T3c 插件 CI 全绿 ──► T3r 插件发布 0.13.0 ──► T4 mcpp-index ──► T5 GalTranslPP PR 2
 ```
 
 - T1、T2、T3 并行：T3 在本机用 T1 的源码构建验证 Linux 路径；Windows 与 macOS 路径只能由 CI 验证。

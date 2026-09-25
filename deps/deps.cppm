@@ -8,19 +8,21 @@
 //
 // TWO RULES EVERY MEMBER FOLLOWS, AND WHY THEY ARE THE SAME RULE.
 //
-//   1. The installation is an ACTION, never work the build program does.
-//      `mcpp emit build-database` runs build programs to plan (mcpp's
-//      docs/specs/build-database.md), a build program has a 600-second limit,
-//      and an installation can take an hour. An action is a ninja edge: it runs
-//      under `mcpp build` only, as long as it needs, and only when its inputs
-//      changed.
+//   1. The installation is an ACTION, never work the build program does
+//      (mcpp's SPEC-007 R1.1). `mcpp emit build-database` runs build programs
+//      to plan, a build program has a 600-second limit, and an installation
+//      can take an hour. The action's role is `prepare` (R3.3): it fills a
+//      directory whose file names are unknown until it has run, the package's
+//      compile and link edges wait for it, and the engine writes its stamp.
+//      The build program refers to the directory by name -- include
+//      directory, libraries by full path, runtime search directory -- and
+//      never by what is in it (R1.3).
 //
-//   2. A missing prefix is a WARNING, not a failure. The first plan of a
-//      project runs before the action has installed anything, and an editor
-//      asks for the plan on machines that never built. A build program that
-//      exits 1 there takes the whole build database with it; one that states
-//      the paths it WILL use lets the editor resolve every include the moment
-//      the first build finishes.
+//   2. A missing tool is a WARNING, not a failure (R1.2). An editor asks for
+//      the plan on machines that never built; a build program that exits 1
+//      there takes the whole build database with it, and one that states the
+//      paths it WILL use lets the editor resolve every include the moment the
+//      first build finishes.
 //
 // This unit imports `mcpp`, so it exists only inside a build program. The
 // program that performs the installation is `mcpp-deps` (tools/deps_main.cpp),
@@ -145,69 +147,27 @@ inline std::filesystem::path library_file(const std::filesystem::path& lib_dir,
     return lib_dir / (stem + (is_macos() ? ".dylib" : ".so"));
 }
 
-// Links each library by its full path, and says which ones are missing once
-// the prefix exists. The path is stated whether or not the file exists yet:
-// the link edge runs after the installation, and a line that depended on what
-// happened to be on disk at plan time would differ between the first build and
-// the second.
+// Links each library by its full path. The path is stated whether or not the
+// file exists yet: the link edge runs after the installation, and a link line
+// that depended on what happened to be on disk at plan time would differ
+// between the first build and the second (SPEC-007 R1.3). A name that matches
+// no installed file fails the link, naming the path.
 inline void link_libraries(const std::filesystem::path& lib_dir,
-                           std::span<const std::string> names, bool shared,
-                           bool prefix_exists, std::string_view member) {
-    std::vector<std::string> missing;
-    std::error_code ec;
-    for (auto const& name : names) {
-        const auto file = library_file(lib_dir, name, shared);
-        mcpp::link_flag(generic(file).c_str());
-        if (prefix_exists && !std::filesystem::exists(file, ec)) missing.push_back(generic(file));
-    }
-    if (missing.empty()) return;
-    std::string present;
-    for (auto const& e : std::filesystem::directory_iterator(lib_dir, ec)) {
-        if (!e.is_regular_file(ec)) continue;
-        const auto ext = e.path().extension().string();
-        if (ext == ".lib" || ext == ".a" || ext == ".so" || ext == ".dylib")
-            present += "\n    " + e.path().filename().string();
-    }
-    std::string list;
-    for (auto const& m : missing) list += "\n    " + m;
-    warn(std::format("{}: {} listed librar{} not found in the installed prefix:{}\n"
-                     "  `libraries` names files in {} (a name, or a file name with its "
-                     "extension). Present there:{}",
-                     member, missing.size(), missing.size() == 1 ? "y is" : "ies are", list,
-                     generic(lib_dir), present.empty() ? std::string(" (none)") : present));
+                           std::span<const std::string> names, bool shared) {
+    for (auto const& name : names)
+        mcpp::link_flag(generic(library_file(lib_dir, name, shared)).c_str());
 }
 
-// The prefix's shared libraries, placed beside the program: `mcpp run` and a
-// program started by hand find them there, and `mcpp pack` carries every
-// deployed file. Off Windows the program also carries the library directory as
-// a run path, so a library installed with CMake's default `@rpath/` install
-// name is found on macOS.
-//
-// PLACED, NOT SEARCHED. A build program on a released engine has no directive
-// that adds a directory to the program's run-time search set (the manifest's
-// `[runtime] library_dirs` is a fixed list); `mcpp::deploy` is the channel it
-// has. A file is deployed when it exists at
-// plan time, so on a project's first build the libraries an installation is
-// about to produce are placed by the next plan -- which `mcpp run` performs,
-// because the installation changed the files this program declared it reads.
-inline void deploy_shared(const std::string& bin, const std::string& lib) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    const fs::path dir = is_windows() ? fs::path(bin) : fs::path(lib);
-    std::vector<fs::path> files;
-    for (auto const& e : fs::directory_iterator(dir, ec)) {
-        const auto name = e.path().filename().string();
-        const bool shared = is_windows() ? e.path().extension() == ".dll"
-                          : is_macos()   ? e.path().extension() == ".dylib"
-                                         : (name.ends_with(".so") || name.find(".so.") != std::string::npos);
-        if (shared && (e.is_regular_file(ec) || e.is_symlink(ec))) files.push_back(e.path());
-    }
-    std::ranges::sort(files);
-    for (auto const& f : files) mcpp::deploy(generic(f).c_str(), ".");
-    if (!is_windows()) {
-        const std::string rpath = "-Wl,-rpath," + lib;
-        mcpp::link_flag(rpath.c_str());
-    }
+// The directory a prefix's shared libraries are loaded from: `bin/` on
+// Windows, `lib/` elsewhere, declared with `mcpp::runtime_search_dir`
+// (SPEC-007 R4.1). The engine renders it as the program's run path on ELF and
+// Mach-O, puts it on `mcpp run`'s load path, searches it for `mcpp pack`'s
+// closure, carries a dependency's declaration to the consumer's executable,
+// and on Windows places the DLLs the program imports from it beside the
+// program (R4.3).
+inline void runtime_directory(const std::string& bin, const std::string& lib) {
+    const std::string& dir = is_windows() ? bin : lib;
+    mcpp::runtime_search_dir(dir.c_str());
 }
 
 } // namespace mcpp::deps
