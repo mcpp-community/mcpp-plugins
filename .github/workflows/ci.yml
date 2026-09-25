@@ -44,7 +44,14 @@ env:
   # through the runner named after its format, which is how `mcpp run --format
   # app` reaches `macapp-run`. An engine below it stages no `needs` lines, and
   # `dist-apk` refuses its tree naming this release.
-  MCPP_VERSION: 2026.9.16.1
+  #
+  # 2026.9.27.1 IS WHAT THE `deps-*` MEMBERS AND `rules-qt` NEED (0.13.0). They
+  # state a prefix's shared-library directory with `mcpp::runtime_library_dir`,
+  # the build-program form of `[runtime] library_dirs`, which is the one field
+  # `mcpp run`'s loader path and `mcpp pack`'s closure read; and an installation
+  # is a check whose command writes no stamp, which before that release re-ran on
+  # every build after one of its inputs changed (mcpp-community/mcpp#701).
+  MCPP_VERSION: 2026.9.27.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
