@@ -1,0 +1,25 @@
+# Fixture: a program whose one third-party library comes from a vcpkg manifest.
+#
+# `vcpkg.json` names `fmt` at the builtin baseline of vcpkg's 2026.07.29
+# release -- the registry commit that states the tool release `xim:vcpkg`
+# carries (`scripts/vcpkg-tool-metadata.txt`: 2026-07-27). The triplet is the
+# target's default: `x64-windows` (a DLL), `x64-linux` and `arm64-osx` (an
+# archive), so one fixture measures both link forms across the matrix.
+[package]
+name        = "vcpkg-consumer"
+version     = "0.1.0"
+description = "Fixture: links a library a vcpkg manifest names"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
+
+[targets.vcpkg-consumer]
+kind = "bin"
+main = "src/main.cpp"

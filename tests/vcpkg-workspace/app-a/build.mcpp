@@ -1,0 +1,10 @@
+// The manifest is the workspace root's: `use()` finds it by searching upward.
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+
+int main() {
+    mcpp::deps::vcpkg::options o;
+    o.libraries = { "fmt" };
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+}

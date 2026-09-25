@@ -1,0 +1,284 @@
+// mcpp.deps.vcpkg -- the libraries a vcpkg manifest names, installed as a build
+// action and mapped into the build.
+//
+// A project that keeps its third-party C and C++ libraries in `vcpkg.json`
+// writes one call:
+//
+//   mcpp::deps::vcpkg::options o;
+//   o.libraries = { "fmt" };
+//   return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+//
+// and three things follow, none of which the project states again:
+//
+//   1. INSTALLATION IS AN EDGE. One `role = "check"`, `blocking = true` action
+//      runs `vcpkg install` for the manifest; this package's compile edges wait
+//      for it. It re-runs when `vcpkg.json`, `vcpkg-configuration.json` or an
+//      overlay changes, and never under `mcpp emit build-database`.
+//   2. THE PREFIX REACHES THE BUILD. `<install root>/<triplet>/include` is an
+//      include directory; each listed library is linked by its full path; the
+//      directory holding the prefix's shared libraries is a runtime library
+//      directory (`mcpp::runtime_library_dir`, mcpp 2026.9.27.1+), so `mcpp
+//      run` finds them and `mcpp pack` carries them.
+//   3. THE TOOL IS A PAYLOAD. `xim:vcpkg` is the tool together with the
+//      scripts released with it (vcpkg-tool's standalone bundle), declared by
+//      this feature. A `builtin-baseline` manifest resolves through vcpkg's
+//      git registry into vcpkg's per-user registry cache, so no clone of
+//      microsoft/vcpkg is made or managed per project.
+//
+// THE LIBRARY LIST IS EXPLICIT. On a project's first build the build program
+// runs before the installation, when vcpkg's own record of what it installed
+// does not exist yet; a link line derived from it would differ between the
+// first build and the second. The names are the files under `<prefix>/lib`,
+// and a name that does not match one is reported with the files that do.
+//
+// NOT HERE: vcpkg's classic mode; a second resolver of versions (vcpkg's
+// baseline and overrides decide them); modules for the libraries' headers.
+
+export module mcpp.deps.vcpkg;
+
+import std;
+import mcpp;
+import mcpp.plugins;
+import mcpp.deps;
+
+export namespace mcpp::deps::vcpkg {
+
+struct options {
+    // The vcpkg triplet. Empty derives it from the target: `x64-windows`,
+    // `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`,
+    // `x64-osx`, `arm64-osx`. A custom triplet is named here and found through
+    // the manifest's `overlay-triplets` like any other.
+    std::string triplet;
+    // Library names in link order: `fmt` denotes `lib/fmt.lib` on Windows and
+    // `lib/libfmt.a` or `lib/libfmt.so` elsewhere; a name with an extension
+    // (`libzstd.so`) is a file name under `lib/`.
+    std::vector<std::string> libraries;
+    // The directory holding `vcpkg.json`. Empty searches upward from the
+    // package root, so the members of a workspace find the manifest at its
+    // root.
+    std::string manifest_root;
+    // Where vcpkg installs. Empty is vcpkg's own default,
+    // `<manifest root>/vcpkg_installed`.
+    std::string install_root;
+    // Further overlay-triplet directories, beside the manifest's own.
+    std::vector<std::string> overlay_triplets;
+    // Arguments appended to `vcpkg install` (`--x-feature=…`, `--allow-unsupported`).
+    std::vector<std::string> install_args;
+    // The vcpkg root. Empty is the `xim:vcpkg` payload this feature declares.
+    std::string vcpkg_root;
+};
+
+// The installed prefix, stated whether or not it exists yet.
+struct prefix {
+    std::string root;       // <install root>/<triplet>
+    std::string include;    // root/include
+    std::string lib;        // root/lib
+    std::string bin;        // root/bin
+    std::string share;      // root/share
+    std::string triplet;
+    bool        installed = false;   // the prefix existed when this program ran
+    explicit operator bool() const { return !root.empty(); }
+};
+
+// ─── The triplet ───────────────────────────────────────────────────────────
+
+inline std::string default_triplet() {
+    const std::string os = mcpp::target_os(), arch = mcpp::target_arch(), env = mcpp::target_env();
+    const std::string a = arch == "x86_64" ? "x64"
+                        : arch == "aarch64" ? "arm64"
+                        : (arch == "i686" || arch == "x86") ? "x86" : arch;
+    if (os == "windows") return env == "gnu" ? a + "-mingw-dynamic" : a + "-windows";
+    if (os == "macos")   return a + "-osx";
+    if (os == "linux")   return a + "-linux";
+    return {};
+}
+
+// The `overlay-triplets` a `vcpkg-configuration.json` beside the manifest
+// names, resolved against the file's directory as vcpkg resolves them.
+inline std::vector<std::filesystem::path> manifest_overlays(const std::filesystem::path& manifest_root,
+                                                            std::string_view key) {
+    std::vector<std::filesystem::path> out;
+    const auto file = manifest_root / "vcpkg-configuration.json";
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return out;
+    const std::string text{std::istreambuf_iterator<char>(in), {}};
+    mcpp::plugins::json::value doc;
+    if (!mcpp::plugins::json::parse_json(text, doc)) return out;
+    if (auto const* list = doc.get(key)) {
+        for (auto const& item : list->items) {
+            std::filesystem::path p(item.text);
+            if (p.is_relative()) p = manifest_root / p;
+            out.push_back(p.lexically_normal());
+        }
+    }
+    return out;
+}
+
+// Whether the triplet links libraries as shared objects. Read from the
+// triplet file itself -- `set(VCPKG_LIBRARY_LINKAGE dynamic)` outside any
+// `if()`, which is where a per-port exception lives -- and otherwise from
+// vcpkg's convention: dynamic on Windows, static elsewhere, a `-dynamic`
+// suffix for the community triplets that say so in their name.
+inline bool shared_linkage(const std::string& triplet,
+                           std::span<const std::filesystem::path> search) {
+    std::error_code ec;
+    for (auto const& dir : search) {
+        const auto file = dir / (triplet + ".cmake");
+        if (!std::filesystem::is_regular_file(file, ec)) continue;
+        mcpp::rerun_if_changed(mcpp::deps::generic(file).c_str());
+        std::ifstream in(file);
+        std::string line;
+        int depth = 0;
+        while (std::getline(in, line)) {
+            // By index: under GCC 16 a range-for over a non-const std::string in
+            // a module unit fails with "inlining failed in call to always_inline
+            // ... function body not available" (measured on this file).
+            std::string s(line.size(), ' ');
+            for (std::size_t i = 0; i < line.size(); ++i)
+                s[i] = char(std::tolower(static_cast<unsigned char>(line[i])));
+            const auto first = s.find_first_not_of(" \t");
+            if (first == std::string::npos || s[first] == '#') continue;
+            s = s.substr(first);
+            if (s.starts_with("if(") || s.starts_with("if ("))           ++depth;
+            else if (s.starts_with("endif(") || s.starts_with("endif (")) { if (depth) --depth; }
+            else if (depth == 0 && s.starts_with("set(vcpkg_library_linkage")) {
+                return s.find("dynamic") != std::string::npos;
+            }
+        }
+        break;
+    }
+    if (triplet.ends_with("-dynamic")) return true;
+    if (triplet.ends_with("-static") || triplet.ends_with("-static-md")) return false;
+    return mcpp::deps::is_windows();
+}
+
+// ─── The member ────────────────────────────────────────────────────────────
+
+inline prefix use(const options& opt = {}) {
+    namespace fs = std::filesystem;
+    constexpr std::string_view who = "mcpp.deps.vcpkg";
+    mcpp::fact("mcpp.plugins", std::string(mcpp::plugins::version).c_str());
+
+    // THE MANIFEST. Its absence is a mistake in the project, not a state of
+    // the machine, so it is the one refusal here.
+    fs::path manifestRoot = opt.manifest_root.empty()
+        ? mcpp::deps::find_upward(mcpp::manifest_dir(), "vcpkg.json")
+        : mcpp::deps::absolute_from_root(opt.manifest_root);
+    std::error_code ec;
+    if (manifestRoot.empty() || !fs::is_regular_file(manifestRoot / "vcpkg.json", ec)) {
+        std::cerr << std::format(
+            "{}: no vcpkg.json at or above {}.\n"
+            "  This member installs the libraries a vcpkg manifest names; write one\n"
+            "  (`vcpkg new --application` writes a minimal one), or name its directory\n"
+            "  with options::manifest_root.\n",
+            who, opt.manifest_root.empty() ? std::string(mcpp::manifest_dir()) : opt.manifest_root);
+        return {};
+    }
+
+    const std::string triplet = opt.triplet.empty() ? default_triplet() : opt.triplet;
+    if (triplet.empty()) {
+        std::cerr << std::format("{}: no default vcpkg triplet for the target '{}'; name one with "
+                                 "options::triplet.\n", who, std::string(mcpp::target()));
+        return {};
+    }
+
+    const fs::path installRoot = opt.install_root.empty()
+        ? manifestRoot / "vcpkg_installed" : mcpp::deps::absolute_from_root(opt.install_root);
+    const fs::path root = installRoot / triplet;
+
+    prefix p;
+    p.root      = mcpp::deps::generic(root);
+    p.include   = mcpp::deps::generic(root / "include");
+    p.lib       = mcpp::deps::generic(root / "lib");
+    p.bin       = mcpp::deps::generic(root / "bin");
+    p.share     = mcpp::deps::generic(root / "share");
+    p.triplet   = triplet;
+    // `vcpkg/status` is written by a completed installation, so an install
+    // root that a failed first run left behind does not count as installed.
+    const fs::path status = installRoot / "vcpkg" / "status";
+    p.installed = fs::is_regular_file(status, ec) && fs::is_directory(root, ec);
+    mcpp::rerun_if_changed(mcpp::deps::generic(status).c_str());
+
+    // ── the tool ──
+    const std::string vcpkgRoot = opt.vcpkg_root.empty()
+        ? std::string(mcpp::xpkg_dir("xim", "vcpkg")) : mcpp::deps::generic(mcpp::deps::absolute_from_root(opt.vcpkg_root));
+    const fs::path exe = vcpkgRoot.empty() ? fs::path()
+        : fs::path(vcpkgRoot) / (std::string(mcpp::host()).find("windows") != std::string::npos
+                                 ? "vcpkg.exe" : "vcpkg");
+
+    // ── the overlays: the manifest's own, then the project's extras ──
+    std::vector<fs::path> overlayTriplets = manifest_overlays(manifestRoot, "overlay-triplets");
+    for (auto const& d : opt.overlay_triplets) overlayTriplets.push_back(mcpp::deps::absolute_from_root(d));
+    const std::vector<fs::path> overlayPorts = manifest_overlays(manifestRoot, "overlay-ports");
+
+    std::vector<fs::path> tripletSearch = overlayTriplets;
+    if (!vcpkgRoot.empty()) {
+        tripletSearch.push_back(fs::path(vcpkgRoot) / "triplets");
+        tripletSearch.push_back(fs::path(vcpkgRoot) / "triplets" / "community");
+    }
+    const bool shared = shared_linkage(triplet, tripletSearch);
+
+    // ── the installation, as an edge ──
+    const fs::path manifestFile = manifestRoot / "vcpkg.json";
+    const fs::path configFile   = manifestRoot / "vcpkg-configuration.json";
+    mcpp::rerun_if_changed(mcpp::deps::generic(configFile).c_str());
+    if (exe.empty() || !fs::is_regular_file(exe, ec)) {
+        mcpp::deps::warn(std::format(
+            "{}: the vcpkg tool is not installed (xpkg_dir(\"xim\", \"vcpkg\") answered \"{}\"), "
+            "so this plan installs nothing. The `deps-vcpkg` feature declares `xim:vcpkg`; "
+            "`mcpp build` provisions it before this program runs.", who, vcpkgRoot));
+    } else if (const std::string tool = mcpp::deps::launcher(who, "deps-vcpkg"); tool.empty()) {
+        return {};
+    } else {
+        const std::string stamp = mcpp::deps::generic(
+            fs::path(mcpp::out_dir()) / "deps-vcpkg" / (triplet + ".stamp"));
+        const std::string id    = "deps-vcpkg:install:" + triplet;
+        const std::string desc  = "VCPKG install " + triplet;
+        const std::string exeS  = mcpp::deps::generic(exe);
+        const std::string mRoot = mcpp::deps::generic(manifestRoot);
+        const std::string iRoot = mcpp::deps::generic(installRoot);
+        mcpp::action a;
+        a.id          = id.c_str();
+        a.role        = "check";
+        a.blocking    = true;
+        a.description = desc.c_str();
+        a.arg(tool.c_str()).arg("vcpkg")
+         .arg("--vcpkg").arg(exeS.c_str())
+         .arg("--root").arg(vcpkgRoot.c_str())
+         .arg("--manifest-root").arg(mRoot.c_str())
+         .arg("--install-root").arg(iRoot.c_str())
+         .arg("--triplet").arg(triplet.c_str());
+        // `arg()` and `input()` copy what they are given, so the temporaries
+        // below need not outlive the call.
+        for (auto const& d : opt.overlay_triplets)
+            a.arg("--overlay-triplets").arg(mcpp::deps::generic(mcpp::deps::absolute_from_root(d)).c_str());
+        if (!opt.install_args.empty()) {
+            a.arg("--");
+            for (auto const& x : opt.install_args) a.arg(x.c_str());
+        }
+        a.input(tool.c_str());
+        a.input(mcpp::deps::generic(manifestFile).c_str());
+        if (fs::is_regular_file(configFile, ec)) a.input(mcpp::deps::generic(configFile).c_str());
+        // An overlay's files are inputs: a changed patch or triplet is a
+        // different installation.
+        for (auto const& d : overlayTriplets)
+            for (auto const& f : mcpp::deps::files_under(d)) a.input(f.c_str());
+        for (auto const& d : overlayPorts)
+            for (auto const& f : mcpp::deps::files_under(d)) a.input(f.c_str());
+        a.output(stamp.c_str());
+        a.submit();
+        mcpp::rerun_if_changed(stamp.c_str());
+    }
+
+    // ── the prefix, into the build ──
+    mcpp::include_dir(p.include.c_str());
+    mcpp::deps::link_libraries(root / "lib", opt.libraries, shared, p.installed, who);
+    if (shared) mcpp::deps::runtime_directory(p.bin, p.lib);
+    if (!p.installed)
+        mcpp::deps::warn(std::format(
+            "{}: {} is not installed yet; the paths above are where `mcpp build` installs "
+            "it (triplet {}).", who, p.root, triplet));
+    return p;
+}
+
+} // namespace mcpp::deps::vcpkg

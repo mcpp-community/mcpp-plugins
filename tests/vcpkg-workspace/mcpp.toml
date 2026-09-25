@@ -1,0 +1,15 @@
+# Fixture: two workspace members that link one vcpkg prefix and depend on
+# neither each other nor a common member.
+#
+# mcpp orders a `blocking` action before the compile edges of the package that
+# declares it and of no other, so each member declares the installation
+# itself. The two actions run the same `vcpkg install` against the root's one
+# manifest; `mcpp-deps` holds a lock on the installation root, so they run one
+# after the other and the second finds everything installed.
+[workspace]
+members = ["app-a", "app-b"]
+
+[workspace.package]
+version  = "0.1.0"
+standard = "c++23"
+license  = "Apache-2.0"

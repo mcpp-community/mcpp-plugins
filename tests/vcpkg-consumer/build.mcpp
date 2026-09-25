@@ -1,0 +1,11 @@
+// The whole integration: which libraries to link. The installation, the
+// include directory and the runtime library directory follow from the manifest.
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+
+int main() {
+    mcpp::deps::vcpkg::options o;
+    o.libraries = { "fmt" };
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+}
