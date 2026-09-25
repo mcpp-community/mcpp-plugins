@@ -40,11 +40,12 @@ import_std = true
 # list is one whose host-dependent code is compiled on one platform only.
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = [
-  "rules-ascendc", "rules-cuda", "rules-hip", "rules-metal", "rules-slang",
+  "rules-ascendc", "rules-cuda", "rules-hip", "rules-metal", "rules-qt", "rules-slang",
   "rules-spirv", "rules-swift", "rules-sycl",
   "tools-embed", "tools-island",
   "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
   "dist-apk-kotlin", "dist-apk-maven",
+  "deps-cmake", "deps-vcpkg",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns
@@ -62,6 +63,15 @@ plugins = { path = "../..", features = [
 # every member's module is COMPILED on every host, and a member left out is a
 # member whose macOS and Windows compile is never attempted -- which is exactly
 # the failure the two platform-specific members are here to catch.
+#
+# `rules-qt` is named without `rules-qt-xim`: the rule compiles either way, and
+# the SDK -- hundreds of megabytes on every host -- is what the `-xim` feature
+# adds and nothing else. The CI step that reads this list requires every member
+# that carries SOURCES; a member that only declares a payload is optional here.
+#
+# `deps-vcpkg` and `deps-cmake` declare their installers on the host axis, so
+# this fixture installs `xim:vcpkg` (3 MB) and `xim:cmake` on every host. Their
+# modules are what is compiled; neither member is asked to install anything.
 #
 # `dist-apk-kotlin` and `dist-apk-maven` add no source: each implies `dist-apk`
 # and declares one payload on the `cfg(env = "android")` axis, which a host

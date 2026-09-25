@@ -1444,23 +1444,40 @@ jobs:
           # dependable -- and a check that behaves differently on one of the
           # three hosts is the exact class of difference this job exists to
           # catch, so it must not introduce one.
+          # THE MEMBERS THAT CARRY SOURCES, READ OUT OF THE MANIFEST. From 0.13.0 a
+          # member family may hold features that add a payload and no source
+          # (`rules-qt-xim`, `dist-apk-kotlin`): they compile nothing this fixture
+          # could miss, and naming them here would download an SDK on every host.
+          # So the requirement is one-sided -- every source-carrying member of the
+          # four families is named -- and the other side only checks spelling:
+          # every name the fixture uses is a feature the package declares.
+          awk '/^\[features\.[a-z0-9-]+\]/ { cur = $0; sub(/^\[features\./, "", cur); sub(/\]$/, "", cur); next }
+               /^\[/ { cur = "" }
+               /^sources[ \t]*=/ && cur ~ /^(rules|tools|dist|deps)-/ { print cur }' mcpp.toml \
+            | sort -u > /tmp/members.txt
           grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-            | sed 's/^\[features\.//; s/\]$//' | grep -E '^(rules|tools|dist)-' | sort > /tmp/members.txt
+            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/declared.txt
           feats=$(cat /tmp/members.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
-            echo "FAIL: read no features out of mcpp.toml. The extractor above"
-            echo "      expects [features.<name>] sections and found none, so the"
-            echo "      manifest spelling changed -- the package has not stopped"
-            echo "      having features."
+            echo "FAIL: read no source-carrying members out of mcpp.toml. The"
+            echo "      extractor above expects [features.<name>] sections with a"
+            echo "      sources key and found none, so the manifest spelling changed."
             grep -n '^\[features' mcpp.toml | head
             exit 1; }
-          [ "$feats" = "$used" ] || {
-            echo "FAIL: the fixture does not name every published feature"
-            echo "  package: $(echo $feats)"
-            echo "  fixture: $(echo $used)"
-            exit 1; }
+          for f in $feats; do
+            echo "$used" | grep -qx "$f" || {
+              echo "FAIL: the fixture does not name the member $f"
+              echo "  members: $(echo $feats)"
+              echo "  fixture: $(echo $used)"
+              exit 1; }
+          done
+          for f in $used; do
+            grep -qx "$f" /tmp/declared.txt || {
+              echo "FAIL: the fixture names $f, which mcpp.toml does not declare"
+              exit 1; }
+          done
           cd tests/all-rules-compile
           "$MCPP" build
           "$MCPP" run | tee run.log
@@ -1609,6 +1626,34 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ]
+
+      # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
+      #
+      # vcpkg keeps everything it reuses in one per-user directory -- its
+      # binary cache (`archives/`), its registry cache (`registries/`) and,
+      # through `mcpp-deps`, its downloads -- so caching that directory is what
+      # makes the second run of a manifest a restore rather than a compile.
+      - name: Cache vcpkg's per-user directory
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg
+          key: vcpkg-user-${{ runner.os }}-${{ hashFiles('tests/vcpkg-*/vcpkg.json') }}
+          restore-keys: vcpkg-user-${{ runner.os }}-
+
+      - name: deps-vcpkg installs a manifest as an action, and planning installs nothing
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-consumer
+
+      - name: deps-vcpkg in two workspace members that share no dependency
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-workspace
+
+      - name: deps-cmake builds a CMake subproject as an action and links it
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
+
+      # A console program: QtCore, which is what Linux is served for. QtGui
+      # loads libdbus, which the ecosystem does not publish, so the Widgets
+      # fixture runs on Windows only.
+      - name: rules-qt runs moc, rcc and lrelease, with the SDK from xim:qt
+        run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
   # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
   #
@@ -1780,23 +1825,40 @@ jobs:
           # through Git Bash, where process substitution is emulated and not
           # dependable -- and a check that behaves differently on one of the
           # three hosts is the class of difference this job exists to catch.
+          # THE MEMBERS THAT CARRY SOURCES, READ OUT OF THE MANIFEST. From 0.13.0 a
+          # member family may hold features that add a payload and no source
+          # (`rules-qt-xim`, `dist-apk-kotlin`): they compile nothing this fixture
+          # could miss, and naming them here would download an SDK on every host.
+          # So the requirement is one-sided -- every source-carrying member of the
+          # four families is named -- and the other side only checks spelling:
+          # every name the fixture uses is a feature the package declares.
+          awk '/^\[features\.[a-z0-9-]+\]/ { cur = $0; sub(/^\[features\./, "", cur); sub(/\]$/, "", cur); next }
+               /^\[/ { cur = "" }
+               /^sources[ \t]*=/ && cur ~ /^(rules|tools|dist|deps)-/ { print cur }' mcpp.toml \
+            | sort -u > /tmp/members.txt
           grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
-            | sed 's/^\[features\.//; s/\]$//' | grep -E '^(rules|tools|dist)-' | sort > /tmp/members.txt
+            | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/declared.txt
           feats=$(cat /tmp/members.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
-            echo "FAIL: read no features out of mcpp.toml. The extractor above"
-            echo "      expects [features.<name>] sections and found none, so the"
-            echo "      manifest spelling changed -- the package has not stopped"
-            echo "      having features."
+            echo "FAIL: read no source-carrying members out of mcpp.toml. The"
+            echo "      extractor above expects [features.<name>] sections with a"
+            echo "      sources key and found none, so the manifest spelling changed."
             grep -n '^\[features' mcpp.toml | head
             exit 1; }
-          [ "$feats" = "$used" ] || {
-            echo "FAIL: the fixture does not name every published feature"
-            echo "  package: $(echo $feats)"
-            echo "  fixture: $(echo $used)"
-            exit 1; }
+          for f in $feats; do
+            echo "$used" | grep -qx "$f" || {
+              echo "FAIL: the fixture does not name the member $f"
+              echo "  members: $(echo $feats)"
+              echo "  fixture: $(echo $used)"
+              exit 1; }
+          done
+          for f in $used; do
+            grep -qx "$f" /tmp/declared.txt || {
+              echo "FAIL: the fixture names $f, which mcpp.toml does not declare"
+              exit 1; }
+          done
           cd tests/all-rules-compile
           "$MCPP" build
           "$MCPP" run | tee run.log
@@ -2238,3 +2300,32 @@ jobs:
             grep -i provisioning prov.log || echo "(no provisioning line at all)"
             exit 1; }
           echo "ok: $(grep -m1 'entries declared by dependencies' prov.log)"
+
+      # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
+      #
+      # The same criteria as the Linux job, from the same script. On Windows the
+      # default triplet builds fmt as a DLL and the Qt modules are DLLs, so the
+      # runtime library directory is measured twice: `mcpp run` finds them, and
+      # `mcpp pack` carries them.
+      - name: Cache vcpkg's per-user directory
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/vcpkg' || '~/.cache/vcpkg' }}
+          key: vcpkg-user-${{ runner.os }}-${{ hashFiles('tests/vcpkg-*/vcpkg.json') }}
+          restore-keys: vcpkg-user-${{ runner.os }}-
+
+      - name: deps-vcpkg installs a manifest as an action, and planning installs nothing
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-consumer
+
+      - name: deps-vcpkg in two workspace members that share no dependency
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-workspace
+
+      - name: deps-cmake builds a CMake subproject as an action and links it
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
+
+      - name: rules-qt runs moc, rcc and lrelease, with the SDK from xim:qt
+        run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
+
+      - name: rules-qt builds a Widgets program with a .ui form, and it runs offscreen
+        if: runner.os == 'Windows'
+        run: bash .github/scripts/check-deps-and-qt.sh qt-widgets-consumer
