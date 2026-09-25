@@ -37,15 +37,17 @@ int main() {
 | rules | `mcpp.rules.<x>` | how one kind of translation unit is compiled by a compiler mcpp does not drive: the spelling of its flags, the probe of its toolkit, the actions it submits |
 | tools | `mcpp.tools.<x>` | a build-time utility independent of any compiler; see `tools/README.md` |
 | dist | `mcpp.dist.<x>` | what comes out of the link, and in what form a user installs it: an `.msi`, an AppImage, a signed `.app` |
+| deps | `mcpp.deps.<x>` | where a library comes from: a prefix a program mcpp does not drive installs (vcpkg, CMake), mapped into the build |
 | identity | `mcpp.plugins` | the lib root, compiled before every member; it states the collection's version |
 
-The three families answer three different questions, and the prefix is which
+The four families answer four different questions, and the prefix is which
 one a member answers:
 
 ```
 rules-*   how is this translation unit compiled
 tools-*   what does the build program need to do itself
 dist-*    what comes out of the link, and in what form a user installs it
+deps-*    where does a library come from
 ```
 
 A `dist-*` member fits neither of the first two definitions: it does not
@@ -54,6 +56,13 @@ runs. It consumes **link outputs** through a `role = "artifact"` action, reached
 with `mcpp pack --format <name>` (mcpp 2026.9.11.1+). The prefix matters because
 the taxonomy is load-bearing -- a consumer reading `rules-wix` would expect a
 compiler it does not drive and a translation unit, and there is neither.
+
+A `deps-*` member compiles none of the project's translation units and does not
+do its work while the build program runs: the installation is a `blocking`
+check action, which the package's compile edges wait for, and whose command is
+`mcpp-deps`, a program built from this package. The build program only states
+the prefix -- include directory, libraries by full path, runtime library
+directory -- which it can do before anything is installed.
 
 The `mcpp.` prefix is reserved for this package: mcpp warns when a module under
 it is declared by a package outside the `mcpp` namespace. `mcpp.build.*` is the
@@ -67,6 +76,7 @@ engine's own module family and is not used here.
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.6.6 | `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one |
 | `rules-hip` | `mcpp.rules.hip` | 2026.9.6.6 | `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine |
 | `rules-metal` | `mcpp.rules.metal` | 2026.9.8.1 | the Metal toolchain of the macOS host's Xcode, located rather than installed: Xcode is not redistributable, so no payload is declared. `.metal` sources the project names on a macOS or iOS row become one `xcrun --sdk <sdk> metal` action per shader (`-MMD`, so an edited `#include` recompiles the shaders that include it) and one `xcrun --sdk <sdk> metallib` action per library, placed beside the program with `mcpp::deploy` under `metallib/`, which `dist-apple` maps into the bundle's resources. `compile(shaders)` compiles one source several times with definitions of its own, one library per `shader`; `options::library` links every shader into one library (`default` is the one `newDefaultLibrary` finds). Before planning anything the rule asks `xcrun --sdk <sdk> --show-sdk-path` and `--find metal` / `--find metallib`, and refuses naming the command that answered nothing, because a missing SDK and a missing compiler have different remedies (Xcode 26 installs the Metal toolchain as a separate component). A shader on any other row is refused naming the row. CI compiles the fixture on `macos-15` and checks each library's magic, and that a header edit recompiles only the shaders that include it |
+| `rules-qt` | `mcpp.rules.qt` | 2026.9.27.1 | a Qt 6 SDK: `rules-qt-xim` declares `xim:qt` 6.11.1 on the target axis, `rules-qt-xim-addons` adds `xim:qt-addons` (the additional libraries) as a second prefix, and `options::root` names an SDK from elsewhere. From 0.13.0. `moc` for every header under the package root that declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE` and for a source that includes its own `<stem>.moc`; `uic` for `.ui`, `rcc` for `.qrc`, `lrelease` for `.ts` (named in `[build] sources` or in the options), each a `role = "source"` action with declared inputs. The modules are linked by full path, the SDK's library directory is a runtime library directory, and the plugin directories `deploy_plugins` names are placed beside the program. See [`deps-vcpkg`, `deps-cmake` and `rules-qt`](#deps-vcpkg-deps-cmake-and-rules-qt) |
 | `rules-slang` | `mcpp.rules.slang` | 2026.9.7.1 | `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. `.slang` is **not** in the engine's device-source table: this feature declares `device_extensions = [".slang"]` and `rule_module = "mcpp.rules.slang"`, and the engine routes it from there. That is the criterion for the whole arrangement -- a new device language costs no engine release. Since 0.7.0 it has the same `options::storage` axis as `rules-spirv` (header / object / sidecar), `options::extra_args` for the arguments the rule has no field for, and `options::per_file` for what one shader gets that the others do not -- a project with a `-fvk-use-gl-layout` and one shader needing `-emit-spirv-via-glsl` writes both without leaving one `compile()` call |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; compiles each shader through a `role = "source"` action and states which of the two compilers produced it |
 | `rules-swift` | `mcpp.rules.swift` | 2026.9.8.1 | the Swift compiler of the macOS host's Xcode or Command Line Tools, located rather than installed, as `rules-metal` locates its toolchain. From 0.12.0. The `.swift` sources a project names on a macOS or iOS row compile as one module named after the package: one whole-module `xcrun --sdk <sdk> swiftc -wmo -emit-object -target <triple>` action whose role is `object`, so the object joins every image of the package, and one `swiftc -typecheck -emit-objc-header-path` action whose role is `source`, whose directory `mcpp::include_dir` adds, so the package's C and C++ sources include `<module>-Swift.h`. `options::bridging_header` names a C header Swift sees without an import. The link receives the toolchain's `usr/lib/swift/<platform>` and the SDK's `usr/lib/swift` as search directories and `/usr/lib/swift` as a run path through `mcpp::link_flag`. Before planning anything the rule asks `xcrun --sdk <sdk> --show-sdk-path` and `--find swiftc`, and refuses naming the command that answered nothing; a Swift source on any other row is refused naming the row. Not supported: a Swift `import` of another package's module, and another package's C++ including this package's generated header, which both need an engine channel that publishes a package's interface directory to its dependents; and SwiftPM dependencies. CI builds `tests/swift-consumer` on `macos-15` -- a C++ program calling a `@_cdecl` Swift function that calls back into C -- and runs it |
@@ -78,6 +88,8 @@ engine's own module family and is not used here.
 | `dist-apple` | `mcpp.dist.apple` | 2026.9.14.2 (0.10.0); 2026.9.11.2 (macOS) and 2026.9.12.3 (iOS) before it | the base macOS install (`ditto`, `codesign`, `hdiutil`), and `xim:macapp-run` for `mcpp run` on macOS, which this feature declares with `when = "run"`. macOS: `Contents/`-shaped, as always. iOS (`aarch64-ios-sim`, `aarch64-ios`): a flat bundle at the same call site -- no separate feature, no separate module -- with `MinimumOSVersion` from `mcpp::min_platform_version()` (#622 A11), `CFBundleSupportedPlatforms` read from `env == "sim"`, `UIDeviceFamily`, `LSRequiresIPhoneOS`, and a directory of flat PNGs listed under `CFBundleIcons` in place of macOS's single `.icns` file. Signing is skipped on the simulator row (`options::identity` is ignored, with a `mcpp::warning` naming why), and the device row signs only with an identity. The iOS row is measured end to end on `macos-15`: a real `mcpp build`, `mcpp pack --format app` and `mcpp run` against `aarch64-ios-sim`, through `xim:apple-simulator-tools`' `simctl-run`. **The macOS floor is one release higher than its siblings** and the reason is not this member: under 2026.9.11.1 `mcpp pack` staged before dispatching and let a staging failure fail the command, so on a Mach-O program -- which the built-in closure walk refuses, because it uses `LD_TRACE_LOADED_OBJECTS` and dyld answers that by running the program -- every dispatched format was unreachable, including one that reads no staged tree. 2026.9.11.2 makes staging a service to the provider. From 0.9.2 the staged tree's deployed files (`bin/<to>/...`, which the engine stages for a Mach-O program before the closure walk since the release for mcpp#630) land at the bundle's resource destination -- `Contents/Resources/<to>/...` on macOS, the bundle root on iOS -- and the launcher alone goes to the executable directory, so `CFBundleExecutable` names a file that is where it says. The iOS fixture declares `llvm.libcxx` and `llvm.compiler-rt-builtins` under `cfg(os = "ios")`, which is what an application that imports `std` on those rows declares. From 0.10.0, with mcpp 2026.9.14.2: the dylibs the engine stages beside a Mach-O program, which the stage manifest's `needs` lines name, go to `Contents/Frameworks/` (`Frameworks/` on iOS) and not to the resources; the program is linked with the rpath that finds them there (`@executable_path/../Frameworks`, `@executable_path/Frameworks` on iOS) through `mcpp::link_flag`, so no file is edited after the link; a macOS bundle without `options::identity` is signed ad hoc, frameworks first and the bundle second, which `codesign --verify --deep --strict` requires of a bundle that carries a framework; an incomplete closure is a `mcpp::warning` naming the unresolved libraries; every refusal is a `mcpp::warning` as well, because the engine discards a build program's output when it exits 0. On macOS the member supplies the runner named `app` (`macapp-run`), so `mcpp run --format app` runs the bundle's executable in the foreground and returns its status with no runner in the manifest; a manifest runner of that name wins. `--format dmg` stages the bundle beside an `Applications` link and writes a UDZO image with `hdiutil create` (`options::volume_name`, `options::dmg`); it is refused on iOS. An engine below 2026.9.14.2 stages no `needs` lines, so the bundle carries no framework, anchors the rpath to the package directory, and hands the bundle directory to the kernel under `mcpp run --format app` unless `--runner app` is typed. CI measures the bundle on `macos-15`: the load command, the signature, the program with and without its framework (exit 7, then "Library not loaded"), `mcpp run --format app` with and without `--runner app`, and `hdiutil verify` and an attached image. From 0.11.0: a project's own Info.plist entries (`options::info_plist`), an iOS device bundle's provisioning profile (`options::provisioning_profile`), and `devicectl-run` (`xim:apple-device-tools`) as the device row's runner named `app` -- see [`dist-apple`: a project's Info.plist, and an iOS device](#dist-apple-a-projects-infoplist-and-an-ios-device). From 0.12.0 `options::omit_keys` leaves out a key the member only defaults -- see [`dist-apple`: a project's Info.plist, and an iOS device](#dist-apple-a-projects-infoplist-and-an-ios-device). From 0.12.0 a package in the resolved graph contributes Info.plist entries through `[package.metadata.dist-apple]`, applied before the application's own |
 | `dist-web` | `mcpp.dist.web` | 2026.9.13.1, the release that carries `${mcpp.self}` and `mcpp stage`'s argument shape as an engine contract (`stage --verify content --output <dst> <src>`) -- what lets this member's copy run on every host mcpp does, Windows included, in place of the `cp` this member used through 0.8.0 | nothing beyond mcpp: `wasm32-emscripten` only. Copies `${mcpp.stage_dir}/bin/` -- the `.js` launcher, the implicit `.wasm`, the `.data` when present, and every `mcpp::deploy`'d file, all of which #622 A5 and A4 already stage there -- to `<out_dir>/web/`, dropping the `bin/` prefix a browser has no use for, and writes an `index.html` rendered from a project template or a built-in default that loads the script with a plain `<script src>`. Each staged file and the rendered page are copied with `${mcpp.self} stage --verify content --output <dst> <src>`, the same copier every `stage_file` edge in `build.ninja` already runs -- no host-specific copy tool, no plan-time `create_directories` (`stage` creates the destination's parent), and a second `mcpp pack --format web` with nothing changed copies nothing. From 0.12.0 `options::page` names the page (`index.html` by default), for a project whose other build names it after the target; a name that is not a bare `*.html` file name is refused at plan time |
 | `dist-apk` | `mcpp.dist.apk` | 2026.9.14.2 from 0.10.0, which stages the closure this member reads; before it 2026.9.13.1, raised alongside `dist-web` in the same 0.9.0 release: this member's own manifest-template and Java-array changes ask nothing new of the engine, but this collection publishes one package at one version, and this is the release CI verifies it under from here on | `xim:android-build-tools`, `xim:android-platform` (versioned by API level, read back for `targetSdkVersion`), `xim:jdk-temurin` (`javac`/`jar`/`jarsigner`; `android-build-tools`' own runtime dependency provisions a JDK for its OWN wrappers only), `xim:android-debug-keystore`, `xim:bundletool` (0.10.0, for `--format aab`), all on the `cfg(env = "android")` axis. Generates `AndroidManifest.xml` and signs with the published Android debug key by default. Level 0 needs no Java (`hasCode="false"`, `android.app.NativeActivity`); `options::java_sources` adds `javac` + `d8` and a real `<activity>`. `options::manifest_template` renders a project manifest with six tokens substituted verbatim; `{{application_id}}` and `{{activity}}` are required always and `{{lib_name}}` at level 0, each refused by name at plan time when missing (naming `assets/mcpp-run.json`, which `adb-run` reads them from too) or when the template names an unknown token; empty renders 0.8.0's manifest byte-identically. From 0.9.3 the manifest template gains `{{version_name}}` / `{{version_code}}` (the package version, and `major * 1000000 + minor * 1000 + patch`). `options::resources` is a project's own `res/`, linked as the application's base resources from 0.9.1 (0.9.0 linked it as an aapt2 overlay, which refuses every resource the base does not already define -- a launcher icon could not be supplied). `options::java_sources` is an array: one `javac` over every root's `.java` files and one `d8` over the result, so a project's own sources and a path dependency's join without being merged into one directory first, and `rerun_if_changed_glob` is declared only for a root under `mcpp::manifest_dir()` -- a dependency root's files are already inputs of the `javac` action and its version is already in the build's fingerprint. Android only -- an `app` target is a shared object on this row (#622 A3). From 0.10.0, with mcpp 2026.9.14.2, the member reads the native closure the engine stages -- the application object, the graph's shared libraries and `libc++_shared.so` under `lib/` for one `--target`, `lib/<abi>/` for several -- and packs every ABI the tree carries into one APK; its own `NEEDED` walk and the stamp that lost a dependency's library on a second pack are gone. A stage manifest without `needs` lines comes from an engine below 2026.9.14.2 and is refused naming that floor, as is an incomplete closure, naming the unresolved libraries; every refusal is also a `mcpp::warning`, because the engine discards a build program's output when it exits 0. `--format aab` shares every step but the last three: `aapt2 link --proto-format` (with `--version-code` / `--version-name`, which bundletool requires), a base module in the layout bundletool reads, `bundletool build-bundle` from `xim:bundletool` (declared on the same axis), and `jarsigner` with the same keystore. CI packages both level 0 and level 1 and checks the archive (`mcpp::deploy`'d files under `assets/`), and on `tests/apk-consumer-shared` two packs in a row, a two-ABI APK (`aapt2` reports both, `apksigner` verifies it), an App Bundle (`bundletool validate`, `jarsigner -verify`, a universal APK from `bundletool build-apks`), a refusal's reason in `mcpp pack`'s output, and the floor refusal; the runner has no emulator or device, so the two rows that actually run were measured locally on 2026-09-12, through `adb-run`, against a KVM-accelerated x86_64 emulator and a physical arm64-v8a phone, both printing `1-2-3` and exiting 0. From 0.11.0: Kotlin sources (`dist-apk-kotlin`, which declares `xim:kotlin`), R classes, Android libraries from source, local AARs and JARs, a Maven graph through a lock file (`dist-apk-maven`, which declares `xim:coursier`), a manifest merge, and an unsigned package -- see [`dist-apk`: Kotlin, libraries and a Maven graph](#dist-apk-kotlin-libraries-and-a-maven-graph). From 0.11.1 the native libraries are packed as the Android Gradle plugin packs them: each is stripped with the build's own `llvm-strip --strip-unneeded` (the NDK's, beside the compiler `mcpp::toolchain_dir()` reports; `options::keep_debug_symbols` packs them as staged), and a manifest stating `android:extractNativeLibs="false"` gets them stored uncompressed on a 16 KB page, which loading them from the APK in place requires; CI checks both, and the symbol table `keep_debug_symbols` keeps. From 0.12.0 the engine's strip decision governs these libraries as well: under mcpp 2026.9.16.1, which publishes it to build programs as `MCPP_PACK_STRIP` and `MCPP_PACK_DEBUG_SYMBOLS_DIR`, that engine strips and separates the libraries it stages itself and the member packs them as staged, while the libraries the engine did not stage -- an archive's `jni/` libraries -- follow the same decision inside the member: `--no-strip` packs them as they are, and `--debug-symbols <dir>` separates each one's debug information into `<dir>/<abi>/<library>.debug` with `llvm-objcopy` before stripping it and linking the packed copy to that file (`.gnu_debuglink`). A library is stripped unless either `keep_debug_symbols` or the engine says to keep it, and under an older engine, which publishes neither variable, the member strips every library as before. Because that engine strips before the member reads the tree, `keep_debug_symbols` keeps only the member's own strip off and `--no-strip` is what ships the symbols of the libraries the graph built; the member warns when the option is set and the engine stripped. From 0.12.0 a library in the resolved graph contributes libraries and archives through `[package.metadata.dist-apk]`, ranked below the application's own -- see [A library states its contribution](#a-library-states-its-contribution-packagemetadatadist-apk) |
+| `deps-vcpkg` | `mcpp.deps.vcpkg` | 2026.9.27.1 | `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis, and `tools = ["mcpp-deps"]` on the edge. From 0.13.0. Installs a `vcpkg.json` manifest as a `blocking` action and maps `<install root>/<triplet>` into the build; `mcpp emit build-database` installs nothing. See [`deps-vcpkg`, `deps-cmake` and `rules-qt`](#deps-vcpkg-deps-cmake-and-rules-qt) |
+| `deps-cmake` | `mcpp.deps.cmake` | 2026.9.27.1 | `xim:cmake`, which this feature declares on the host axis, and `tools = ["mcpp-deps"]` on the edge. From 0.13.0. Configures, builds and installs a CMake subproject as one `blocking` action whose inputs are the subproject's files, and maps the prefix as `deps-vcpkg` does |
 
 ### Each rule brings its own environment
 
@@ -139,6 +151,7 @@ Each rule therefore selects the extensions it claims and leaves the rest:
 | `rules-cuda` | `.cu` |
 | `rules-hip` | `.hip` |
 | `rules-metal` | `.metal` |
+| `rules-qt` | `.ui`, `.qrc`, `.ts`; a header is found by what it declares, since `.h` is already C++ |
 | `rules-slang` | `.slang` |
 | `rules-swift` | `.swift` |
 | `rules-sycl` | `.sycl` |
@@ -831,6 +844,160 @@ CI measures the rest:
 - On `macos-15`: the entries in a real macOS bundle that `plutil` accepts and
   that launches, and in a simulator bundle that the simulator runs.
 
+## `deps-vcpkg`, `deps-cmake` and `rules-qt`
+
+### `deps-vcpkg`: the libraries a vcpkg manifest names
+
+```toml
+[build-dependencies.mcpp]
+plugins = { version = "0.13.0", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
+```
+
+```cpp
+// build.mcpp
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+
+int main() {
+    mcpp::deps::vcpkg::options o;
+    o.libraries = { "fmt", "spdlog" };
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+}
+```
+
+`use()` finds `vcpkg.json` at or above the package root, so every member of a
+workspace finds a manifest kept at the workspace root. It then:
+
+- declares `mcpp-deps vcpkg …` as a `role = "check"`, `blocking = true` action
+  whose inputs are `vcpkg.json`, `vcpkg-configuration.json` and every file of
+  the manifest's overlay ports and triplets. The action runs under `mcpp build`
+  when one of them changed, and never under `mcpp emit build-database`;
+- adds `<install root>/<triplet>/include` as an include directory;
+- links each name in `options::libraries` by its full path under
+  `<install root>/<triplet>/lib` (`fmt` is `fmt.lib` on Windows, `libfmt.a` or
+  `libfmt.so` elsewhere; a name with an extension is a file name);
+- for a triplet that links dynamically, declares `bin/` (Windows) or `lib/`
+  (elsewhere) with `mcpp::runtime_library_dir`, so `mcpp run` finds the shared
+  libraries and `mcpp pack` carries them, and adds `lib/` as a run path off
+  Windows;
+- returns the prefix (`root`, `include`, `lib`, `bin`, `share`, `installed`),
+  whose paths are stated before anything is installed.
+
+A prefix that does not exist yet is a warning and not a failure: the first plan
+of a project runs before the installation, and the paths it states are the ones
+the installation fills.
+
+| option | meaning |
+|---|---|
+| `triplet` | empty derives it from the target: `x64-windows`, `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`, `x64-osx`, `arm64-osx`; a custom triplet is found through the manifest's `overlay-triplets` |
+| `libraries` | the link, in order; a listed name missing from the installed `lib/` is reported with the files that are there |
+| `manifest_root` | the directory holding `vcpkg.json` |
+| `install_root` | empty is vcpkg's default, `<manifest root>/vcpkg_installed` |
+| `overlay_triplets` | further overlay-triplet directories |
+| `install_args` | arguments appended to `vcpkg install` |
+| `vcpkg_root` | a vcpkg root other than the `xim:vcpkg` payload |
+
+The payload `xim:vcpkg` is vcpkg-tool's release binary with the standalone
+bundle published beside it, so the scripts a port calls are the ones that tool
+was released with. A `builtin-baseline` manifest resolves through vcpkg's git
+registry, into vcpkg's per-user registry cache; no clone of microsoft/vcpkg is
+made per project, and an inherited `VCPKG_ROOT` is not used. `mcpp-deps`
+places vcpkg's downloads and each installation's build trees in vcpkg's
+per-user directory (`%LOCALAPPDATA%\vcpkg` on Windows, `$XDG_CACHE_HOME/vcpkg`
+or `~/.cache/vcpkg` elsewhere), beside vcpkg's default binary cache, and takes
+an exclusive lock on the installation root while vcpkg runs. vcpkg fetches its
+own CMake, Ninja and 7-Zip, and on Windows a portable git; on Linux and macOS
+its documented host prerequisites (git, curl, zip, unzip, tar, a C compiler)
+are the host's. Ports are compiled with vcpkg's default toolchain for the
+triplet: the Visual Studio toolset on Windows, the host compiler elsewhere.
+
+Not supported: vcpkg's classic mode; the debug libraries under `debug/lib`.
+
+### `deps-cmake`: a CMake subproject
+
+```cpp
+import mcpp.deps.cmake;
+
+int main() {
+    mcpp::deps::cmake::options o;
+    o.source     = "3rdParty/widgets";
+    o.cache_args = { "-DWIDGETS_BUILD_EXAMPLES=OFF" };
+    o.libraries  = { "widgets" };
+    o.shared     = true;
+    return mcpp::deps::cmake::use(o) ? 0 : 1;
+}
+```
+
+One `blocking` check action configures, builds and installs the subproject into
+`<out dir>/deps-cmake/<name>/install`; its inputs are the subproject's files, so
+an edit to the subproject rebuilds it. The prefix is mapped as `deps-vcpkg`
+maps its own. `layout` names install directories other than `include/`, `lib/`
+and `bin/`; `prefix_path` becomes `CMAKE_PREFIX_PATH` (`mcpp::rules::qt::root()`
+for a subproject that finds Qt); `cache_args` carries `-D…`, `-G …` and a
+toolchain file. The subproject is compiled with the toolchain CMake selects by
+default unless `cache_args` names another.
+
+### `rules-qt`: Qt's code generators and Linguist tools
+
+```toml
+[build-dependencies.mcpp]
+plugins = { version = "0.13.0", features = ["rules-qt-xim"], host-module = true }
+
+[build]
+sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts", "ui/*.ui"]
+```
+
+```cpp
+import mcpp.rules.qt;
+
+int main() {
+    mcpp::rules::qt::options o;
+    o.modules        = { "Core", "Gui", "Widgets", "Network" };
+    o.deploy_plugins = { "platforms", "styles", "imageformats" };
+    o.i18n.tr_function_alias = { "translate+=appTr" };
+    return mcpp::rules::qt::compile(o) ? 0 : 1;
+}
+```
+
+| feature | SDK |
+|---|---|
+| `rules-qt` | `options::root`; nothing is downloaded |
+| `rules-qt-xim` | `xim:qt` 6.11.1: the official base package without documentation (qtbase, qtsvg, qtdeclarative, qttools, qttranslations) |
+| `rules-qt-xim-addons` | adds `xim:qt-addons` 6.11.1, every additional library, as a second prefix |
+
+| option | meaning |
+|---|---|
+| `modules` | `Core`, `QtCore` and `Qt6Core` name one module; each is linked by full path and defines `QT_<MODULE>_LIB` |
+| `private_modules` | modules whose private headers are included |
+| `moc`, `moc_headers` | `moc_scan::project_headers` (default) scans the package's headers by content; `moc_scan::listed` takes `moc_headers` only |
+| `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
+| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as a `blocking` check before `lrelease`; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir`, where `lrelease` writes (default `<out dir>/qt/translations`) |
+| `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
+| `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
+| `root`, `extra_roots` | an SDK, and further prefixes |
+
+Generated files are written under `<out dir>/qt/`: `moc_<stem>.cpp` and
+`qrc_<stem>.cpp` are compiled, `ui_<stem>.h` and `<stem>.moc` are included
+(the directory is an include directory), and `translations/<stem>.qm` is
+deployed. Under an MSVC compiler the rule adds `/Zc:__cplusplus` and
+`/permissive-`; on Linux, `-fPIC`, which Qt's headers require. A resource
+compiled into a static library is registered with `Q_INIT_RESOURCE(<stem>)`, as
+Qt documents; in a program it registers itself.
+
+A missing SDK is a warning: nothing Qt-specific is planned, and the build is
+where the absence fails.
+
+On Linux, Qt's official libraries link glib, zstd and zlib and the shared
+`libstdc++`. `rules-qt-xim` declares the first three on Linux and the rule makes
+their `lib/` directories runtime library directories; the program states
+`cxx_runtime = "toolchain-coupled"` for its Linux triple (mcpp's docs/20), so
+the process has one C++ runtime. Modules that load QtGui are not served on
+Linux: QtGui loads `libdbus-1.so.3`, which the ecosystem does not publish, and
+mcpp's runtime closure check refuses the program. On macOS the modules are
+frameworks under `lib/`: the rule compiles with `-F<root>/lib` and links each
+framework's binary by its full path.
+
 ## How the engine sees this package
 
 mcpp compiles every module interface unit among a host-module package's
@@ -852,6 +1019,9 @@ src/plugins.cppm   export module mcpp.plugins;  the lib root: the version,
 rules/<x>.cppm     export module mcpp.rules.<x>;
 tools/<x>.cppm     export module mcpp.tools.<x>;
 dist/<x>.cppm      export module mcpp.dist.<x>;
+deps/<x>.cppm      export module mcpp.deps.<x>;  deps/deps.cppm is what both
+                   deps members share
+tools/deps_main.cpp  mcpp-deps, the command of every deps installation
 tests/<consumer>/  one project per member, built by CI with the pinned mcpp
 ```
 
@@ -871,7 +1041,7 @@ own include search list, and only on a machine that has those directories.
 
 ## Adding a member
 
-1. One file, `rules/<x>.cppm`, `tools/<x>.cppm` or `dist/<x>.cppm`, declaring
+1. One file, `rules/<x>.cppm`, `tools/<x>.cppm`, `dist/<x>.cppm` or `deps/<x>.cppm`, declaring
    its module name.
    The engine owns the graph — the accelerator axis, the constrained globs,
    the action edges, the fingerprint — and the member owns the spelling: which
