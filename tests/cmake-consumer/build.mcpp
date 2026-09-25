@@ -1,0 +1,11 @@
+import std;
+import mcpp;
+import mcpp.deps.cmake;
+
+int main() {
+    mcpp::deps::cmake::options o;
+    o.source    = "greet";
+    o.libraries = { "greet" };
+    o.shared    = true;
+    return mcpp::deps::cmake::use(o) ? 0 : 1;
+}
