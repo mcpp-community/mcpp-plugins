@@ -1,0 +1,27 @@
+# Fixture: files a program reads at run time, from a zip archive the project
+# keeps, through `deps-archive`.
+#
+#   assets/bundle.zip   bundle/greeting.txt, bundle/nested/deep.txt, and
+#                       bundle/not-compiled.cpp, which `#error`s if it is ever
+#                       compiled: an archive member is data
+#
+# The program prints what it reads from beside itself, so `mcpp run`, the
+# build directory and the packed tree are all checked by running it.
+[package]
+name        = "archive-consumer"
+version     = "0.1.0"
+description = "Fixture: an archive extracted and deployed beside the program through deps-archive"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-archive"], host-module = true, tools = ["mcpp-deps"] }
+
+[targets.archive-consumer]
+kind = "bin"
+main = "src/main.cpp"

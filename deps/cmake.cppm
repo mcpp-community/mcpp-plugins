@@ -65,11 +65,16 @@ struct options {
     bool shared = false;
     // The `cmake` executable. Empty is the `xim:cmake` payload.
     std::string cmake;
+    // Files of the prefix placed beside the program, as `mcpp.deps.vcpkg`
+    // takes them (`{"bin/tool.cfg", "."}`).
+    std::vector<mcpp::deps::deploy_entry> deploy;
 };
 
 // The prefix, by name (SPEC-007 R1.3).
 struct prefix {
     std::string root, include, lib, bin;
+    // The copies `options::deploy` produced, for a project's own layout.
+    std::vector<mcpp::deps::deployed_file> deployed;
     explicit operator bool() const { return !root.empty(); }
 };
 
@@ -145,11 +150,13 @@ inline prefix use(const options& opt) {
         }
         for (auto const& x : opt.cache_args) a.arg(x.c_str());
         a.input(tool.c_str());
+        a.input(cmake.c_str());
         for (auto const& f : mcpp::deps::files_under(source)) a.input(f.c_str());
         mcpp::deps::watch_tree(source);
         a.output(stamp.c_str());
         a.output_dir(p.root.c_str());
         a.submit();
+        p.deployed = mcpp::deps::deploy_after("deps-cmake-" + name, stamp, fs::path(p.root), opt.deploy);
     }
 
     mcpp::include_dir(p.include.c_str());

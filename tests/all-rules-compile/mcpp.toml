@@ -45,7 +45,7 @@ plugins = { path = "../..", features = [
   "tools-embed", "tools-island",
   "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
   "dist-apk-kotlin", "dist-apk-maven",
-  "deps-cmake", "deps-vcpkg",
+  "deps-archive", "deps-cmake", "deps-vcpkg",
 ], host-module = true }
 
 # NO `accel`, and that is the whole design: with none, every rule returns

@@ -30,6 +30,7 @@
 //   mcpp-deps cmake --cmake <exe> --source <dir> --build <dir> --prefix <dir>
 //             [--config <Release>] [--generator <g>]
 //             [-- <extra configure args>...]
+//   mcpp-deps unpack --cmake <exe> --archive <file> --into <dir>
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
 #  define NOMINMAX
@@ -56,7 +57,8 @@ namespace fs = std::filesystem;
                  "--install-root <dir> --triplet <t> [--overlay-triplets <dir>]... "
                  "[-- <args>...]\n"
               << "       mcpp-deps cmake --cmake <exe> --source <dir> --build <dir> --prefix <dir> "
-                 "[--config <c>] [--generator <g>] [-- <args>...]\n";
+                 "[--config <c>] [--generator <g>] [-- <args>...]\n"
+              << "       mcpp-deps unpack --cmake <exe> --archive <file> --into <dir>\n";
     std::exit(2);
 }
 
@@ -323,6 +325,40 @@ int cmake_install(const args& a) {
     return 0;
 }
 
+// ── An archive ─────────────────────────────────────────────────────────────
+
+// Extracts `--archive` into `--into`, which it empties first: the member that
+// planned this action named every file the archive holds as an output, and a
+// file left over from a previous archive would be one it did not name. CMake's
+// `-E tar` reads zip as well as tar on every host; `--touch` gives each file
+// the time of extraction, so the outputs are newer than the archive and the
+// next build finds them up to date. `-E tar` extracts into its working
+// directory, which an action cannot set, so this program sets it.
+int unpack(const args& a) {
+    const fs::path cmake   = a.one("cmake");
+    const fs::path archive = fs::absolute(a.one("archive"));
+    const fs::path into    = fs::absolute(a.one("into"));
+
+    std::error_code ec;
+    fs::remove_all(into, ec);
+    fs::create_directories(into, ec);
+    if (ec) {
+        std::cerr << std::format("mcpp-deps: cannot create {}: {}\n", into.string(), ec.message());
+        return 1;
+    }
+    fs::current_path(into, ec);
+    if (ec) {
+        std::cerr << std::format("mcpp-deps: cannot enter {}: {}\n", into.string(), ec.message());
+        return 1;
+    }
+    std::cerr << "mcpp-deps: unpack " << archive.string() << " -> " << into.string() << "\n";
+    if (int code = run({cmake.string(), "-E", "tar", "xf", archive.string(), "--touch"}); code != 0) {
+        std::cerr << std::format("mcpp-deps: cmake -E tar exited {}\n", code);
+        return code;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -331,5 +367,6 @@ int main(int argc, char** argv) {
     const args a = parse(argc, argv, 2);
     if (sub == "vcpkg") return vcpkg_install(a);
     if (sub == "cmake") return cmake_install(a);
+    if (sub == "unpack") return unpack(a);
     usage(std::format("unknown subcommand `{}`", sub));
 }

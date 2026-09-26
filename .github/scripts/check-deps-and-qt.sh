@@ -65,6 +65,10 @@ vcpkg_consumer() {
     "$MCPP" run | tee target/ci/run.log
     grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/run.log || fail "the program did not print through fmt"
     assert_not_rerun "$(stamp_of deps-vcpkg)"
+    # A file of the prefix the build program named in options::deploy.
+    find target -path '*/bin/licenses/fmt/copyright' | grep -q . ||
+        fail "share/fmt/copyright was not deployed beside the program"
+    echo "ok: a file of the prefix is deployed beside the program"
 
     if is_windows; then
         # The pack collects it from the runtime search directory.
@@ -74,6 +78,7 @@ vcpkg_consumer() {
             fail "started from the build directory, the program did not find fmt.dll"
         "$MCPP" pack --format dir | tee target/ci/pack.log
         find target/dist -iname 'fmt.dll' | grep -q . || fail "the packed tree carries no fmt.dll"
+        find target/dist -path '*/licenses/fmt/copyright' | grep -q . || fail "the packed tree carries no deployed copyright"
         echo "ok: the packed tree carries fmt.dll"
     fi
 }
@@ -128,6 +133,58 @@ cmake_consumer() {
     echo "ok: a file added to the subproject re-ran its installation"
 }
 
+archive_consumer() {
+    cd "$ROOT/tests/archive-consumer"
+    rm -rf target
+    mkdir -p target/ci
+    # PLANNING EXTRACTS NOTHING. The listing is read from the archive's central
+    # directory; the extraction is an action.
+    "$MCPP" emit build-database --format json > target/ci/db.json 2> target/ci/emit.log ||
+        { cat target/ci/emit.log; fail "emit build-database failed before any extraction"; }
+    [ -z "$(find target -path '*deps-archive*' -type f)" ] || fail "emit build-database extracted something"
+    echo "ok: emit planned the archive and extracted nothing"
+
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    "$MCPP" run | tee target/ci/run.log
+    grep -q "^archive-consumer: 'greetings from the archive', 'a file two levels down'$" target/ci/run.log ||
+        fail "the program did not read the archive's files from beside itself"
+    # The C++ file among the data `#error`s if compiled; the build succeeded,
+    # and the file is beside the program as data.
+    find target -path '*/bin/runtime/bundle/not-compiled.cpp' | grep -q . ||
+        fail "an archive member was not deployed beside the program"
+    echo "ok: the archive's tree is beside the program, a C++ member included, as data"
+
+    local copy
+    copy=$(find target -path '*deps-archive/bundle/bundle/greeting.txt' | head -1)
+    [ -n "$copy" ] || fail "no extracted copy under target/"
+    touch -r "$copy" target/ci/before-second-build
+    sleep 1
+    "$MCPP" build --profile dev > target/ci/second-build.log 2>&1 ||
+        { cat target/ci/second-build.log; fail "the second build failed"; }
+    [ -z "$(find "$copy" -newer target/ci/before-second-build)" ] ||
+        fail "a second build with nothing changed extracted the archive again"
+    echo "ok: a second build with nothing changed did not extract the archive again"
+
+    touch assets/bundle.zip
+    "$MCPP" build --profile dev > target/ci/third-build.log 2>&1 ||
+        { cat target/ci/third-build.log; fail "the build after touching the archive failed"; }
+    [ -n "$(find "$copy" -newer target/ci/before-second-build)" ] ||
+        fail "a changed archive was not extracted again"
+    echo "ok: a changed archive was extracted again"
+
+    "$MCPP" pack --format dir > target/ci/pack.log 2>&1 || { cat target/ci/pack.log; fail "mcpp pack failed"; }
+    find target/dist -path '*/runtime/bundle/nested/deep.txt' | grep -q . ||
+        fail "the packed tree does not carry the archive's files"
+    # A PE program sits at the root of the packed tree, an ELF or Mach-O one
+    # under bin/; the deployed files are beside it either way.
+    local packed
+    packed=$(find target/dist -type f \( -name archive-consumer -o -name archive-consumer.exe \) | head -1 || true)
+    [ -n "$packed" ] || fail "no packed program under target/dist"
+    "$packed" | grep -q "^archive-consumer: 'greetings from the archive'" ||
+        fail "the packed program did not read the archive's files"
+    echo "ok: the packed tree carries the archive's files, and the packed program reads them"
+}
+
 qt_consumer() {
     cd "$ROOT/tests/qt-consumer"
     rm -rf target
@@ -146,6 +203,9 @@ qt_consumer() {
         fail "moc, rcc or lrelease did not reach the program"
     find target -name 'qt_consumer_de.qm' | grep -q . || fail "no .qm was produced"
     echo "ok: moc (header and inline), rcc and lrelease reached the program"
+    grep -q "Qt's own 'Abbrechen'$" target/ci/run.log ||
+        fail "Qt's own strings were not translated from the combined qt_de.qm"
+    echo "ok: lconvert combined Qt's catalogs into qt_de.qm, and the program loads it"
     "$MCPP" build --profile dev -v > target/ci/second-build.log 2>&1 ||
         { cat target/ci/second-build.log; fail "the second build failed"; }
     ! grep -qE '/(lupdate|lrelease)[^ ]* ' target/ci/second-build.log ||
@@ -179,9 +239,10 @@ qt_widgets_consumer() {
 
 case "${1:-}" in
     vcpkg-consumer)      vcpkg_consumer ;;
+    archive-consumer)    archive_consumer ;;
     vcpkg-workspace)     vcpkg_workspace ;;
     cmake-consumer)      cmake_consumer ;;
     qt-consumer)         qt_consumer ;;
     qt-widgets-consumer) qt_widgets_consumer ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer"; exit 2 ;;
 esac

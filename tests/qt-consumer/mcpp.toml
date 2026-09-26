@@ -1,5 +1,7 @@
 # Fixture: a Qt 6 program that exercises each of Qt's code generators and its
-# Linguist tool through `rules-qt`, with the SDK from `xim:qt`.
+# Linguist tools through `rules-qt`, with the SDK from `xim:qt-base` (qtbase,
+# qttools and the QtQml library lupdate loads); tests/qt-widgets-consumer
+# uses `xim:qt`.
 #
 # A console program on purpose: QtCore needs no display and no platform plugin,
 # so the same program is built and RUN on every host in the matrix. What it
@@ -31,7 +33,7 @@ modules    = true
 import_std = false
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
+plugins = { path = "../..", features = ["rules-qt-xim-base"], host-module = true }
 
 [build]
 # Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the

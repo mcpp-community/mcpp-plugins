@@ -69,3 +69,19 @@ T1 mcpp#702 实现并发布（mcpp 侧）─────────┴──►
 - `path` 包的宿主工具以整棵目录树的 stamp 为键，嵌套其中的消费方写出的文件改变该键（mcpp#705）。fixture
   位于插件仓库之内，因此其安装位于 `target/` 之下，检查脚本的日志写入 `target/ci/`，第二次构建以
   `--profile dev` 绕过快路径，使 Linux 与 Windows、macOS 走同一条规划路径。从索引取得插件的项目不受影响。
+
+## 6. 0.14.0：运行时数据与精简 Qt（GalTranslPP 验证后的第二轮）
+
+GalTranslPP 在 0.13.1 上构建成功后仍有两个手动步骤（解压嵌入式 Python、运行 `Release.py`），Qt 下载量为
+完整基础包。第二轮把固定步骤程序化，并补齐 windeployqt 的 Qt 翻译：
+
+| 交付 | 仓库 | 机制 |
+|---|---|---|
+| `deps-archive` | mcpp-plugins | 配置期读 zip 中央目录，一个 `artifact` action 解压并逐一命名输出（SPEC-007 R3.2），每个输出 `mcpp::deploy`；`mcpp run` 与 `mcpp pack` 均可见 |
+| `deps-vcpkg` / `deps-cmake` 的 `deploy` | mcpp-plugins | 前缀中的文件由命名输出的复制 action 取出再部署；不依赖引擎「deploy 等待 prepare」 |
+| `translations::qt_languages` | mcpp-plugins | `lconvert` 合并所链接模块的目录为 `qt_<lang>.qm`，即 windeployqt 的产物 |
+| `rules-qt-xim-base` / `xim:qt-base` | mcpp-plugins、xim-pkgindex、xlings-res | qtbase + qttools + qttranslations + 单独重发布的 QtQml 库；下载量约为 `xim:qt` 的三分之一 |
+| `libs/qtsdk.lua` | xim-pkgindex | qt、qt-base、qt-addons 共享的下载、镜像、解压与标记逻辑 |
+
+实测：库包中的 `artifact` 输出经 `mcpp::deploy` 传播到依赖它的程序的 `bin/` 与 `mcpp pack` 目录；依赖包中无下游
+消费者的 `artifact` action 随下游构建执行。

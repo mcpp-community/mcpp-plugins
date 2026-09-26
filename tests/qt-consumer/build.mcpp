@@ -10,5 +10,8 @@ int main() {
     // lupdate brings the `.ts` up to date with src/ before lrelease reads it.
     // The committed file is lupdate's own output, so a build leaves it as is.
     o.i18n.update_sources = true;
+    // Qt's own strings in German, combined from the catalogs of the modules
+    // linked into `translations/qt_de.qm`, as windeployqt writes it.
+    o.i18n.qt_languages = {"de"};
     return mcpp::rules::qt::compile(o) ? 0 : 1;
 }

@@ -1,0 +1,11 @@
+// The whole integration: the archive and where its tree goes.
+import std;
+import mcpp;
+import mcpp.deps.archive;
+
+int main() {
+    mcpp::deps::archive::options o;
+    o.archive = "assets/bundle.zip";
+    o.to      = "runtime";
+    return mcpp::deps::archive::unpack(o) ? 0 : 1;
+}

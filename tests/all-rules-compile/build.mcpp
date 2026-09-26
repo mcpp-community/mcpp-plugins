@@ -24,6 +24,7 @@ import mcpp.dist.apk;
 import mcpp.deps;
 import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
+import mcpp.deps.archive;
 
 int main() {
     // No accelerator is named, so each of these returns true without looking
@@ -87,6 +88,7 @@ int main() {
     // derive without one -- the triplet this target defaults to, and the file
     // a library name denotes.
     ok = ok && !mcpp::deps::vcpkg::default_triplet().empty();
+    ok = ok && !mcpp::deps::archive::zip_members("mcpp.toml").has_value();   // not a zip: refused, not misread
     ok = ok && mcpp::deps::library_file("lib", "fmt", false).filename().string().find("fmt")
                    != std::string::npos;
 

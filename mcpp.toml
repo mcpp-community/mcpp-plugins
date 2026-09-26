@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.13.1"
+version     = "0.14.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -157,6 +157,12 @@ implies = ["rules-qt"]
 [features.rules-qt-xim-addons]
 implies = ["rules-qt-xim"]
 
+# `xim:qt-base`: qtbase and qttools with the QtQml library qttools' Linguist
+# tools load, without Qt Quick -- about a third of `xim:qt`'s download. For a
+# widgets or console program. 0.14.0.
+[features.rules-qt-xim-base]
+implies = ["rules-qt"]
+
 # NOT device rules: these embed or declare things a project already has, so they
 # claim no extension and name no rule module. A consumer calls them from its own
 # `build.mcpp`.
@@ -257,6 +263,14 @@ implies = ["deps"]
 
 [features.deps-cmake]
 sources = ["deps/cmake.cppm"]
+implies = ["deps"]
+
+# Files a program reads at run time, from a zip archive the project keeps:
+# extracted by an action that names every file (the archive's central
+# directory lists them while the build program runs) and deployed beside the
+# program. 0.14.0.
+[features.deps-archive]
+sources = ["deps/archive.cppm"]
 implies = ["deps"]
 
 [features.tools-embed]
@@ -461,6 +475,10 @@ implies           = ["surface"]
 [feature-xlings.deps-cmake]
 "xim:cmake" = ">=3.31"
 
+# `cmake -E tar xf --touch` extracts a zip on every host; `--touch` is 3.24+.
+[feature-xlings.deps-archive]
+"xim:cmake" = ">=3.31"
+
 # AN EXACT VERSION: `moc`'s output is tied to the Qt libraries it is linked
 # against, so the SDK is a choice a project may change, not a floor. The
 # additional libraries share the base's version, and `xim:qt-addons` depends on
@@ -482,6 +500,14 @@ implies           = ["surface"]
 
 [target.'cfg(any(windows, linux, macos))'.feature-xlings.rules-qt-xim-addons]
 "xim:qt-addons" = "6.11.1"
+
+[target.'cfg(any(windows, linux, macos))'.feature-xlings.rules-qt-xim-base]
+"xim:qt-base" = "6.11.1"
+
+[target.'cfg(linux)'.feature-xlings.rules-qt-xim-base]
+"xim:glib" = ""
+"xim:zstd" = ""
+"xim:zlib" = ""
 
 # ── The environment `dist-appimage` needs ──────────────────────────────────
 #
@@ -653,7 +679,7 @@ main = "tools/embed_main.cpp"
 # it by a release.
 #
 #   [build-dependencies.mcpp]
-#   plugins = { version = "0.13.1", features = ["deps-vcpkg"],
+#   plugins = { version = "0.14.0", features = ["deps-vcpkg"],
 #               host-module = true, tools = ["mcpp-deps"] }
 [targets.mcpp-deps]
 kind = "bin"

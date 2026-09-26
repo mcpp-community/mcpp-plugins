@@ -13,5 +13,7 @@ int main() {
     // rebuild `mcpp-deps` and run again, so it goes under `target/`. A project
     // that takes `mcpp:plugins` from the index keeps vcpkg's default.
     o.install_root = "target/vcpkg_installed";
+    // A file the program would read at run time, placed beside it.
+    o.deploy = {{"share/fmt/copyright", "licenses/fmt"}};
     return mcpp::deps::vcpkg::use(o) ? 0 : 1;
 }
