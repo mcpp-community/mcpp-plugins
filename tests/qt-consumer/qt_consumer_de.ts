@@ -4,6 +4,7 @@
 <context>
     <name>main</name>
     <message>
+        <location filename="src/main.cpp" line="43"/>
         <source>hello</source>
         <translation>hallo</translation>
     </message>

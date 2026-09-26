@@ -8,8 +8,11 @@
 #   src/counter.h       declares a Q_OBJECT class       -> moc
 #   src/main.cpp        includes "main.moc"             -> moc, inline
 #   res/app.qrc         names res/greeting.txt          -> rcc
-#   i18n/qt_consumer_de.ts                              -> lrelease, deployed
+#   qt_consumer_de.ts   updated from src/ by lupdate    -> lrelease, deployed
 #                                                          under translations/
+#
+# The `.ts` sits in the package root, as it does in GalTranslPP, so lupdate
+# writes one file there and claims no directory.
 #
 # and the program prints what each produced: a signal delivered to a slot, a
 # resource read through `:/`, and a string translated by the `.qm` it loaded
@@ -39,7 +42,7 @@ plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
 # on the MSVC ABI the static CRT; a PE image resolves its imports per DLL, so
 # Qt's DLLs keep their own CRT.
 cxx_runtime = "toolchain-coupled"
-sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts"]
+sources = ["src/*.cpp", "res/*.qrc", "*.ts"]
 
 [targets.qt-consumer]
 kind = "bin"

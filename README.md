@@ -852,7 +852,7 @@ CI measures the rest:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.13.0", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
+plugins = { version = "0.13.1", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
 ```
 
 ```cpp
@@ -944,7 +944,7 @@ default unless `cache_args` names another.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.13.0", features = ["rules-qt-xim"], host-module = true }
+plugins = { version = "0.13.1", features = ["rules-qt-xim"], host-module = true }
 
 [build]
 sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts", "ui/*.ui"]
@@ -974,7 +974,7 @@ int main() {
 | `private_modules` | modules whose private headers are included |
 | `moc`, `moc_headers` | `moc_scan::project_headers` (default) scans the package's headers by content; `moc_scan::listed` takes `moc_headers` only |
 | `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
-| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as a `prepare` action, whose output directory is the `.ts` files', before `lrelease`; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir`, where `lrelease` writes (default `<out dir>/qt/translations`) |
+| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` before `lrelease`, as an action whose output is the `.ts` file it rewrites; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir`, where `lrelease` writes (default `<out dir>/qt/translations`) |
 | `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
 | `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
 | `root`, `extra_roots` | an SDK, and further prefixes |

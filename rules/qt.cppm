@@ -34,8 +34,9 @@
 // declares nothing, so the plan succeeds and the build is where it fails.
 //
 // `lupdate` REWRITES SOURCES, so it is off unless `translations::update_sources`
-// asks for it; then it is a `prepare` action whose stamp `lrelease` waits for,
-// the order Qt's Visual Studio integration runs them in.
+// asks for it; then it is an action whose output is the `.ts` file itself, and
+// `lrelease` reads that file, the order Qt's Visual Studio integration runs
+// them in.
 
 module;
 #include <cctype>
@@ -447,7 +448,7 @@ inline bool compile(options opt = {}) {
         const std::string desc = "MOC " + in.filename().string();
         mcpp::action a;
         a.id = id.c_str();
-        a.role = "source";
+        a.role = mcpp::roles::source;
         a.description = desc.c_str();
         a.depfile = dep.c_str();
         a.arg(moc.c_str()).arg(src.c_str()).arg("-o").arg(out.c_str())
@@ -477,7 +478,7 @@ inline bool compile(options opt = {}) {
             const std::string desc = "UIC " + fs::path(f).filename().string();
             mcpp::action a;
             a.id = id.c_str();
-            a.role = "source";
+            a.role = mcpp::roles::source;
             a.description = desc.c_str();
             a.arg(uic.c_str()).arg(in.c_str()).arg("-o").arg(out.c_str())
              .input(in.c_str()).output(out.c_str()).submit();
@@ -505,7 +506,7 @@ inline bool compile(options opt = {}) {
             mcpp::rerun_if_changed(in.c_str());
             mcpp::action a;
             a.id = id.c_str();
-            a.role = "source";
+            a.role = mcpp::roles::source;
             a.description = desc.c_str();
             a.arg(rcc.c_str()).arg("--name").arg(stem.c_str()).arg(in.c_str()).arg("-o").arg(out.c_str())
              .input(in.c_str());
@@ -545,37 +546,29 @@ inline bool compile(options opt = {}) {
             const fs::path qmDir = opt.i18n.out_dir.empty() ? gen / "translations"
                                                             : detail::absolute_from_root(opt.i18n.out_dir);
             const std::string qm = generic(qmDir / (stem + ".qm"));
-            std::string stamp;
             if (opt.i18n.update_sources) {
-                stamp = generic(gen / (stem + ".lupdate.stamp"));
                 const std::string id = "qt:lupdate:" + stem;
                 const std::string desc = "LUPDATE " + file.filename().string();
                 mcpp::action u;
                 u.id = id.c_str();
-                // Construction, not validation (SPEC-007 R3.4): lupdate
-                // rewrites the `.ts` files in their directory, which lrelease
-                // reads, so it is a `prepare` whose output directory is theirs.
-                u.role = mcpp::roles::prepare;
+                // The file lupdate writes is named before it runs, so the action
+                // names it as its output (SPEC-007 R3.2) and needs neither a
+                // stamp nor a `prepare` directory. `lrelease` takes the same file
+                // as its input, which orders the two.
+                u.role = mcpp::roles::source;
                 u.description = desc.c_str();
                 u.arg(lupdate.c_str()).arg("-silent").arg("-extensions").arg("cpp,h,hpp,ixx,cppm");
                 for (auto const& a : opt.i18n.tr_function_alias) u.arg("-tr-function-alias").arg(a.c_str());
                 for (auto const& s : sources) u.arg(s.c_str()).input(s.c_str());
-                // The stamp is written by mcpp when lupdate succeeds (a
-                // prepare's command need not write its own); `lrelease` takes it as an
-                // input, so it reads the `.ts` lupdate has rewritten.
-                // `output_dir` keeps the pointer it is given, unlike `arg()`,
-                // so the string is a local that outlives `submit()`.
-                const std::string tsDir = generic(file.parent_path());
-                u.arg("-ts").arg(in.c_str()).output(stamp.c_str()).output_dir(tsDir.c_str()).submit();
+                u.arg("-ts").arg(in.c_str()).output(in.c_str()).submit();
             }
             const std::string id = "qt:lrelease:" + stem;
             const std::string desc = "LRELEASE " + file.filename().string();
             mcpp::action r;
             r.id = id.c_str();
-            r.role = "source";
+            r.role = mcpp::roles::source;
             r.description = desc.c_str();
             r.arg(lrelease.c_str()).arg("-silent").arg(in.c_str()).arg("-qm").arg(qm.c_str()).input(in.c_str());
-            if (!stamp.empty()) r.input(stamp.c_str());
             r.output(qm.c_str()).submit();
             mcpp::deploy(qm.c_str(), opt.i18n.deploy_to.c_str());
         }

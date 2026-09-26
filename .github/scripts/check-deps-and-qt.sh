@@ -132,12 +132,25 @@ qt_consumer() {
     cd "$ROOT/tests/qt-consumer"
     rm -rf target
     mkdir -p target/ci
-    "$MCPP" build 2>&1 | tee target/ci/build.log
+    "$MCPP" build -v 2>&1 | tee target/ci/build.log
+    # lupdate writes the `.ts` in the package root and lrelease reads it after;
+    # neither claims the package's directory as a construction output.
+    local lu lr
+    lu=$(grep -n '/lupdate[^ ]* ' target/ci/build.log | head -1 | cut -d: -f1)
+    lr=$(grep -n '/lrelease[^ ]* ' target/ci/build.log | head -1 | cut -d: -f1)
+    [ -n "$lu" ] && [ -n "$lr" ] && [ "$lu" -lt "$lr" ] || fail "lupdate did not run before lrelease"
+    ! grep -q 'output_dir' target/ci/build.log || fail "the build reports a construction directory over the package's sources"
+    echo "ok: lupdate updated the .ts before lrelease read it"
     "$MCPP" run | tee target/ci/run.log
     grep -qE "^qt-consumer: signal 42, resource 'greetings from rcc', translation 'hallo', Qt 6\." target/ci/run.log ||
         fail "moc, rcc or lrelease did not reach the program"
     find target -name 'qt_consumer_de.qm' | grep -q . || fail "no .qm was produced"
     echo "ok: moc (header and inline), rcc and lrelease reached the program"
+    "$MCPP" build --profile dev -v > target/ci/second-build.log 2>&1 ||
+        { cat target/ci/second-build.log; fail "the second build failed"; }
+    ! grep -qE '/(lupdate|lrelease)[^ ]* ' target/ci/second-build.log ||
+        fail "a second build with nothing changed re-ran lupdate or lrelease"
+    echo "ok: a second build with nothing changed ran neither lupdate nor lrelease"
 }
 
 qt_widgets_consumer() {
