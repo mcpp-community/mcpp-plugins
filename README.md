@@ -995,8 +995,8 @@ On Linux, Qt's official QtCore links glib, zstd and zlib and the shared
 declares their `lib/` directories as runtime search directories; the program
 states `[build] cxx_runtime = "toolchain-coupled"` (mcpp's docs/20), so the
 process has one C++ runtime. The statement is project-wide because mcpp reads a
-`[target.<triple>]` table only when a target is named; under MSVC it keeps
-`/MD`, and on macOS mcpp keeps the default and says so. Modules that load QtGui are not
+`[target.<triple>]` table only when a target is named (mcpp#704). On macOS and
+under clang on the MSVC ABI mcpp reports the contract it delivers instead. Modules that load QtGui are not
 served on Linux: QtGui loads `libdbus-1.so.3`, which the ecosystem does not
 publish, and mcpp's runtime closure check refuses the program. On macOS the
 modules are frameworks under `lib/`: the rule compiles with `-F<root>/lib` and

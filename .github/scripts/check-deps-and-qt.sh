@@ -17,7 +17,7 @@ fail() { echo "FAIL: $*"; exit 1; }
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
 is_macos() { [ "$(uname -s)" = Darwin ]; }
 
-# The stamp an installation action leaves: the file mcpp writes when a `check`
+# The stamp an installation action leaves: the file mcpp writes when a `prepare`
 # action's command succeeds. Its modification time is the criterion for "the
 # installation did not run again".
 stamp_of() { find target -path "*$1*" -name '*.stamp' | head -1; }
