@@ -1662,7 +1662,7 @@ jobs:
       # A console program: QtCore, which is what Linux is served for. QtGui
       # loads libdbus, which the ecosystem does not publish, so the Widgets
       # fixture runs on Windows only.
-      - name: rules-qt runs moc, rcc and lrelease, with the SDK from xim:qt
+      - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK from xim:qt-base
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
   # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
@@ -2337,7 +2337,7 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
-      - name: rules-qt runs moc, rcc and lrelease, with the SDK from xim:qt
+      - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK from xim:qt-base
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
       # Windows and macOS: QtGui's dependencies are the system's there. On Linux

@@ -252,7 +252,11 @@ inline std::vector<std::filesystem::path> roots(const options& opt = {}) {
     };
     if (!opt.root.empty()) add(opt.root);
     else {
-        add(mcpp::xpkg_dir("xim", "qt"));
+        // `xim:qt` is the full base; `xim:qt-base` is its qtbase + qttools
+        // subset (`rules-qt-xim-base`). A project that declares both uses the
+        // full one.
+        const std::string full = mcpp::xpkg_dir("xim", "qt");
+        add(full.empty() ? std::string(mcpp::xpkg_dir("xim", "qt-base")) : full);
         add(mcpp::xpkg_dir("xim", "qt-addons"));
     }
     for (auto const& r : opt.extra_roots) add(r);
@@ -270,7 +274,7 @@ inline std::string root(const options& opt = {}) {
 
 // The SDK's shared-library directories, and on Linux those of the libraries
 // Qt's official QtCore expects the distribution to provide (glib, zstd, zlib,
-// declared from xim by `rules-qt-xim`), as runtime search directories
+// declared from xim by `rules-qt-xim` and `rules-qt-xim-base`), as runtime search directories
 // (SPEC-007 R4.1). The engine renders them as the program's run path, puts
 // them on `mcpp run`'s load path -- which reaches a library's dependencies
 // where the program's run path does not, because QtCore carries a RUNPATH of
@@ -308,8 +312,9 @@ inline bool compile(options opt = {}) {
     if (sdks.empty()) {
         detail::warn(std::format(
             "{}: no Qt SDK: options::root is {} and xpkg_dir(\"xim\", \"qt\") answered \"{}\". "
-            "Nothing Qt-specific is planned. The `rules-qt-xim` feature declares `xim:qt`, "
-            "which `mcpp build` provisions; a Qt from elsewhere is named with options::root.",
+            "Nothing Qt-specific is planned. The `rules-qt-xim` feature declares `xim:qt` and "
+            "`rules-qt-xim-base` declares `xim:qt-base`, which `mcpp build` provisions; a Qt "
+            "from elsewhere is named with options::root.",
             who, opt.root.empty() ? "empty" : "'" + opt.root + "' (no such directory)",
             std::string(mcpp::xpkg_dir("xim", "qt"))));
         return true;
