@@ -64,10 +64,10 @@ plugins = { path = "../..", features = [
 # member whose macOS and Windows compile is never attempted -- which is exactly
 # the failure the two platform-specific members are here to catch.
 #
-# `rules-qt` is named without `rules-qt-xim`: the rule compiles either way, and
-# the SDK -- hundreds of megabytes on every host -- is what the `-xim` feature
-# adds and nothing else. The CI step that reads this list requires every member
-# that carries SOURCES; a member that only declares a payload is optional here.
+# `rules-qt` declares no SDK: the rule compiles without one, and the SDK --
+# hundreds of megabytes on every host -- is a project's own declaration. The CI
+# step that reads this list requires every member that carries SOURCES; a
+# member that only declares a payload is optional here.
 #
 # `deps-vcpkg` and `deps-cmake` declare their installers on the host axis, so
 # this fixture installs `xim:vcpkg` (3 MB) and `xim:cmake` on every host. Their

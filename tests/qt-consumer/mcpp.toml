@@ -33,7 +33,11 @@ modules    = true
 import_std = false
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["rules-qt-xim-base"], host-module = true }
+plugins = { path = "../..", features = ["rules-qt"], host-module = true }
+
+# The SDK is the project's declaration, at the version it chooses.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt-base" = "6.11.1.1"
 
 [build]
 # Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the

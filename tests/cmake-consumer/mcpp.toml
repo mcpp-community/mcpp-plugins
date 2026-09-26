@@ -13,7 +13,7 @@ modules    = true
 import_std = true
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["deps-cmake"], host-module = true, tools = ["mcpp-deps"] }
+plugins = { path = "../..", features = ["deps-cmake"], host-module = true }
 
 [targets.cmake-consumer]
 kind = "bin"

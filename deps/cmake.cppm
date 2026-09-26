@@ -13,17 +13,19 @@
 //
 // and the subproject is configured, built and installed into a prefix under
 // this package's output directory by ONE `prepare` action (mcpp's SPEC-007
-// R3.3) whose `output_dir` is that prefix and whose inputs are the
+// R3.3), `cmake -P` over a script this program writes, whose `output_dir` is
+// that prefix and whose inputs are the
 // subproject's files, so an edit to it rebuilds it and nothing else does. The prefix is then mapped exactly as `mcpp.deps.vcpkg` maps its own:
 // include directory, libraries by full path, the shared libraries deployed
 // beside the program.
 //
-// THE COMPILER IS CMAKE'S OWN CHOICE. A subproject is configured the way its
-// authors build it -- on Windows, CMake's default generator and the Visual
-// Studio toolset it finds -- unless the project passes `-G`, `-DCMAKE_CXX_COMPILER`
-// or a toolchain file through `cache_args`. Keeping the C runtime and the C++
-// standard library consistent with the program is the project's decision, as it
-// is with any prebuilt library.
+// THE COMPILER IS CMAKE'S OWN CHOICE, EXCEPT WHERE ITS C++ LIBRARY DIFFERS. A
+// subproject is configured the way its authors build it -- on Windows, CMake's
+// default generator and the Visual Studio toolset it finds. On Linux under a
+// libc++ toolchain the compilers are mcpp's own clang (`-DCMAKE_C_COMPILER`,
+// `-DCMAKE_CXX_COMPILER`), because the host compiler CMake finds uses libstdc++
+// and the two do not link (`mcpp::deps::program_compilers`). A project that
+// passes either compiler or a toolchain file through `cache_args` decides.
 //
 // `xim:cmake` is declared by this feature; `options::cmake` names another.
 
@@ -123,34 +125,53 @@ inline prefix use(const options& opt) {
             "{}: no cmake (xpkg_dir(\"xim\", \"cmake\") answered \"{}\"), so this plan builds "
             "nothing. The `deps-cmake` feature declares `xim:cmake`; `mcpp build` provisions it "
             "before this program runs.", who, std::string(mcpp::xpkg_dir("xim", "cmake"))));
-    } else if (const std::string tool = mcpp::deps::launcher(who, "deps-cmake"); tool.empty()) {
-        return {};
     } else {
-        const std::string stamp = mcpp::deps::generic(base / (name + ".stamp"));
-        const std::string id    = "deps-cmake:" + name;
-        const std::string desc  = "CMAKE " + name;
-        mcpp::action a;
-        a.id          = id.c_str();
-        a.role        = mcpp::roles::prepare;
-        a.description = desc.c_str();
-        a.arg(tool.c_str()).arg("cmake")
-         .arg("--cmake").arg(cmake.c_str())
-         .arg("--source").arg(mcpp::deps::generic(source).c_str())
-         .arg("--build").arg(mcpp::deps::generic(build).c_str())
-         .arg("--prefix").arg(p.root.c_str())
-         .arg("--config").arg(opt.config.c_str())
-         .arg("--");
+        // ONE ACTION, THREE STEPS. `cmake -P` runs a script this program
+        // writes: configure (every time -- over an existing cache CMake re-runs
+        // only what changed, and the arguments may have changed, which is why
+        // the action ran at all), then build and install.
+        const std::string stamp  = mcpp::deps::generic(base / (name + ".stamp"));
+        const std::string id     = "deps-cmake:" + name;
+        const std::string desc   = "CMAKE " + name;
+        const fs::path    script = base / (name + ".cmake");
+        using mcpp::deps::bracket;
+        std::vector<std::string> configure{
+            "-S", mcpp::deps::generic(source), "-B", mcpp::deps::generic(build),
+            "-DCMAKE_INSTALL_PREFIX=" + p.root, "-DCMAKE_BUILD_TYPE=" + opt.config };
         if (!opt.prefix_path.empty()) {
             std::string joined;
             for (auto const& d : opt.prefix_path) {
                 if (!joined.empty()) joined += ';';
                 joined += mcpp::deps::generic(mcpp::deps::absolute_from_root(d));
             }
-            a.arg(("-DCMAKE_PREFIX_PATH=" + joined).c_str());
+            configure.push_back("-DCMAKE_PREFIX_PATH=" + joined);
         }
-        for (auto const& x : opt.cache_args) a.arg(x.c_str());
-        a.input(tool.c_str());
+        const bool chosen = std::ranges::any_of(opt.cache_args, [](const std::string& x) {
+            return x.contains("CMAKE_C_COMPILER") || x.contains("CMAKE_CXX_COMPILER")
+                || x.contains("CMAKE_TOOLCHAIN_FILE");
+        });
+        if (const auto cc = mcpp::deps::program_compilers(); cc && !chosen) {
+            configure.push_back("-DCMAKE_C_COMPILER=" + cc.c);
+            configure.push_back("-DCMAKE_CXX_COMPILER=" + cc.cxx);
+        }
+        for (auto const& x : opt.cache_args) configure.push_back(x);
+        std::string text = "# Written by mcpp.deps.cmake: configure, build and install " + name + ".\n"
+                           "execute_process(COMMAND ${CMAKE_COMMAND}";
+        for (auto const& x : configure) text += "\n    " + bracket(x);
+        text += "\n    RESULT_VARIABLE rc)\n"
+                "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"configure exited ${rc}\")\nendif()\n"
+                "execute_process(COMMAND ${CMAKE_COMMAND} --build " + bracket(mcpp::deps::generic(build)) +
+                " --config " + bracket(opt.config) + " --target install --parallel\n    RESULT_VARIABLE rc)\n"
+                "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"build and install exited ${rc}\")\nendif()\n";
+        mcpp::deps::write_if_changed(script, text);
+        const std::string scriptS = mcpp::deps::generic(script);
+        mcpp::action a;
+        a.id          = id.c_str();
+        a.role        = mcpp::roles::prepare;
+        a.description = desc.c_str();
+        a.arg(cmake.c_str()).arg("-P").arg(scriptS.c_str());
         a.input(cmake.c_str());
+        a.input(scriptS.c_str());
         for (auto const& f : mcpp::deps::files_under(source)) a.input(f.c_str());
         mcpp::deps::watch_tree(source);
         a.output(stamp.c_str());

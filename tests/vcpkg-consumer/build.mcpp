@@ -7,11 +7,10 @@ import mcpp.deps.vcpkg;
 int main() {
     mcpp::deps::vcpkg::options o;
     o.libraries = { "fmt" };
-    // This fixture lives inside the package it depends on by path, and mcpp keys
-    // that package's host tool by a stamp of its tree, `target/` excepted
-    // (mcpp#705). An installation beside the manifest would change the stamp,
-    // rebuild `mcpp-deps` and run again, so it goes under `target/`. A project
-    // that takes `mcpp:plugins` from the index keeps vcpkg's default.
+    // This fixture lives inside the package it depends on by path, so its
+    // installation goes under `target/`, which `git clean` and the CI's
+    // `rm -rf target` reset with the rest of the fixture. A project keeps
+    // vcpkg's default.
     o.install_root = "target/vcpkg_installed";
     // A file the program would read at run time, placed beside it.
     o.deploy = {{"share/fmt/copyright", "licenses/fmt"}};

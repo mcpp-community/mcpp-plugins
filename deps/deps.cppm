@@ -24,9 +24,10 @@
 //      paths it WILL use lets the editor resolve every include the moment the
 //      first build finishes.
 //
-// This unit imports `mcpp`, so it exists only inside a build program. The
-// program that performs the installation is `mcpp-deps` (tools/deps_main.cpp),
-// an ordinary executable built from this package.
+// This unit imports `mcpp`, so it exists only inside a build program. Each
+// action's command is the installer itself -- `vcpkg`, or `cmake -P` over a
+// script the member writes -- so the package brings no program of its own and
+// a consumer's edge names none (0.15.0; 0.13.0-0.14.0 ran `mcpp-deps`).
 
 export module mcpp.deps;
 
@@ -56,19 +57,14 @@ inline void warn(const std::string& message) {
     mcpp::warning(folded.c_str());
 }
 
-// The installer program, or empty after saying which line brings it.
-inline std::string launcher(std::string_view member, std::string_view feature) {
-    const std::string tool = mcpp::dep_bin("plugins", "mcpp-deps");
-    if (!tool.empty()) return tool;
-    std::cerr << std::format(
-        "{0}: the installation runs as a build action, and an action's command is\n"
-        "  a program: `mcpp-deps`, built from this package. Ask for it on the edge\n"
-        "  that brings the member in:\n\n"
-        "      [build-dependencies.mcpp]\n"
-        "      plugins = {{ version = \"{1}\", features = [\"{2}\"], host-module = true,\n"
-        "                  tools = [\"mcpp-deps\"] }}\n",
-        member, mcpp::plugins::version, feature);
-    return {};
+// A CMake script this build program writes, for an action whose work is more
+// than one command: `cmake -P <script>` is one argument vector, and the script
+// runs the steps in order and fails on the first that fails. Every value is a
+// bracket argument, so a path or a `-D` value keeps its spaces and semicolons.
+// The script is written only when its text changes, so its time stamp -- an
+// input of the action -- moves only when the work does.
+inline std::string bracket(std::string_view text) {
+    return "[==[" + std::string(text) + "]==]";
 }
 
 inline bool is_windows() { return std::string_view(mcpp::target_os()) == "windows"; }
@@ -178,6 +174,77 @@ inline void link_libraries(const std::filesystem::path& lib_dir,
 inline void runtime_directory(const std::string& bin, const std::string& lib) {
     const std::string& dir = is_windows() ? bin : lib;
     mcpp::runtime_search_dir(dir.c_str());
+}
+
+// vcpkg's own per-user directory: where its default binary cache
+// (`archives/`) and registry cache (`registries/`) already live (vcpkg's
+// "Default binary cache" documentation). Scratch and downloads go beside them.
+inline std::filesystem::path vcpkg_user_dir() {
+    namespace fs = std::filesystem;
+    auto env = [](const char* n) { const char* v = std::getenv(n); return std::string(v ? v : ""); };
+    if (std::string_view(mcpp::host()).find("windows") != std::string_view::npos) {
+        if (auto v = env("LOCALAPPDATA"); !v.empty()) return fs::path(v) / "vcpkg";
+        if (auto v = env("APPDATA"); !v.empty()) return fs::path(v) / "vcpkg";
+    } else {
+        if (auto v = env("XDG_CACHE_HOME"); !v.empty()) return fs::path(v) / "vcpkg";
+        if (auto v = env("HOME"); !v.empty()) return fs::path(v) / ".cache" / "vcpkg";
+    }
+    return fs::temp_directory_path() / "vcpkg";
+}
+
+// FNV-1a over `text`: a short directory name, stable across runs and
+// compilers, which `std::hash` does not promise. Index loop: GCC 16 does not
+// inline a string's iterators across a module boundary.
+inline std::string short_name(std::string_view text) {
+    std::uint64_t h = 1469598103934665603ull;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        h ^= static_cast<unsigned char>(text[i]);
+        h *= 1099511628211ull;
+    }
+    return std::format("{:08x}", std::uint32_t(h ^ (h >> 32)));
+}
+
+// ── The compiler a subproject builds with ──────────────────────────────────
+//
+// A prefix's C++ libraries are linked into the program, so their C++ standard
+// library must be the program's. On Windows every compiler of the MSVC ABI
+// uses Microsoft's, and on macOS every compiler uses libc++; on Linux two
+// incompatible libraries exist, the host compiler that vcpkg and CMake choose
+// uses libstdc++, and mcpp's clang uses libc++ (`std::__1::`). So when the
+// program's library is libc++ on Linux, a subproject builds with mcpp's own
+// clang, whose configuration file names libc++ and the C library mcpp links
+// against; otherwise the installer's own choice already agrees and nothing is
+// stated.
+struct compilers {
+    std::string c, cxx;
+    explicit operator bool() const { return !cxx.empty(); }
+};
+
+inline compilers program_compilers() {
+    namespace fs = std::filesystem;
+    if (std::string_view(mcpp::target_os()) != "linux"
+        || std::string_view(mcpp::cxx_stdlib()) != "libc++"
+        || std::string_view(mcpp::compiler()) != "clang"
+        || std::string_view(mcpp::host()) != std::string_view(mcpp::target())) return {};
+    const fs::path bin = fs::path(mcpp::toolchain_dir()) / "bin";
+    std::error_code ec;
+    if (!fs::is_regular_file(bin / "clang++", ec) || !fs::is_regular_file(bin / "clang", ec)) return {};
+    return { generic(bin / "clang"), generic(bin / "clang++") };
+}
+
+// Writes `content` to `file` unless the file already holds it, so a file the
+// build program generates keeps its time stamp from one plan to the next and
+// the action that reads it does not run again.
+inline void write_if_changed(const std::filesystem::path& file, const std::string& content) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::is_regular_file(file, ec)) {
+        std::ifstream in(file, std::ios::binary);
+        const std::string old{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+        if (old == content) return;
+    }
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << content;
 }
 
 // ── Files beside the program ───────────────────────────────────────────────

@@ -72,7 +72,7 @@ vcpkg_consumer() {
 
     if is_windows; then
         # The pack collects it from the runtime search directory.
-        ls target/vcpkg_installed/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
+        ls target/vcpkg_installed/x64-windows/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
         run_directly vcpkg-consumer | tee target/ci/direct.log
         grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/direct.log ||
             fail "started from the build directory, the program did not find fmt.dll"
@@ -81,6 +81,51 @@ vcpkg_consumer() {
         find target/dist -path '*/licenses/fmt/copyright' | grep -q . || fail "the packed tree carries no deployed copyright"
         echo "ok: the packed tree carries fmt.dll"
     fi
+}
+
+# LINUX UNDER A libc++ TOOLCHAIN. The host compiler vcpkg and CMake find uses
+# libstdc++, whose `std::` symbols a libc++ program cannot link. The default
+# triplet is then the generated `x64-linux-libcxx`, whose ports build with
+# mcpp's clang; fmt's interface returns `std::string`, so the link itself is the
+# criterion. The prefix is then shown to survive the default toolchain's own
+# installation, which vcpkg would remove if the two triplets shared one.
+vcpkg_libcxx() {
+    local llvm="${MCPP_LLVM:-llvm@22.1.8}" gen=x64-linux-libcxx
+    [ "$(uname -m)" = aarch64 ] && gen=arm64-linux-libcxx
+    cd "$ROOT/tests/vcpkg-consumer"
+    rm -rf target vcpkg_installed
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
+    "$MCPP" run --toolchain "$llvm" | tee target/ci/libcxx-run.log
+    grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/libcxx-run.log || fail "the libc++ program did not print through fmt"
+    local lib; lib=$(find target/vcpkg_installed -path "*/$gen/$gen/lib/libfmt.a" | head -1)
+    [ -n "$lib" ] || fail "no $gen prefix with libfmt.a"
+    grep -q 'std::__1::' <(nm -C "$lib") || fail "$lib is not built against libc++"
+    echo "ok: under $llvm the ports build with mcpp's clang and the program links them"
+
+    "$MCPP" build 2>&1 | tee target/ci/default-build.log
+    "$MCPP" run | tee target/ci/default-run.log
+    grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/default-run.log || fail "the default toolchain's program did not print through fmt"
+    [ -f "$lib" ] || fail "the default toolchain's installation removed the $gen prefix"
+    local stamp; stamp=$(find target -path '*deps-vcpkg*' -name "$gen.stamp" | head -1)
+    [ -n "$stamp" ] || fail "no $gen installation stamp"
+    touch -r "$stamp" target/ci/before-switch-back
+    sleep 1
+    "$MCPP" build --toolchain "$llvm" --profile dev > target/ci/switch-back.log 2>&1 ||
+        { cat target/ci/switch-back.log; fail "the build switched back to $llvm failed"; }
+    [ -z "$(find "$stamp" -newer target/ci/before-switch-back)" ] ||
+        fail "switching back to $llvm re-ran its installation"
+    echo "ok: the two toolchains' prefixes coexist, and switching back installs nothing"
+
+    # deps-cmake takes the same compilers.
+    cd "$ROOT/tests/cmake-consumer"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
+    "$MCPP" run --toolchain "$llvm" | grep -q '^cmake-consumer: greet says 42$' || fail "the libc++ cmake-consumer did not run"
+    grep -rqs 'CMAKE_CXX_COMPILER:[A-Z]*=.*xim-x-llvm.*/clang++' target --include=CMakeCache.txt ||
+        fail "deps-cmake configured the subproject without mcpp's clang"
+    echo "ok: deps-cmake configures the subproject with mcpp's clang under $llvm"
 }
 
 vcpkg_workspace() {
@@ -106,10 +151,7 @@ cmake_consumer() {
     "$MCPP" run | tee target/ci/run.log
     grep -q '^cmake-consumer: greet says 42$' target/ci/run.log || fail "the program did not call the subproject's library"
     assert_not_rerun "$(stamp_of deps-cmake)"
-    # The builds after an edit are planned as well. The subproject lies inside
-    # this repository, the tree mcpp stamps for the plugins' host tool
-    # (mcpp#705), so an edit also rebuilds `mcpp-deps`; the build that is
-    # expected to re-run the installation absorbs that rebuild.
+    # The builds after an edit are planned as well.
     touch greet/greet.c
     "$MCPP" build --profile dev > target/ci/third-build.log 2>&1 || { cat target/ci/third-build.log; fail "the rebuild failed"; }
     # The installed library is the product of the rebuild, whatever the engine
@@ -234,15 +276,60 @@ qt_widgets_consumer() {
         find target/dist -ipath '*platforms/qoffscreen.dll' | grep -q . ||
             fail "the packed tree carries no platforms/qoffscreen.dll"
         echo "ok: the packed tree carries the Qt modules and the platform plugins"
+        # The VC++ runtime Qt's DLLs import travels with them, so the program
+        # does not depend on the target machine's VC++ Redistributable.
+        for dll in msvcp140.dll vcruntime140.dll vcruntime140_1.dll; do
+            find target -path '*/bin/*' -iname "$dll" | grep -q . || fail "$dll was not placed beside the program"
+            find target/dist -iname "$dll" | grep -q . || fail "the packed tree carries no $dll"
+        done
+        echo "ok: the VC++ runtime is beside the program and in the packed tree"
     fi
+    if ! is_windows && ! is_macos; then
+        # QtGui's runtime closure comes from the payload: the program runs
+        # under the ecosystem's loader, which reads no host library directory.
+        "$MCPP" pack --format dir | tee target/ci/pack.log
+        for so in libQt6Widgets.so.6 libdbus-1.so.3 libxkbcommon.so.0 libfontconfig.so.1; do
+            find target/dist -name "$so*" | grep -q . || fail "the packed tree carries no $so"
+        done
+        echo "ok: the packed tree carries Qt and QtGui's runtime closure"
+    fi
+}
+
+# The SDK at each level `rules-qt` consults, read back from the fact the rule
+# records (`rules-qt.sdk=<level>: <root>`, in the build program's cache).
+qt_sdk_consumer() {
+    cd "$ROOT/tests/qt-sdk-consumer"
+    rm -rf target
+    mkdir -p target/ci
+    sdk_fact() { grep -h -o 'rules-qt\.sdk=[^"]*' target/.build-mcpp/build.mcpp.cache | tail -1; }
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    "$MCPP" run | tee target/ci/run.log
+    grep -qE '^qt-sdk-consumer: Qt 6\.' target/ci/run.log || fail "the program did not load QtCore"
+    local fact root; fact=$(sdk_fact)
+    case "$fact" in "rules-qt.sdk=xlings: "*) ;; *) fail "the project's payload was not the SDK: $fact" ;; esac
+    root=${fact#rules-qt.sdk=xlings: }
+    echo "ok: the SDK is the payload the project declares ($root)"
+
+    # The payload's root, named for one machine, then by the build program.
+    QT_ROOT_DIR="$root" "$MCPP" build > target/ci/env-build.log 2>&1 || { cat target/ci/env-build.log; fail "the build under QT_ROOT_DIR failed"; }
+    fact=$(sdk_fact)
+    [ "$fact" = "rules-qt.sdk=QT_ROOT_DIR: $root" ] || fail "QT_ROOT_DIR was not the SDK: $fact"
+    echo "ok: QT_ROOT_DIR names the SDK, and a change re-plans the build"
+    QT_SDK_CONSUMER_ROOT="$root" QT_ROOT_DIR=/nonexistent "$MCPP" build > target/ci/options-build.log 2>&1 ||
+        { cat target/ci/options-build.log; fail "the build under options::root failed"; }
+    fact=$(sdk_fact)
+    [ "$fact" = "rules-qt.sdk=options: $root" ] || fail "options::root was not the SDK: $fact"
+    echo "ok: options::root names the SDK ahead of QT_ROOT_DIR"
 }
 
 case "${1:-}" in
     vcpkg-consumer)      vcpkg_consumer ;;
+    vcpkg-libcxx)        vcpkg_libcxx ;;
     archive-consumer)    archive_consumer ;;
     vcpkg-workspace)     vcpkg_workspace ;;
     cmake-consumer)      cmake_consumer ;;
     qt-consumer)         qt_consumer ;;
     qt-widgets-consumer) qt_widgets_consumer ;;
-    *) echo "usage: $0 vcpkg-consumer|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer"; exit 2 ;;
+    qt-sdk-consumer)     qt_sdk_consumer ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer|qt-sdk-consumer"; exit 2 ;;
 esac

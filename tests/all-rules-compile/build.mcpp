@@ -81,8 +81,8 @@ int main() {
     auto apkPlan = mcpp::dist::apk::plan_for();
     ok = ok && !apkPlan.applies;
 
-    // `rules-qt` without `rules-qt-xim` has no SDK here, so the question that
-    // plans nothing is where the SDK would be: nowhere.
+    // `rules-qt` declares no SDK and this fixture declares none, so the
+    // question that plans nothing is where the SDK would be: nowhere.
     ok = ok && mcpp::rules::qt::roots({ .root = "no-such-qt-sdk" }).empty();
     // The `deps-*` members install through an action; asked only what they
     // derive without one -- the triplet this target defaults to, and the file

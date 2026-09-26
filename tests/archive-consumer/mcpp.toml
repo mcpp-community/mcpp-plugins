@@ -20,7 +20,7 @@ modules    = true
 import_std = false
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["deps-archive"], host-module = true, tools = ["mcpp-deps"] }
+plugins = { path = "../..", features = ["deps-archive"], host-module = true }
 
 [targets.archive-consumer]
 kind = "bin"

@@ -179,23 +179,30 @@ inline result unpack(const options& opt) {
         r.files.clear();
         return r;
     }
-    const std::string tool = mcpp::deps::launcher(who, "deps-archive");
-    if (tool.empty()) return {};
-
     // ── the extraction, as an edge ──
-    const std::string id   = "deps-archive:" + name;
-    const std::string desc = "UNPACK " + archive.filename().string();
-    const std::string arc  = mcpp::deps::generic(archive);
-    const std::string dst  = mcpp::deps::generic(into);
+    // `cmake -P` over a script this program writes: the directory is emptied
+    // first -- the action names every member of the archive as an output, and
+    // a file left from a previous archive would be one it did not name -- and
+    // `ARCHIVE_EXTRACT ... TOUCH` (CMake 3.24+) gives each file the time of
+    // extraction, so the outputs are newer than the archive.
+    using mcpp::deps::bracket;
+    const std::string id     = "deps-archive:" + name;
+    const std::string desc   = "UNPACK " + archive.filename().string();
+    const std::string arc    = mcpp::deps::generic(archive);
+    const std::string dst    = mcpp::deps::generic(into);
+    const fs::path    script = fs::path(mcpp::out_dir()) / "deps-archive" / (name + ".cmake");
+    mcpp::deps::write_if_changed(script,
+        "# Written by mcpp.deps.archive: extract " + archive.filename().string() + ".\n"
+        "file(REMOVE_RECURSE " + bracket(dst) + ")\n"
+        "file(MAKE_DIRECTORY " + bracket(dst) + ")\n"
+        "file(ARCHIVE_EXTRACT INPUT " + bracket(arc) + " DESTINATION " + bracket(dst) + " TOUCH)\n");
+    const std::string scriptS = mcpp::deps::generic(script);
     mcpp::action a;
     a.id          = id.c_str();
     a.role        = mcpp::roles::artifact;
     a.description = desc.c_str();
-    a.arg(tool.c_str()).arg("unpack")
-     .arg("--cmake").arg(cmake.c_str())
-     .arg("--archive").arg(arc.c_str())
-     .arg("--into").arg(dst.c_str())
-     .input(tool.c_str()).input(cmake.c_str()).input(arc.c_str());
+    a.arg(cmake.c_str()).arg("-P").arg(scriptS.c_str())
+     .input(cmake.c_str()).input(scriptS.c_str()).input(arc.c_str());
     for (auto const& f : r.files) a.output(f.path.c_str());
     a.submit();
 

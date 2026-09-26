@@ -1,0 +1,33 @@
+# Fixture: the Qt SDK named by the project, at the levels `rules-qt` consults
+# (docs/rules-qt.md, "The SDK"). The edge asks for `rules-qt` alone, which
+# declares no SDK; the project declares `xim:qt-base` at a version of its own
+# choosing. CI builds it so, then names a Qt through `QT_ROOT_DIR`, then
+# through `options::root` (the build program reads `QT_SDK_CONSUMER_ROOT`, a
+# value it computes), and reads the level the rule recorded as the fact
+# `rules-qt.sdk` each time.
+[package]
+name        = "qt-sdk-consumer"
+version     = "0.1.0"
+description = "Fixture: a Qt SDK named by the project through rules-qt"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qt"], host-module = true }
+
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt-base" = "6.11.1.1"
+
+[build]
+# Qt's Linux libraries load the shared libstdc++; see tests/qt-consumer.
+cxx_runtime = "toolchain-coupled"
+sources = ["src/*.cpp"]
+
+[targets.qt-sdk-consumer]
+kind = "bin"
+main = "src/main.cpp"

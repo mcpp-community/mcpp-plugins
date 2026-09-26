@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.14.0"
+version     = "0.15.0"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -145,23 +145,12 @@ implies           = ["surface"]
 rule_module       = "mcpp.rules.qt"
 device_extensions = [".ui", ".qrc", ".ts"]
 
-# WHERE QT COMES FROM IS A FEATURE OF ITS OWN, for the reason `dist-apk-kotlin`
-# gives: provisioning runs before the build program learns what it compiles, so
-# a payload `rules-qt` declared would download an SDK into every project that
-# already has one -- a Qt from vcpkg, from a distribution, from an installer.
-# `rules-qt-xim` is the one that downloads; `rules-qt-xim-addons` adds the
-# additional libraries (Multimedia, Charts, WebSockets, ...) as a second prefix.
-[features.rules-qt-xim]
-implies = ["rules-qt"]
-
-[features.rules-qt-xim-addons]
-implies = ["rules-qt-xim"]
-
-# `xim:qt-base`: qtbase and qttools with the QtQml library qttools' Linguist
-# tools load, without Qt Quick -- about a third of `xim:qt`'s download. For a
-# widgets or console program. 0.14.0.
-[features.rules-qt-xim-base]
-implies = ["rules-qt"]
+# WHERE QT COMES FROM IS THE PROJECT'S CHOICE, not a feature: `rules-qt` finds
+# the SDK from `options::root`, `QT_ROOT_DIR`, or a Qt payload the project
+# declares in its own `[xlings]` table at the version it chooses
+# (docs/rules-qt.md). A feature states a mechanism and the tools that mechanism
+# runs, never a library the program links (docs/plugin-development.md). 0.15.0
+# removed `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`.
 
 # NOT device rules: these embed or declare things a project already has, so they
 # claim no extension and name no rule module. A consumer calls them from its own
@@ -246,8 +235,9 @@ implies = ["dist-apk"]
 # and it produces inputs of the link rather than something made from it, so it
 # is not a dist member. The installation is a `prepare` ACTION (mcpp's SPEC-007
 # R3.3: it fills a declared output directory, and the package's compile and link
-# edges wait for it) whose command is `mcpp-deps` (below); the consumer asks for
-# that tool on the same edge: `tools = ["mcpp-deps"]`. The prefix reaches the
+# edges wait for it) whose command is the installer itself -- `vcpkg`, or
+# `cmake -P` over a script the member writes -- so a consumer's edge names no
+# tool (0.15.0). The prefix reaches the
 # build by name, and its shared-library directory through
 # `mcpp::runtime_search_dir` -- both from the release that lands mcpp#702.
 #
@@ -446,12 +436,12 @@ implies           = ["surface"]
 [target.'cfg(accelerator = "ascend")'.feature-xlings.rules-ascendc]
 "xim:cann-toolkit" = ">=8.5.0"
 
-# ── The environment `deps-vcpkg`, `deps-cmake` and `rules-qt-xim` need ─────
+# ── The environment `deps-vcpkg`, `deps-cmake` and `deps-archive` need ───────
 #
-# THE INSTALLERS ARE THE HOST'S; THE SDK IS THE TARGET'S. vcpkg and CMake run
-# on the machine that builds, so their payloads are declared on the host axis,
-# `[feature-xlings.<feature>]`. Qt's libraries are linked into the program, so
-# its payload is declared on the target axis, as the device toolkits above are.
+# THE INSTALLERS ARE THE HOST'S. vcpkg and CMake run on the machine that
+# builds, so their payloads are declared on the host axis,
+# `[feature-xlings.<feature>]`. They are the tools these members' actions run;
+# the libraries those tools install are the project's choice.
 #
 # `xim:vcpkg` IS THE TOOL AND ITS SCRIPTS, NOT A CLONE OF THE REGISTRY. The
 # payload is vcpkg-tool's release binary with the standalone bundle published
@@ -478,36 +468,6 @@ implies           = ["surface"]
 # `cmake -E tar xf --touch` extracts a zip on every host; `--touch` is 3.24+.
 [feature-xlings.deps-archive]
 "xim:cmake" = ">=3.31"
-
-# AN EXACT VERSION: `moc`'s output is tied to the Qt libraries it is linked
-# against, so the SDK is a choice a project may change, not a floor. The
-# additional libraries share the base's version, and `xim:qt-addons` depends on
-# `xim:qt` at exactly that version.
-[target.'cfg(any(windows, linux, macos))'.feature-xlings.rules-qt-xim]
-"xim:qt" = "6.11.1"
-
-# THE LIBRARIES QT'S LINUX QtCore LINKS AND DOES NOT CARRY: glib, zstd and
-# zlib, which it expects the distribution to provide. A program mcpp links runs
-# under the ecosystem's glibc loader, which does not search the host's library
-# directories, so the rule declares each package's `lib/` as a runtime search
-# directory. Unversioned: they are ABI-stable C
-# libraries, and the SDK names them by SONAME. QtGui needs `libdbus-1.so.3` besides, which the ecosystem does not
-# publish; GUI modules on Linux are therefore not served yet.
-[target.'cfg(linux)'.feature-xlings.rules-qt-xim]
-"xim:glib" = ""
-"xim:zstd" = ""
-"xim:zlib" = ""
-
-[target.'cfg(any(windows, linux, macos))'.feature-xlings.rules-qt-xim-addons]
-"xim:qt-addons" = "6.11.1"
-
-[target.'cfg(any(windows, linux, macos))'.feature-xlings.rules-qt-xim-base]
-"xim:qt-base" = "6.11.1"
-
-[target.'cfg(linux)'.feature-xlings.rules-qt-xim-base]
-"xim:glib" = ""
-"xim:zstd" = ""
-"xim:zlib" = ""
 
 # ── The environment `dist-appimage` needs ──────────────────────────────────
 #
@@ -668,19 +628,3 @@ kind = "lib"
 kind = "bin"
 main = "tools/embed_main.cpp"
 
-# mcpp-deps -- the command of every installation a `deps-*` member declares.
-#
-# An action carries an argument vector and no environment; vcpkg is configured
-# through its environment, and two workspace members installing one prefix at
-# once must not write it concurrently. This program sets the environment, takes
-# a lock on the installation root, and runs the installer as its child. Built
-# from this package for the reason `mcpp-embed` is: the member and the program
-# it plans are one decision, and a separately published binary could drift from
-# it by a release.
-#
-#   [build-dependencies.mcpp]
-#   plugins = { version = "0.14.0", features = ["deps-vcpkg"],
-#               host-module = true, tools = ["mcpp-deps"] }
-[targets.mcpp-deps]
-kind = "bin"
-main = "tools/deps_main.cpp"
