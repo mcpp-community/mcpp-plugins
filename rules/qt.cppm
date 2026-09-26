@@ -563,8 +563,10 @@ inline bool compile(options opt = {}) {
                 // The stamp is written by mcpp when lupdate succeeds (a
                 // prepare's command need not write its own); `lrelease` takes it as an
                 // input, so it reads the `.ts` lupdate has rewritten.
-                u.arg("-ts").arg(in.c_str()).output(stamp.c_str())
-                 .output_dir(generic(file.parent_path()).c_str()).submit();
+                // `output_dir` keeps the pointer it is given, unlike `arg()`,
+                // so the string is a local that outlives `submit()`.
+                const std::string tsDir = generic(file.parent_path());
+                u.arg("-ts").arg(in.c_str()).output(stamp.c_str()).output_dir(tsDir.c_str()).submit();
             }
             const std::string id = "qt:lrelease:" + stem;
             const std::string desc = "LRELEASE " + file.filename().string();

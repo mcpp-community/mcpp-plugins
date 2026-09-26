@@ -45,13 +45,13 @@ env:
   # app` reaches `macapp-run`. An engine below it stages no `needs` lines, and
   # `dist-apk` refuses its tree naming this release.
   #
-  # 2026.9.27.1 IS THE RELEASE THAT LANDS mcpp-community/mcpp#702, which the
+  # 2026.9.26.2 IS THE RELEASE THAT LANDS mcpp-community/mcpp#702, which the
   # `deps-*` members and `rules-qt` (0.13.0) are written against (mcpp's
   # SPEC-007): `mcpp::runtime_search_dir` for a prefix's shared-library
   # directory, the `prepare` role with `output_dir` for an installation, a
   # stamp moved past the inputs that changed, and on Windows the imported DLLs
   # placed beside the program after the link.
-  MCPP_VERSION: 2026.9.27.1
+  MCPP_VERSION: 2026.9.26.2
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
