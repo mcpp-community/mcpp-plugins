@@ -1,0 +1,46 @@
+# Fixture: a Qt 6 program that exercises each of Qt's code generators and its
+# Linguist tool through `rules-qt`, with the SDK from `xim:qt`.
+#
+# A console program on purpose: QtCore needs no display and no platform plugin,
+# so the same program is built and RUN on every host in the matrix. What it
+# covers:
+#
+#   src/counter.h       declares a Q_OBJECT class       -> moc
+#   src/main.cpp        includes "main.moc"             -> moc, inline
+#   res/app.qrc         names res/greeting.txt          -> rcc
+#   i18n/qt_consumer_de.ts                              -> lrelease, deployed
+#                                                          under translations/
+#
+# and the program prints what each produced: a signal delivered to a slot, a
+# resource read through `:/`, and a string translated by the `.qm` it loaded
+# from beside itself. `widgets/` is the second fixture, for Qt Widgets, `.ui`
+# and the platform plugin.
+[package]
+name        = "qt-consumer"
+version     = "0.1.0"
+description = "Fixture: a Qt 6 console program built through rules-qt"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
+
+[build]
+# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the
+# program uses the toolchain's shared C++ runtime rather than embedding a second
+# one (mcpp's docs/20). The statement is project-wide because mcpp reads a
+# `[target.<triple>]` table only when a target is named (mcpp#704). Elsewhere
+# mcpp reports what it delivers instead: on macOS the default, and under clang
+# on the MSVC ABI the static CRT; a PE image resolves its imports per DLL, so
+# Qt's DLLs keep their own CRT.
+cxx_runtime = "toolchain-coupled"
+sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts"]
+
+[targets.qt-consumer]
+kind = "bin"
+main = "src/main.cpp"

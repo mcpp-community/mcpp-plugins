@@ -1,0 +1,15 @@
+[package]
+name        = "app-b"
+namespace   = "example"
+description = "Fixture: workspace member b"
+
+[language]
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../../..", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
+
+[targets.app-b]
+kind = "bin"
+main = "src/main.cpp"

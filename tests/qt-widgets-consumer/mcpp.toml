@@ -1,0 +1,40 @@
+# Fixture: a Qt Widgets program -- a `.ui` form through `uic`, and the platform
+# plugin placed beside the program, which is what `windeployqt` is for and what
+# no import table names.
+#
+# Run under `QT_QPA_PLATFORM=offscreen`: the runners have no display, and the
+# offscreen plugin is one of the files `deploy_plugins = { "platforms" }`
+# places, so a program that finds it has found the directory. A program that
+# does not exits in QGuiApplication's constructor with "Could not find the Qt
+# platform plugin", which is the failure this fixture exists to catch.
+[package]
+name        = "qt-widgets-consumer"
+version     = "0.1.0"
+description = "Fixture: a Qt Widgets program with a .ui form, built through rules-qt"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
+
+# Built and run on Windows and macOS by CI; on Linux QtGui needs libdbus, which
+# the ecosystem does not publish.
+[build]
+# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the
+# program uses the toolchain's shared C++ runtime rather than embedding a second
+# one (mcpp's docs/20). The statement is project-wide because mcpp reads a
+# `[target.<triple>]` table only when a target is named (mcpp#704). Elsewhere
+# mcpp reports what it delivers instead: on macOS the default, and under clang
+# on the MSVC ABI the static CRT; a PE image resolves its imports per DLL, so
+# Qt's DLLs keep their own CRT.
+cxx_runtime = "toolchain-coupled"
+sources = ["src/*.cpp", "ui/*.ui"]
+
+[targets.qt-widgets-consumer]
+kind = "bin"
+main = "src/main.cpp"

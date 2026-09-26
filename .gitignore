@@ -4,3 +4,4 @@ mcpp.lock
 .mcpp/
 *.log
 .worktrees/
+vcpkg_installed/

@@ -1,0 +1,11 @@
+import std;
+import mcpp;
+import mcpp.rules.qt;
+
+int main() {
+    mcpp::rules::qt::options o;
+    o.modules = { "Core", "Gui", "Widgets" };
+    // `platforms` is the default; stated because it is what this fixture tests.
+    o.deploy_plugins = { "platforms" };
+    return mcpp::rules::qt::compile(o) ? 0 : 1;
+}

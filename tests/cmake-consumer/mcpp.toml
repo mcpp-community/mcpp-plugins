@@ -1,0 +1,20 @@
+# Fixture: a library carried as a CMake subproject (`greet/`), configured,
+# built and installed by one action, and linked as a shared library.
+[package]
+name        = "cmake-consumer"
+version     = "0.1.0"
+description = "Fixture: links a shared library a CMake subproject installs"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-cmake"], host-module = true, tools = ["mcpp-deps"] }
+
+[targets.cmake-consumer]
+kind = "bin"
+main = "src/main.cpp"

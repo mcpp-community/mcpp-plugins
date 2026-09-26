@@ -9,6 +9,7 @@ import mcpp.rules.ascendc;
 import mcpp.rules.cuda;
 import mcpp.rules.hip;
 import mcpp.rules.metal;
+import mcpp.rules.qt;
 import mcpp.rules.slang;
 import mcpp.rules.spirv;
 import mcpp.rules.swift;
@@ -20,6 +21,9 @@ import mcpp.dist.wix;
 import mcpp.dist.apple;
 import mcpp.dist.web;
 import mcpp.dist.apk;
+import mcpp.deps;
+import mcpp.deps.vcpkg;
+import mcpp.deps.cmake;
 
 int main() {
     // No accelerator is named, so each of these returns true without looking
@@ -76,6 +80,16 @@ int main() {
     auto apkPlan = mcpp::dist::apk::plan_for();
     ok = ok && !apkPlan.applies;
 
-    std::println("all-rules-compile: every rule and dist module compiled for this host");
+    // `rules-qt` without `rules-qt-xim` has no SDK here, so the question that
+    // plans nothing is where the SDK would be: nowhere.
+    ok = ok && mcpp::rules::qt::roots({ .root = "no-such-qt-sdk" }).empty();
+    // The `deps-*` members install through an action; asked only what they
+    // derive without one -- the triplet this target defaults to, and the file
+    // a library name denotes.
+    ok = ok && !mcpp::deps::vcpkg::default_triplet().empty();
+    ok = ok && mcpp::deps::library_file("lib", "fmt", false).filename().string().find("fmt")
+                   != std::string::npos;
+
+    std::println("all-rules-compile: every rule, dist and deps module compiled for this host");
     return ok ? 0 : 1;
 }
