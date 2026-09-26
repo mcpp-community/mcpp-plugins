@@ -24,7 +24,7 @@ Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.15.0", features = ["deps-vcpkg"], host-module = true }
+plugins = { version = "0.15.1", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
@@ -88,8 +88,9 @@ vcpkg's per-user directory (`%LOCALAPPDATA%\vcpkg` on Windows,
 `$XDG_CACHE_HOME/vcpkg` or `~/.cache/vcpkg` elsewhere), beside vcpkg's default
 binary cache, under a short name, because Windows tools still enforce MAX_PATH;
 an existing `VCPKG_DOWNLOADS` is kept. vcpkg locks the installation root itself
-(`<root>/vcpkg/vcpkg-running.lock`), so two workspace members installing one
-root run one after the other. vcpkg fetches its
+(`<root>/vcpkg/vcpkg-running.lock`), and `--x-wait-for-lock` makes two
+workspace members installing one root run one after the other; without it the
+second fails, "failed to take lock" (0.15.1). vcpkg fetches its
 own CMake, Ninja and 7-Zip, and on Windows a portable git; on Linux and macOS
 its documented host prerequisites (git, curl, zip, unzip, tar, a C compiler)
 are the host's. Ports are compiled with vcpkg's default toolchain for the
