@@ -69,6 +69,11 @@ struct translations {
     // Where `lrelease` writes them. Empty is `<out dir>/qt/translations`; a
     // project whose own release step copies them names a directory it knows.
     std::string out_dir;
+    // Qt's own UI strings for these languages (`de`, `zh_CN`): the catalogs of
+    // the modules the program links, from the SDK's `translations/`, combined
+    // by `lconvert` into one `qt_<language>.qm` with no dependency left to
+    // resolve, and placed under `deploy_to` -- the file windeployqt writes.
+    std::vector<std::string> qt_languages;
 };
 
 struct options {
@@ -129,6 +134,26 @@ inline std::string module_name(std::string m) {
     if (m.starts_with("Qt6")) m = m.substr(3);
     else if (m.starts_with("Qt")) m = m.substr(2);
     return m;
+}
+
+// The translation catalog Qt ships a module's strings in: `qtbase` for the
+// modules of qtbase, the repository's name for the others. A module with no
+// catalog of its own has its strings in qtbase's.
+inline std::string catalog_of(const std::string& module) {
+    static const std::vector<std::pair<std::string, std::vector<std::string>>> table = {
+        {"qtdeclarative", {"Qml", "Quick", "QuickControls2", "QuickWidgets", "QuickDialogs2"}},
+        {"qtmultimedia",  {"Multimedia", "MultimediaWidgets"}},
+        {"qtserialport",  {"SerialPort"}},
+        {"qtwebsockets",  {"WebSockets"}},
+        {"qtconnectivity", {"Bluetooth", "Nfc"}},
+        {"qtlocation",    {"Location"}},
+        {"qtwebengine",   {"WebEngineCore", "WebEngineWidgets", "WebEngineQuick"}},
+        {"qt_help",       {"Help"}},
+    };
+    for (auto const& [catalog, modules] : table)
+        for (auto const& m : modules)
+            if (m == module) return catalog;
+    return "qtbase";
 }
 
 // By index, as `mcpp.deps.vcpkg` lowers a triplet line: GCC 16 cannot inline a
@@ -576,6 +601,50 @@ inline bool compile(options opt = {}) {
             r.arg(lrelease.c_str()).arg("-silent").arg(in.c_str()).arg("-qm").arg(qm.c_str()).input(in.c_str());
             r.output(qm.c_str()).submit();
             mcpp::deploy(qm.c_str(), opt.i18n.deploy_to.c_str());
+        }
+    }
+
+    // ── Qt's own translations ──
+    if (!opt.i18n.qt_languages.empty()) {
+        const std::string lconvert = detail::tool(sdks, "lconvert");
+        const fs::path qmDir = opt.i18n.out_dir.empty() ? gen / "translations"
+                                                        : detail::absolute_from_root(opt.i18n.out_dir);
+        std::vector<std::string> catalogs = {"qtbase"};
+        for (auto const& m : opt.modules) {
+            const std::string c = detail::catalog_of(detail::module_name(m));
+            if (std::ranges::find(catalogs, c) == catalogs.end()) catalogs.push_back(c);
+        }
+        if (lconvert.empty()) {
+            detail::warn(std::format("{}: `lconvert` not found under {}; it is part of qttools, and "
+                                     "Qt's own translations are not placed.", who, generic(main)));
+        } else {
+            for (auto const& lang : opt.i18n.qt_languages) {
+                std::vector<std::string> inputs;
+                for (auto const& c : catalogs)
+                    for (auto const& r : sdks)
+                        if (const auto qm = r / "translations" / (c + "_" + lang + ".qm"); fs::is_regular_file(qm, ec)) {
+                            inputs.push_back(generic(qm));
+                            break;
+                        }
+                if (inputs.empty()) {
+                    detail::warn(std::format("{}: the SDK has no Qt translation for '{}' (no "
+                                             "translations/qtbase_{}.qm under {}).", who, lang, lang, generic(main)));
+                    continue;
+                }
+                const std::string name = "qt_" + lang + ".qm";
+                if (!claim(name, fs::path(inputs.front()))) return false;
+                const std::string out  = generic(qmDir / name);
+                const std::string id   = "qt:lconvert:" + lang;
+                const std::string desc = "LCONVERT " + name;
+                mcpp::action a;
+                a.id = id.c_str();
+                a.role = mcpp::roles::source;
+                a.description = desc.c_str();
+                a.arg(lconvert.c_str()).arg("-o").arg(out.c_str());
+                for (auto const& in : inputs) a.arg("-i").arg(in.c_str()).input(in.c_str());
+                a.output(out.c_str()).submit();
+                mcpp::deploy(out.c_str(), opt.i18n.deploy_to.c_str());
+            }
         }
     }
 

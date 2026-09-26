@@ -1015,7 +1015,7 @@ int main() {
 | `private_modules` | modules whose private headers are included |
 | `moc`, `moc_headers` | `moc_scan::project_headers` (default) scans the package's headers by content; `moc_scan::listed` takes `moc_headers` only |
 | `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
-| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` before `lrelease`, as an action whose output is the `.ts` file it rewrites; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir`, where `lrelease` writes (default `<out dir>/qt/translations`) |
+| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` before `lrelease`, as an action whose output is the `.ts` file it rewrites; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir`, where `lrelease` writes (default `<out dir>/qt/translations`); `qt_languages`, Qt's own strings for each language: the catalogs of the linked modules combined by `lconvert` into `qt_<language>.qm` under `deploy_to`, the file windeployqt writes |
 | `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
 | `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
 | `root`, `extra_roots` | an SDK, and further prefixes |

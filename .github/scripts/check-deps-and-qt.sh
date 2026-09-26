@@ -201,6 +201,9 @@ qt_consumer() {
         fail "moc, rcc or lrelease did not reach the program"
     find target -name 'qt_consumer_de.qm' | grep -q . || fail "no .qm was produced"
     echo "ok: moc (header and inline), rcc and lrelease reached the program"
+    grep -q "Qt's own 'Abbrechen'$" target/ci/run.log ||
+        fail "Qt's own strings were not translated from the combined qt_de.qm"
+    echo "ok: lconvert combined Qt's catalogs into qt_de.qm, and the program loads it"
     "$MCPP" build --profile dev -v > target/ci/second-build.log 2>&1 ||
         { cat target/ci/second-build.log; fail "the second build failed"; }
     ! grep -qE '/(lupdate|lrelease)[^ ]* ' target/ci/second-build.log ||

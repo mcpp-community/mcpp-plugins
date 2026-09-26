@@ -40,11 +40,22 @@ int main(int argc, char** argv) {
         return 1;
     }
     QCoreApplication::installTranslator(&translator);
-    const QString hello = QCoreApplication::translate("main", "hello");
+    // Qt's own strings, from the qt_de.qm rules-qt combined: it loads only
+    // when no catalog it depends on is missing.
+    QTranslator qtTranslator;
+    if (!qtTranslator.load("qt_de", dir)) {
+        std::printf("qt-consumer: translations/qt_de.qm does not load\n");
+        return 1;
+    }
+    QCoreApplication::installTranslator(&qtTranslator);
+    const QString hello  = QCoreApplication::translate("main", "hello");
+    const QString cancel = QCoreApplication::translate("QProgressDialog", "Cancel");
 
-    std::printf("qt-consumer: signal %d, resource '%s', translation '%s', Qt %s\n",
-                relay.seen, text.constData(), hello.toUtf8().constData(), qVersion());
-    return relay.seen == 42 && text == "greetings from rcc" && hello == "hallo" ? 0 : 1;
+    std::printf("qt-consumer: signal %d, resource '%s', translation '%s', Qt %s, Qt's own '%s'\n",
+                relay.seen, text.constData(), hello.toUtf8().constData(), qVersion(),
+                cancel.toUtf8().constData());
+    return relay.seen == 42 && text == "greetings from rcc" && hello == "hallo" &&
+           cancel == "Abbrechen" ? 0 : 1;
 }
 
 #include "main.moc"
