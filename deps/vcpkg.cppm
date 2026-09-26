@@ -274,8 +274,10 @@ inline prefix use(const options& opt = {}) {
         // THE ACTION IS vcpkg ITSELF. Everything an installation needs is an
         // argument: `--vcpkg-root` pairs the tool with the scripts it was
         // released with, whatever `VCPKG_ROOT` the shell has; vcpkg locks the
-        // installation root itself (`<root>/vcpkg/vcpkg-running.lock`), so two
-        // workspace members installing one root wait for each other; its build
+        // installation root itself (`<root>/vcpkg/vcpkg-running.lock`), and
+        // `--x-wait-for-lock` makes a second installation of the same root --
+        // two workspace members, run concurrently -- wait for the first
+        // instead of failing (measured on GalTranslPP under 0.15.0); its build
         // and package trees go to a short directory under vcpkg's per-user
         // directory, because a port's build nests deep and Windows tools still
         // enforce MAX_PATH.
@@ -295,6 +297,7 @@ inline prefix use(const options& opt = {}) {
         a.arg(exeS.c_str()).arg("install")
          .arg(("--vcpkg-root=" + vcpkgRoot).c_str())
          .arg("--disable-metrics")
+         .arg("--x-wait-for-lock")
          .arg("--triplet").arg(triplet.c_str())
          .arg(("--x-manifest-root=" + mcpp::deps::generic(manifestRoot)).c_str())
          .arg(("--x-install-root=" + mcpp::deps::generic(tripletRoot)).c_str())

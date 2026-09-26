@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.15.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.15.1", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp

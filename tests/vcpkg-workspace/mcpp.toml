@@ -5,7 +5,8 @@
 # it, and those of no other package do, so each member declares the
 # installation itself. The two actions run the same `vcpkg install` against the
 # root's one manifest into one installation root; vcpkg locks that root itself
-# (`vcpkg/vcpkg-running.lock`), so they run one after the other and the second
+# (`vcpkg/vcpkg-running.lock`) and the member passes `--x-wait-for-lock`, so
+# they run one after the other and the second
 # finds everything installed.
 [workspace]
 members = ["app-a", "app-b"]
