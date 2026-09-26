@@ -6,11 +6,11 @@
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.15.1", features = ["rules-qt"], host-module = true }
+plugins = { version = "0.15.2", features = ["rules-qt"], host-module = true }
 
 # The SDK and its version are the project's declaration.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
-"xim:qt-base" = "6.11.1.1"
+"xim:qt-base" = "6.11.1"
 
 [build]
 sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts", "ui/*.ui"]
@@ -45,7 +45,21 @@ The first of three levels that names an SDK decides, and the rule records which 
 | `xim:qt` | qtbase, qtsvg, qtdeclarative, qttools, qttranslations |
 | `xim:qt-addons` | the additional libraries, beside `xim:qt` |
 
-The payloads that carry their runtime closure are version `6.11.1.1` (the Qt 6.11.1 archives, laid out anew); a machine that holds `6.11.1` keeps the earlier layout. 0.15.0 removed the features `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`, which declared a payload at a fixed version: a feature states a mechanism, and the SDK a program links is the project's choice. A project that named one declares the payload instead, as above.
+Each payload carries its runtime closure: the loader and the libraries Qt loads on Linux, and the VC++ runtime on Windows x64. 0.15.0 removed the features `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`, which declared a payload at a fixed version. A feature states a mechanism; the SDK a program links is the project's choice. A project that used one of those features declares the payload instead, as above.
+
+A project that does not use a payload comments out its declaration, because `mcpp build` provisions every declared payload whether or not a higher level names another SDK. It then names its SDK with `QT_ROOT_DIR` or with `options::root` in `build.mcpp`:
+
+```toml
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+# "xim:qt-base" = "6.11.1"
+```
+
+```cpp
+mcpp::rules::qt::options o;
+o.root = "D:/Qt/6.11.1/msvc2022_64";   // or leave empty and set QT_ROOT_DIR
+```
+
+A package that enables `rules-qt` only to import `mcpp.rules.qt`, and writes no `build.mcpp`, runs the program mcpp synthesises. When it has no SDK and no `.ui`, `.qrc` or `.ts` of its own, that program reports nothing (0.15.2; mcpp#715).
 
 ## Options
 

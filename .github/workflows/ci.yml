@@ -98,9 +98,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.mcpp
-          key: mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/*/mcpp.toml') }}
+          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/*/mcpp.toml') }}
           restore-keys: |
-            mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
 
       - name: Fetch the released mcpp
         run: |
@@ -1677,6 +1677,9 @@ jobs:
       - name: rules-qt takes the SDK from the project's payload, QT_ROOT_DIR or options::root
         run: bash .github/scripts/check-deps-and-qt.sh qt-sdk-consumer
 
+      - name: a package that enables rules-qt only for its module builds without a report
+        run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
+
   # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
   #
   # `rules-spirv` is the only member whose payload this ecosystem publishes for
@@ -1749,9 +1752,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.mcpp
-          key: mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/spirv-consumer/mcpp.toml') }}
+          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/spirv-consumer/mcpp.toml') }}
           restore-keys: |
-            mcpp-sandbox-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
 
       - name: Fetch the released mcpp
         run: |
@@ -2360,3 +2363,6 @@ jobs:
 
       - name: rules-qt takes the SDK from the project's payload, QT_ROOT_DIR or options::root
         run: bash .github/scripts/check-deps-and-qt.sh qt-sdk-consumer
+
+      - name: a package that enables rules-qt only for its module builds without a report
+        run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
