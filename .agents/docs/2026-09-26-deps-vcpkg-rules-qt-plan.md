@@ -1,6 +1,6 @@
 # 实施计划：`deps-vcpkg`、`rules-qt`、`deps-cmake` 的跨仓库交付
 
-状态：执行中 · 2026-09-26 · 设计见 `2026-09-26-deps-vcpkg-rules-qt-design.md`（第 4 版）。
+状态：执行中 · 2026-09-26（引擎下界 2026.9.26.2） · 设计见 `2026-09-26-deps-vcpkg-rules-qt-design.md`（第 4 版）。
 
 ## 1. 第 3 轮决定（设计第 4 版据此修改）
 
@@ -56,8 +56,16 @@ T1 mcpp#702 实现并发布（mcpp 侧）─────────┴──►
 
 | 任务 | 状态 |
 |---|---|
-| T0 设计第 4 版、本计划 | 进行中 |
-| T1 引擎 | 未开始 |
-| T2 xim 包 | Qt 归档 sha256 计算中 |
-| T3 插件 | 未开始 |
-| T4 / T5 | 未开始 |
+| T0 设计第 4 版、本计划 | 完成 |
+| T1 引擎 | mcpp#702 由 mcpp 侧合入，随 2026.9.26.2 发布 |
+| T2 xim 包 | xim-pkgindex#878、#879 已合入；`xlings-res/vcpkg` 双端资源已校验 |
+| T3 插件 | PR #29；Linux 各 fixture 在 2026.9.26.2 上通过；Windows、macOS 由 CI 验证 |
+| T3r / T4 / T5 | 等待 T3c |
+
+实测发现两项引擎缺口，均已报告：
+
+- 主机构建不读取主机三元组的 `[target.<triple>]` 段（mcpp#704），因此 Qt fixture 在 `[build]` 中声明
+  `cxx_runtime = "toolchain-coupled"`。
+- `path` 包的宿主工具以整棵目录树的 stamp 为键，嵌套其中的消费方写出的文件改变该键（mcpp#705）。fixture
+  位于插件仓库之内，因此其安装位于 `target/` 之下，检查脚本的日志写入 `target/ci/`，第二次构建以
+  `--profile dev` 绕过快路径，使 Linux 与 Windows、macOS 走同一条规划路径。从索引取得插件的项目不受影响。

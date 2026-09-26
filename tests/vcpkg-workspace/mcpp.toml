@@ -1,11 +1,12 @@
 # Fixture: two workspace members that link one vcpkg prefix and depend on
 # neither each other nor a common member.
 #
-# mcpp orders a `blocking` action before the compile edges of the package that
-# declares it and of no other, so each member declares the installation
-# itself. The two actions run the same `vcpkg install` against the root's one
-# manifest; `mcpp-deps` holds a lock on the installation root, so they run one
-# after the other and the second finds everything installed.
+# The compile edges of the package that declares a `prepare` action wait for
+# it, and those of no other package do, so each member declares the
+# installation itself. The two actions run the same `vcpkg install` against the
+# root's one manifest into one installation root; `mcpp-deps` holds a lock on
+# that root, so they run one after the other and the second finds everything
+# installed.
 [workspace]
 members = ["app-a", "app-b"]
 
