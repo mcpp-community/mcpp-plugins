@@ -1,0 +1,14 @@
+// The SDK is whatever the project names. The program names one only when it is
+// given one, which stands for any value a build program computes.
+import std;
+import mcpp;
+import mcpp.rules.qt;
+
+int main() {
+    mcpp::rules::qt::options o;
+    o.modules        = { "Core" };
+    o.deploy_plugins = {};
+    mcpp::rerun_if_env_changed("QT_SDK_CONSUMER_ROOT");
+    if (const char* r = std::getenv("QT_SDK_CONSUMER_ROOT"); r && *r) o.root = r;
+    return mcpp::rules::qt::compile(o) ? 0 : 1;
+}

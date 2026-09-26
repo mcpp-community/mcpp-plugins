@@ -25,7 +25,8 @@ A `deps-*` member compiles none of the project's translation units and does not
 do its work while the build program runs: the installation is a `prepare`
 action (mcpp's SPEC-007, docs/specs/build-plugins.md), which fills a declared
 output directory and which the package's compile and link edges wait for, and
-whose command is `mcpp-deps`, a program built from this package. The build
+whose command is the installer itself -- `vcpkg`, or `cmake -P` over a script
+the member writes -- so the package builds no program for it. The build
 program refers to the prefix by name -- include directory, libraries by full
 path, runtime search directory -- and never by what is in it, so a plan made
 before the installation is the plan made after it.

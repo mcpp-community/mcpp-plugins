@@ -20,7 +20,8 @@
 //      `bin/` (Windows) or `lib/` is a runtime search directory, so the
 //      program's run path, `mcpp run`, `mcpp pack` and -- on Windows -- the
 //      DLLs placed beside the program all come from the engine (R4.1, R4.3).
-//   3. THE TOOL IS A PAYLOAD. `xim:vcpkg` is the tool together with the
+//   3. THE TOOL IS A PAYLOAD, AND THE ACTION IS THE TOOL. `xim:vcpkg` is the
+//      tool together with the
 //      scripts released with it (vcpkg-tool's standalone bundle), declared by
 //      this feature. A `builtin-baseline` manifest resolves through vcpkg's
 //      git registry into vcpkg's per-user registry cache, so no clone of
@@ -269,39 +270,52 @@ inline prefix use(const options& opt = {}) {
             "{}: the vcpkg tool is not installed (xpkg_dir(\"xim\", \"vcpkg\") answered \"{}\"), "
             "so this plan installs nothing. The `deps-vcpkg` feature declares `xim:vcpkg`; "
             "`mcpp build` provisions it before this program runs.", who, vcpkgRoot));
-    } else if (const std::string tool = mcpp::deps::launcher(who, "deps-vcpkg"); tool.empty()) {
-        return {};
     } else {
+        // THE ACTION IS vcpkg ITSELF. Everything an installation needs is an
+        // argument: `--vcpkg-root` pairs the tool with the scripts it was
+        // released with, whatever `VCPKG_ROOT` the shell has; vcpkg locks the
+        // installation root itself (`<root>/vcpkg/vcpkg-running.lock`), so two
+        // workspace members installing one root wait for each other; its build
+        // and package trees go to a short directory under vcpkg's per-user
+        // directory, because a port's build nests deep and Windows tools still
+        // enforce MAX_PATH.
         const std::string stamp = mcpp::deps::generic(
             fs::path(mcpp::out_dir()) / "deps-vcpkg" / (triplet + ".stamp"));
         const std::string id    = "deps-vcpkg:install:" + triplet;
         const std::string desc  = "VCPKG install " + triplet;
         const std::string exeS  = mcpp::deps::generic(exe);
-        const std::string mRoot = mcpp::deps::generic(manifestRoot);
-        const std::string iRoot = mcpp::deps::generic(tripletRoot);
+        const fs::path user     = mcpp::deps::vcpkg_user_dir();
+        const fs::path work     = user / "mcpp" / mcpp::deps::short_name(mcpp::deps::generic(tripletRoot));
+        mcpp::rerun_if_env_changed("VCPKG_DOWNLOADS");
+        const char* downloads = std::getenv("VCPKG_DOWNLOADS");
         mcpp::action a;
         a.id          = id.c_str();
         a.role        = mcpp::roles::prepare;
         a.description = desc.c_str();
-        a.arg(tool.c_str()).arg("vcpkg")
-         .arg("--vcpkg").arg(exeS.c_str())
-         .arg("--root").arg(vcpkgRoot.c_str())
-         .arg("--manifest-root").arg(mRoot.c_str())
-         .arg("--install-root").arg(iRoot.c_str())
-         .arg("--triplet").arg(triplet.c_str());
+        a.arg(exeS.c_str()).arg("install")
+         .arg(("--vcpkg-root=" + vcpkgRoot).c_str())
+         .arg("--disable-metrics")
+         .arg("--triplet").arg(triplet.c_str())
+         .arg(("--x-manifest-root=" + mcpp::deps::generic(manifestRoot)).c_str())
+         .arg(("--x-install-root=" + mcpp::deps::generic(tripletRoot)).c_str())
+         .arg(("--x-buildtrees-root=" + mcpp::deps::generic(work / "bt")).c_str())
+         .arg(("--x-packages-root=" + mcpp::deps::generic(work / "pk")).c_str())
+         .arg("--clean-buildtrees-after-build")
+         .arg("--clean-packages-after-build");
+        // Downloads are shared by every project on the machine; a user who has
+        // moved them already (`VCPKG_DOWNLOADS`) keeps that.
+        if (!downloads || !*downloads)
+            a.arg(("--downloads-root=" + mcpp::deps::generic(user / "downloads")).c_str());
         // `arg()` and `input()` copy what they are given, so the temporaries
         // below need not outlive the call.
         for (auto const& d : opt.overlay_triplets)
-            a.arg("--overlay-triplets").arg(mcpp::deps::generic(mcpp::deps::absolute_from_root(d)).c_str());
+            a.arg(("--overlay-triplets=" + mcpp::deps::generic(mcpp::deps::absolute_from_root(d))).c_str());
         if (!generated.empty()) {
-            a.arg("--overlay-triplets").arg(mcpp::deps::generic(generated).c_str());
+            a.arg(("--overlay-triplets=" + mcpp::deps::generic(generated)).c_str());
             for (auto const& f : mcpp::deps::files_under(generated)) a.input(f.c_str());
         }
-        if (!opt.install_args.empty()) {
-            a.arg("--");
-            for (auto const& x : opt.install_args) a.arg(x.c_str());
-        }
-        a.input(tool.c_str());
+        for (auto const& x : opt.install_args) a.arg(x.c_str());
+        a.input(exeS.c_str());
         a.input(mcpp::deps::generic(manifestFile).c_str());
         if (fs::is_regular_file(configFile, ec)) a.input(mcpp::deps::generic(configFile).c_str());
         // An overlay's files are inputs: a changed patch or triplet is a

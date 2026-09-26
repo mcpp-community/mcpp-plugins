@@ -1,12 +1,15 @@
 # mcpp-plugins
 
 The build plugins the mcpp project maintains, published as one package,
-`mcpp:plugins`. A consumer selects the members it needs through features and
-imports each one from `build.mcpp` under the module name the member declares.
+`mcpp:plugins`. mcpp is a general engine with a framework for build plugins;
+plugins come from this package, from third parties, or from the project
+itself, and `build.mcpp` is where a project uses them. A consumer selects the
+members it needs through features, imports each one from `build.mcpp` under the
+module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.14.1", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.15.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -25,9 +28,7 @@ int main() {
 The edge is a `[build-dependencies]` entry, not a `[dependencies]` entry:
 `host-module = true` states which build-time product is wanted, and the section
 states that the package does not reach the target. A rule's library is never
-linked into the artifact (mcpp docs/05 §2.6.1). A member that runs a program of
-this package as a build action also names it on the edge
-(`tools = ["mcpp-deps"]` for the `deps-*` members).
+linked into the artifact (mcpp docs/05 §2.6.1).
 
 ## Naming
 
@@ -67,10 +68,11 @@ families, and of how the engine routes a file to a rule, is in
 | `deps-cmake` | `mcpp.deps.cmake` | 2026.9.26.2 | Builds and installs a CMake subproject as an action and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
 | `deps-archive` | `mcpp.deps.archive` | 2026.9.26.2 | Extracts a zip archive the project keeps and places its tree beside the program. | [deps](docs/deps.md#deps-archive) |
 
-Some features only add a payload or a sub-capability to a member:
-`rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons` (a Qt SDK from
-xim), `dist-apk-kotlin` and `dist-apk-maven` (Kotlin sources, a Maven graph),
-and `surface` and `deps`, which the members imply.
+Some features add a sub-capability to a member: `dist-apk-kotlin` and
+`dist-apk-maven` (Kotlin sources, a Maven graph), and `surface` and `deps`,
+which the members imply. A feature states a mechanism and the tools that
+mechanism runs; the libraries and SDKs a program links are the project's
+declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
 
 ## Layout
 
@@ -82,7 +84,6 @@ rules/<x>.cppm       export module mcpp.rules.<x>;
 tools/<x>.cppm       export module mcpp.tools.<x>;
 dist/<x>.cppm        export module mcpp.dist.<x>;
 deps/<x>.cppm        export module mcpp.deps.<x>;  deps/deps.cppm is shared
-tools/deps_main.cpp  mcpp-deps, the command of every deps installation
 tests/<consumer>/    one project per member, built by CI with the pinned mcpp
 docs/                one page per member or group of members
 ```
@@ -91,7 +92,8 @@ docs/                one page per member or group of members
 
 A member is one module file, one feature in `mcpp.toml`, a consumer under
 `tests/` that CI builds and asserts on, a row in the table above with its mcpp
-floor, and a version bump. The conventions a member follows are in
+floor, and a version bump. The conventions a member follows -- the same for a
+third-party or a project's own plugin -- are in
 [docs/plugin-development.md](docs/plugin-development.md); the division between
 what the engine owns and what the member owns is in
 [docs/engine-and-rules.md](docs/engine-and-rules.md#adding-a-member-what-the-engine-owns-and-what-the-member-owns).

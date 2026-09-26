@@ -20,10 +20,16 @@ modules    = true
 import_std = false
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
+plugins = { path = "../..", features = ["rules-qt"], host-module = true }
 
-# Built and run on Windows and macOS by CI; on Linux QtGui needs libdbus, which
-# the ecosystem does not publish.
+# The SDK is the project's declaration: the full base package here, and
+# `xim:qt-base` in tests/qt-consumer.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt" = "6.11.1"
+
+# Built, run and packed on every host by CI. On Linux the payload carries
+# QtGui's runtime closure (libdbus, fontconfig, xcb, ...); on Windows, the VC++
+# runtime its DLLs import.
 [build]
 # Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the
 # program uses the toolchain's shared C++ runtime rather than embedding a second

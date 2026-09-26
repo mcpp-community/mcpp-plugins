@@ -15,11 +15,20 @@
 // import table names: its plugins (`platforms/qwindows.dll`, `styles/`,
 // `imageformats/`), which is the job `windeployqt` exists for.
 //
-// WHERE QT COMES FROM IS NOT THIS RULE'S QUESTION. `options::root` names an SDK;
-// empty takes the `xim:qt` payload, which `rules-qt-xim` declares, and
-// `xim:qt-addons` beside it when `rules-qt-xim-addons` declares that. A project
-// using a Qt from elsewhere names `rules-qt` alone and downloads nothing.
+// WHERE QT COMES FROM IS THE PROJECT'S CHOICE, stated at one of three levels;
+// the first that names an SDK decides, and `mcpp::fact("rules-qt.sdk", ...)`
+// records which:
 //
+//   1. `options::root` (and `extra_roots`), in the build program -- any value
+//      the program computes;
+//   2. the environment variable `QT_ROOT_DIR`, the name Qt's installers for CI
+//      (install-qt-action, aqtinstall) set, for one machine;
+//   3. a Qt payload the project declares in its own `[xlings]` table, at the
+//      version it chooses: `xim:qt`, else `xim:qt-base`, with `xim:qt-addons`
+//      as a second prefix.
+//
+// The rule declares no SDK and pins no version.
+
 // WHAT THE PROGRAM LOADS, THE ENGINE FINDS. The SDK's shared-library directory
 // is a runtime search directory (mcpp's SPEC-007 R4.1): the program's run path
 // on ELF and Mach-O, `mcpp run`'s load path, `mcpp pack`'s closure, and on
@@ -93,7 +102,9 @@ struct options {
     // Windows: `opengl32sw.dll` (Mesa's software OpenGL) and `d3dcompiler_47.dll`
     // beside the program, as `windeployqt` places them by default.
     bool deploy_software_gl = false;
-    // The SDK. Empty takes `xim:qt`, then `xim:qt-addons` as a second prefix.
+    // The SDK. Empty consults `QT_ROOT_DIR`, then the `xim:qt` or
+    // `xim:qt-base` payload the project declares, with `xim:qt-addons` as a
+    // second prefix (see the header).
     std::string root;
     std::vector<std::string> extra_roots;
     std::string out_dir = std::string(mcpp::out_dir());
@@ -267,25 +278,53 @@ inline std::filesystem::path private_dir(const std::filesystem::path& root, cons
 
 // The SDKs this build uses: `options::root` and `extra_roots`, or the xim
 // payloads. Empty when none is present.
-inline std::vector<std::filesystem::path> roots(const options& opt = {}) {
-    std::vector<std::filesystem::path> out;
+// Where the SDK came from: the level that named it, and its prefixes.
+struct sdk_source {
+    std::string level;   // "options", "QT_ROOT_DIR", "xlings", or empty
+    std::vector<std::filesystem::path> roots;
+};
+
+inline sdk_source locate(const options& opt = {}) {
+    namespace fs = std::filesystem;
+    sdk_source out;
     std::error_code ec;
-    auto add = [&](const std::string& r) {
-        if (r.empty()) return;
-        const auto p = detail::absolute_from_root(r);
-        if (std::filesystem::is_directory(p, ec)) out.push_back(p);
+    auto add = [&](const fs::path& p) {
+        if (!p.empty() && fs::is_directory(p, ec)) out.roots.push_back(p);
     };
-    if (!opt.root.empty()) add(opt.root);
-    else {
-        // `xim:qt` is the full base; `xim:qt-base` is its qtbase + qttools
-        // subset (`rules-qt-xim-base`). A project that declares both uses the
-        // full one.
-        const std::string full = mcpp::xpkg_dir("xim", "qt");
-        add(full.empty() ? std::string(mcpp::xpkg_dir("xim", "qt-base")) : full);
-        add(mcpp::xpkg_dir("xim", "qt-addons"));
+    auto extras = [&] {
+        for (auto const& r : opt.extra_roots) add(detail::absolute_from_root(r));
+    };
+    // 1. The build program.
+    if (!opt.root.empty()) {
+        out.level = "options";
+        add(detail::absolute_from_root(opt.root));
+        extras();
+        return out;
     }
-    for (auto const& r : opt.extra_roots) add(r);
+    // 2. The machine.
+    mcpp::rerun_if_env_changed("QT_ROOT_DIR");
+    if (const char* env = std::getenv("QT_ROOT_DIR"); env && *env) {
+        out.level = "QT_ROOT_DIR";
+        add(fs::path(env));
+        extras();
+        return out;
+    }
+    // 3. A declared payload. `xim:qt` is the full base and `xim:qt-base` its
+    // qtbase + qttools subset; a project that declares both uses the full one.
+    const std::string full = mcpp::xpkg_dir("xim", "qt");
+    const std::string base = full.empty() ? std::string(mcpp::xpkg_dir("xim", "qt-base")) : full;
+    if (!base.empty()) {
+        out.level = "xlings";
+        add(fs::path(base));
+        if (const std::string addons = mcpp::xpkg_dir("xim", "qt-addons"); !addons.empty())
+            add(fs::path(addons));
+    }
+    extras();
     return out;
+}
+
+inline std::vector<std::filesystem::path> roots(const options& opt = {}) {
+    return locate(opt).roots;
 }
 
 // The first SDK, for a project that hands it to something else (a CMake
@@ -297,31 +336,18 @@ inline std::string root(const options& opt = {}) {
 
 // ─── What the program loads ────────────────────────────────────────────────
 
-// The SDK's shared-library directories, and on Linux those of the libraries
-// Qt's official QtCore expects the distribution to provide (glib, zstd, zlib,
-// declared from xim by `rules-qt-xim` and `rules-qt-xim-base`), as runtime search directories
+// The SDK's shared-library directories, as runtime search directories
 // (SPEC-007 R4.1). The engine renders them as the program's run path, puts
-// them on `mcpp run`'s load path -- which reaches a library's dependencies
-// where the program's run path does not, because QtCore carries a RUNPATH of
-// its own -- searches them for `mcpp pack`'s closure, and on Windows places
-// the Qt DLLs the program imports beside it (R4.3).
+// them on `mcpp run`'s load path, searches them for `mcpp pack`'s closure, and
+// on Windows places the Qt DLLs the program imports beside it (R4.3). What Qt's
+// own libraries load in turn is the SDK's to resolve: the `xim:qt` and
+// `xim:qt-base` payloads stamp their Linux dependencies (glib, libdbus,
+// fontconfig, xcb, ...) onto Qt's RUNPATH, and a Qt from elsewhere carries
+// what its installer arranged.
 inline void runtime_directories(std::span<const std::filesystem::path> roots) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
     for (auto const& r : roots) {
         const std::string dir = detail::generic(r / (detail::is_windows() ? "bin" : "lib"));
         mcpp::runtime_search_dir(dir.c_str());
-    }
-    if (detail::is_windows() || detail::is_macos()) return;
-    for (auto const* pkg : { "glib", "zstd", "zlib" }) {
-        const std::string dir = mcpp::xpkg_dir("xim", pkg);
-        if (dir.empty()) {
-            detail::warn(std::format("mcpp.rules.qt: xim:{} is not installed, and QtCore on Linux "
-                                     "loads it; `rules-qt-xim` declares it.", pkg));
-            continue;
-        }
-        if (fs::is_directory(fs::path(dir) / "lib", ec))
-            mcpp::runtime_search_dir(detail::generic(fs::path(dir) / "lib").c_str());
     }
 }
 
@@ -333,17 +359,27 @@ inline bool compile(options opt = {}) {
     constexpr std::string_view who = "mcpp.rules.qt";
     mcpp::fact("mcpp.plugins", std::string(mcpp::plugins::version).c_str());
 
-    const auto sdks = roots(opt);
+    const sdk_source source = locate(opt);
+    const auto& sdks = source.roots;
     if (sdks.empty()) {
         detail::warn(std::format(
-            "{}: no Qt SDK: options::root is {} and xpkg_dir(\"xim\", \"qt\") answered \"{}\". "
-            "Nothing Qt-specific is planned. The `rules-qt-xim` feature declares `xim:qt` and "
-            "`rules-qt-xim-base` declares `xim:qt-base`, which `mcpp build` provisions; a Qt "
-            "from elsewhere is named with options::root.",
-            who, opt.root.empty() ? "empty" : "'" + opt.root + "' (no such directory)",
-            std::string(mcpp::xpkg_dir("xim", "qt"))));
+            "{}: no Qt SDK{}. Nothing Qt-specific is planned. Name one with options::root or "
+            "QT_ROOT_DIR, or declare a payload, which `mcpp build` provisions:\n"
+            "    [target.'cfg(any(windows, linux, macos))'.xlings.workspace]\n"
+            "    \"xim:qt-base\" = \"6.11.1\"",
+            who, source.level.empty() ? std::string()
+                                      : " at the directory " + source.level + " names"));
         return true;
     }
+    mcpp::fact("rules-qt.sdk", std::format("{}: {}", source.level, generic(sdks.front())).c_str());
+    // Qt's official Linux binaries are built with GCC against libstdc++, and
+    // their interface carries `std::` types; a libc++ program does not link them.
+    if (!detail::is_windows() && !detail::is_macos()
+        && std::string_view(mcpp::cxx_stdlib()) == "libc++" && source.level == "xlings")
+        detail::warn(std::format(
+            "{}: the Qt SDK is Qt's official Linux build, whose C++ standard library is "
+            "libstdc++, and this toolchain's is libc++; build with a gcc toolchain "
+            "(`--toolchain gcc@<version>`), or name a Qt built with libc++.", who));
     const fs::path main = sdks.front();
     const fs::path gen  = fs::path(opt.out_dir) / "qt";
     std::error_code ec;

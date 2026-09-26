@@ -18,7 +18,7 @@ modules    = true
 import_std = true
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
+plugins = { path = "../..", features = ["deps-vcpkg"], host-module = true }
 
 [targets.vcpkg-consumer]
 kind = "bin"

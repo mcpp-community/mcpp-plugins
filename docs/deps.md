@@ -6,25 +6,25 @@ The `deps-*` members answer where a library comes from: a vcpkg manifest, a CMak
 
 Module `mcpp.deps.vcpkg`; engine floor: 2026.9.26.2 (mcpp#702).
 
-**Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis, and `tools = ["mcpp-deps"]` on the edge. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
+**Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-cmake`
 
 Module `mcpp.deps.cmake`; engine floor: 2026.9.26.2 (mcpp#702).
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, and `tools = ["mcpp-deps"]` on the edge. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, and maps the prefix as `deps-vcpkg` does
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, and maps the prefix as `deps-vcpkg` does
 
 ## `deps-archive`
 
 Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, and `tools = ["mcpp-deps"]` on the edge. From 0.14.0. Extracts a zip archive the project keeps and places its tree beside the program: one action names every member as an output, read from the archive's central directory while the build program runs, and each is deployed, so `mcpp run` finds the files and `mcpp pack` carries them. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.14.0. Extracts a zip archive the project keeps and places its tree beside the program: one action names every member as an output, read from the archive's central directory while the build program runs, and each is deployed, so `mcpp run` finds the files and `mcpp pack` carries them. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-vcpkg`: the libraries a vcpkg manifest names
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.14.1", features = ["deps-vcpkg"], host-module = true, tools = ["mcpp-deps"] }
+plugins = { version = "0.15.0", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
@@ -43,7 +43,7 @@ int main() {
 `use()` finds `vcpkg.json` at or above the package root, so every member of a
 workspace finds a manifest kept at the workspace root. It then:
 
-- declares `mcpp-deps vcpkg …` as a `mcpp::roles::prepare` action whose output
+- declares `vcpkg install …` as a `mcpp::roles::prepare` action whose output
   directory is the prefix `<install root>/<triplet>/<triplet>` and whose inputs are `vcpkg.json`,
   `vcpkg-configuration.json` and every file of the manifest's overlay ports and
   triplets. The package's compile and link edges wait for it; it runs under
@@ -67,10 +67,10 @@ states every path it can, and the build is where the absence fails.
 
 | option | meaning |
 |---|---|
-| `triplet` | empty derives it from the target: `x64-windows`, `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`, `x64-osx`, `arm64-osx`; on Linux under a libc++ toolchain the generated `x64-linux-libcxx` or `arm64-linux-libcxx` (0.14.1); a custom triplet is found through the manifest's `overlay-triplets` |
+| `triplet` | empty derives it from the target: `x64-windows`, `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`, `x64-osx`, `arm64-osx`; on Linux under a libc++ toolchain the generated `x64-linux-libcxx` or `arm64-linux-libcxx` (0.15.0); a custom triplet is found through the manifest's `overlay-triplets` |
 | `libraries` | the link, in order; a name that matches no installed file fails the link, naming its path |
 | `manifest_root` | the directory holding `vcpkg.json` |
-| `install_root` | empty is vcpkg's default, `<manifest root>/vcpkg_installed`. Each triplet is its own vcpkg installation, `<install root>/<triplet>`, because vcpkg's manifest mode removes from an installation the packages of every other triplet (0.14.1; 0.14.0's prefix `<install root>/<triplet>` is no longer read) |
+| `install_root` | empty is vcpkg's default, `<manifest root>/vcpkg_installed`. Each triplet is its own vcpkg installation, `<install root>/<triplet>`, because vcpkg's manifest mode removes from an installation the packages of every other triplet (0.15.0; 0.14.0's prefix `<install root>/<triplet>` is no longer read) |
 | `overlay_triplets` | further overlay-triplet directories |
 | `install_args` | arguments appended to `vcpkg install` |
 | `vcpkg_root` | a vcpkg root other than the `xim:vcpkg` payload |
@@ -80,11 +80,16 @@ The payload `xim:vcpkg` is vcpkg-tool's release binary with the standalone
 bundle published beside it, so the scripts a port calls are the ones that tool
 was released with. A `builtin-baseline` manifest resolves through vcpkg's git
 registry, into vcpkg's per-user registry cache; no clone of microsoft/vcpkg is
-made per project, and an inherited `VCPKG_ROOT` is not used. `mcpp-deps`
-places vcpkg's downloads and each installation's build trees in vcpkg's
-per-user directory (`%LOCALAPPDATA%\vcpkg` on Windows, `$XDG_CACHE_HOME/vcpkg`
-or `~/.cache/vcpkg` elsewhere), beside vcpkg's default binary cache, and takes
-an exclusive lock on the installation root while vcpkg runs. vcpkg fetches its
+made per project. The action is vcpkg itself, configured by arguments
+alone (0.15.0; 0.13.0-0.14.0 ran it through a program of this package):
+`--vcpkg-root` names the payload, whatever `VCPKG_ROOT` the shell has;
+`--disable-metrics`; the downloads and each installation's build trees go to
+vcpkg's per-user directory (`%LOCALAPPDATA%\vcpkg` on Windows,
+`$XDG_CACHE_HOME/vcpkg` or `~/.cache/vcpkg` elsewhere), beside vcpkg's default
+binary cache, under a short name, because Windows tools still enforce MAX_PATH;
+an existing `VCPKG_DOWNLOADS` is kept. vcpkg locks the installation root itself
+(`<root>/vcpkg/vcpkg-running.lock`), so two workspace members installing one
+root run one after the other. vcpkg fetches its
 own CMake, Ninja and 7-Zip, and on Windows a portable git; on Linux and macOS
 its documented host prerequisites (git, curl, zip, unzip, tar, a C compiler)
 are the host's. Ports are compiled with vcpkg's default toolchain for the
@@ -97,7 +102,7 @@ and mcpp's clang uses libc++ (`std::__1::`). Under a libc++ toolchain the
 default triplet is therefore a generated one, `<arch>-linux-libcxx`, whose
 ports build with mcpp's clang through vcpkg's chain-loaded toolchain file; the
 clang's own configuration names libc++ and the C library mcpp links against.
-Under a gcc toolchain the default triplet is vcpkg's own (0.14.1).
+Under a gcc toolchain the default triplet is vcpkg's own (0.15.0).
 
 Not supported: vcpkg's classic mode; the debug libraries under `debug/lib`.
 
@@ -116,16 +121,17 @@ int main() {
 }
 ```
 
-One `prepare` action configures, builds and installs the subproject into
-`<out dir>/deps-cmake/<name>/install`, its declared output directory; its inputs
-are the subproject's files, so an edit to the subproject rebuilds it. The prefix is mapped as `deps-vcpkg`
+One `prepare` action, `cmake -P` over a script the member writes
+(`<out dir>/deps-cmake/<name>.cmake`), configures, builds and installs the
+subproject into `<out dir>/deps-cmake/<name>/install`, its declared output
+directory; its inputs are the script and the subproject's files, so an edit to the subproject rebuilds it. The prefix is mapped as `deps-vcpkg`
 maps its own. `layout` names install directories other than `include/`, `lib/`
 and `bin/`; `prefix_path` becomes `CMAKE_PREFIX_PATH` (`mcpp::rules::qt::root()`
 for a subproject that finds Qt); `cache_args` carries `-D…`, `-G …` and a
 toolchain file. The subproject is compiled with the toolchain CMake selects by
 default unless `cache_args` names a compiler or a toolchain file; on Linux under
 a libc++ toolchain the compilers are mcpp's clang, as `deps-vcpkg` builds its
-ports (0.14.1). `deploy` places files of the prefix
+ports (0.15.0). `deploy` places files of the prefix
 beside the program, as `deps-vcpkg` takes it.
 
 ## `deps-archive`: files a program reads at run time, from an archive
@@ -143,8 +149,9 @@ int main() {
 
 `unpack()` reads the archive's central directory while the build program runs,
 so every file it holds is named before anything is extracted. One `artifact`
-action, `mcpp-deps unpack`, extracts it into `<out dir>/deps-archive/<name>` with
-`cmake -E tar xf --touch`, naming each file as an output; each file is then
+action, `cmake -P` over a script the member writes, empties
+`<out dir>/deps-archive/<name>` and extracts the archive there with
+`file(ARCHIVE_EXTRACT ... TOUCH)`, naming each file as an output; each file is then
 deployed under `to`, so `mcpp run` finds it beside the program and `mcpp pack`
 carries it. The action's inputs are the archive and the tool, so an edited
 archive is extracted again and an unchanged one is not; `mcpp emit

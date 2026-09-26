@@ -1,24 +1,23 @@
 # `rules-qt`
 
-`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The SDK is the project's choice.
+`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.9.26.2 (mcpp#702); from 0.13.0.
 
-## `rules-qt`
-
-Module `mcpp.rules.qt`; engine floor: 2026.9.26.2 (mcpp#702).
-
-**Needs and behaviour.** A Qt 6 SDK: `rules-qt-xim` declares `xim:qt` 6.11.1 on the target axis, `rules-qt-xim-base` declares `xim:qt-base` instead (qtbase and qttools with the QtQml library lupdate loads, about a third of the download; 0.14.0), `rules-qt-xim-addons` adds `xim:qt-addons` (the additional libraries) as a second prefix, and `options::root` names an SDK from elsewhere. From 0.13.0. `moc` for every header under the package root that declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE` and for a source that includes its own `<stem>.moc`; `uic` for `.ui`, `rcc` for `.qrc`, `lrelease` for `.ts` (named in `[build] sources` or in the options), each a `role = "source"` action with declared inputs. The modules are linked by full path, and the SDK's `bin/` (Windows) or `lib/` is a runtime search directory: the program's run path, `mcpp run`'s load path, `mcpp pack`'s closure, and on Windows the Qt DLLs the program imports placed beside it by the engine. The plugin directories `deploy_plugins` names are deployed beside the program. See [the section below](#rules-qt-qts-code-generators-and-linguist-tools)
-
-## `rules-qt`: Qt's code generators and Linguist tools
+## Use
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.14.1", features = ["rules-qt-xim"], host-module = true }
+plugins = { version = "0.15.0", features = ["rules-qt"], host-module = true }
+
+# The SDK and its version are the project's declaration.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt-base" = "6.11.1"
 
 [build]
 sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts", "ui/*.ui"]
 ```
 
 ```cpp
+// build.mcpp
 import mcpp.rules.qt;
 
 int main() {
@@ -30,12 +29,25 @@ int main() {
 }
 ```
 
-| feature | SDK |
+## The SDK
+
+The first of three levels that names an SDK decides, and the rule records which as the fact `rules-qt.sdk` (0.15.0):
+
+| level | how | scope |
+|---|---|---|
+| 1. build program | `options::root`, `options::extra_roots` | any value `build.mcpp` computes |
+| 2. environment | `QT_ROOT_DIR`, the variable install-qt-action and aqtinstall set; a change re-plans the build | one machine |
+| 3. declared payload | `xim:qt`, else `xim:qt-base`, with `xim:qt-addons` as a second prefix, at the version the project's `[xlings]` table states | one project, provisioned by `mcpp build` |
+
+| payload | contents |
 |---|---|
-| `rules-qt` | `options::root`; nothing is downloaded |
-| `rules-qt-xim` | `xim:qt` 6.11.1: the official base package without documentation (qtbase, qtsvg, qtdeclarative, qttools, qttranslations) |
-| `rules-qt-xim-base` | `xim:qt-base` 6.11.1 in place of `xim:qt`: qtbase and qttools with the QtQml library `lupdate` loads, about a third of the download (56–73 MB); every module a widgets or console program links, without Qt Quick, qtsvg or Qt's own translations |
-| `rules-qt-xim-addons` | adds `xim:qt-addons` 6.11.1, every additional library, as a second prefix |
+| `xim:qt-base` | qtbase, qttools with the QtQml library `lupdate` loads, and qttranslations; about a third of `xim:qt`'s download |
+| `xim:qt` | qtbase, qtsvg, qtdeclarative, qttools, qttranslations |
+| `xim:qt-addons` | the additional libraries, beside `xim:qt` |
+
+0.15.0 removed the features `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`, which declared a payload at a fixed version: a feature states a mechanism, and the SDK a program links is the project's choice. A project that named one declares the payload instead, as above.
+
+## Options
 
 | option | meaning |
 |---|---|
@@ -43,30 +55,30 @@ int main() {
 | `private_modules` | modules whose private headers are included |
 | `moc`, `moc_headers` | `moc_scan::project_headers` (default) scans the package's headers by content; `moc_scan::listed` takes `moc_headers` only |
 | `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
-| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` before `lrelease`, as an action whose output is the `.ts` file it rewrites; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir`, where `lrelease` writes (default `<out dir>/qt/translations`); `qt_languages`, Qt's own strings for each language: the catalogs of the linked modules combined by `lconvert` into `qt_<language>.qm` under `deploy_to`, the file windeployqt writes |
+| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as an action whose output is the `.ts` it rewrites; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir` (default `<out dir>/qt/translations`); `qt_languages`: the linked modules' catalogs combined by `lconvert` into `qt_<language>.qm`, the file windeployqt writes |
 | `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
 | `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
-| `root`, `extra_roots` | an SDK, and further prefixes |
+| `root`, `extra_roots` | level 1 of the SDK lookup |
 
-Generated files are written under `<out dir>/qt/`: `moc_<stem>.cpp` and
-`qrc_<stem>.cpp` are compiled, `ui_<stem>.h` and `<stem>.moc` are included
-(the directory is an include directory), and `translations/<stem>.qm` is
-deployed. Under an MSVC compiler the rule adds `/Zc:__cplusplus` and
-`/permissive-`; on Linux, `-fPIC`, which Qt's headers require. A resource
-compiled into a static library is registered with `Q_INIT_RESOURCE(<stem>)`, as
-Qt documents; in a program it registers itself.
+`roots()` and `root()` return the SDK the lookup chose, for a program that hands it on (a CMake subproject's `CMAKE_PREFIX_PATH`).
 
-A missing SDK, module or tool is a warning: the rule states what it can, and
-the build is where the absence fails.
+## Behaviour
 
-On Linux, Qt's official QtCore links glib, zstd and zlib and the shared
-`libstdc++`. `rules-qt-xim` and `rules-qt-xim-base` declare the first three on Linux, and the rule
-declares their `lib/` directories as runtime search directories; the program
-states `[build] cxx_runtime = "toolchain-coupled"` (mcpp's docs/20), so the
-process has one C++ runtime. The statement is project-wide because mcpp reads a
-`[target.<triple>]` table only when a target is named (mcpp#704). On macOS and
-under clang on the MSVC ABI mcpp reports the contract it delivers instead. Modules that load QtGui are not
-served on Linux: QtGui loads `libdbus-1.so.3`, which the ecosystem does not
-publish, and mcpp's runtime closure check refuses the program. On macOS the
-modules are frameworks under `lib/`: the rule compiles with `-F<root>/lib` and
-links each framework's binary by its full path.
+- `moc` runs for every header under the package root that declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE`, and for a source that includes its own `<stem>.moc`; `uic` for `.ui`, `rcc` for `.qrc`, `lrelease` for `.ts`. Each is a `role = "source"` action with declared inputs; the outputs are under `<out dir>/qt/`.
+- The SDK's `bin/` (Windows) or `lib/` is a runtime search directory: the program's run path, `mcpp run`'s load path, `mcpp pack`'s closure, and on Windows the Qt DLLs placed beside the program. The plugin directories `deploy_plugins` names are deployed beside the program.
+- Under an MSVC compiler the rule adds `/Zc:__cplusplus` and `/permissive-`; on Linux, `-fPIC`. On macOS the modules are frameworks under `lib/`, compiled with `-F<root>/lib` and linked by their binaries' full paths. A resource compiled into a static library is registered with `Q_INIT_RESOURCE(<stem>)`.
+- A missing SDK, module or tool is a warning: the plan states what it can, and the build is where the absence fails.
+
+## Runtime closure
+
+A program packed by `mcpp pack` starts on a machine that has only its operating system:
+
+| platform | Qt loads | provided by |
+|---|---|---|
+| Linux | glib, zstd, zlib, libdbus, fontconfig, freetype, X11, xkbcommon, EGL/GL, the xcb libraries | the `xim:qt` and `xim:qt-base` payloads: they declare these packages with `xim:glibc`, so xlings patches every file of the payload to the ecosystem's loader and a RUNPATH over them (openxlings/xim-pkgindex#884); Widgets programs pass mcpp's runtime closure check and run under that loader |
+| Windows | system DLLs, and the VC++ runtime (`MSVCP140`, `VCRUNTIME140`, `VCRUNTIME140_1`) | the payloads place the redistributable VC++ runtime in `bin/` (windows-x86_64), so it reaches the program's directory with Qt's DLLs |
+| macOS | system frameworks and libc++ | the system |
+
+The rule names none of these libraries (0.15.0; 0.13.0 and 0.14.0 declared glib, zstd and zlib on Linux and served QtCore only). A Qt from elsewhere carries what its installer arranged. On Linux, QtNetwork additionally loads `libgssapi_krb5` and `libbrotlidec`, which the ecosystem does not publish yet.
+
+Qt's official Linux build uses the shared libstdc++, so a Linux program states `[build] cxx_runtime = "toolchain-coupled"` (mcpp's docs/20) and builds with a gcc toolchain; under a libc++ toolchain the rule warns. The statement is project-wide because mcpp reads a `[target.<triple>]` table only when a target is named (mcpp#704).
