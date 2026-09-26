@@ -175,9 +175,11 @@ archive_consumer() {
     "$MCPP" pack --format dir > target/ci/pack.log 2>&1 || { cat target/ci/pack.log; fail "mcpp pack failed"; }
     find target/dist -path '*/runtime/bundle/nested/deep.txt' | grep -q . ||
         fail "the packed tree does not carry the archive's files"
+    # A PE program sits at the root of the packed tree, an ELF or Mach-O one
+    # under bin/; the deployed files are beside it either way.
     local packed
-    packed=$(find target/dist -path '*/bin/archive-consumer*' -type f | grep -vE '\.(pdb|debug)$' | head -1)
-    [ -n "$packed" ] || fail "no packed program"
+    packed=$(find target/dist -type f \( -name archive-consumer -o -name archive-consumer.exe \) | head -1 || true)
+    [ -n "$packed" ] || fail "no packed program under target/dist"
     "$packed" | grep -q "^archive-consumer: 'greetings from the archive'" ||
         fail "the packed program did not read the archive's files"
     echo "ok: the packed tree carries the archive's files, and the packed program reads them"
