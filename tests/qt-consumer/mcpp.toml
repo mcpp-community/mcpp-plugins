@@ -31,14 +31,14 @@ import_std = false
 plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
 
 [build]
-sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts"]
-
-# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so a
-# program that links them uses the toolchain's shared C++ runtime rather than
-# embedding one: two C++ runtimes in one process is the hazard mcpp's docs/20
-# describes, and mcpp reports it when the default applies.
-[target.x86_64-linux-gnu]
+# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the
+# program uses the toolchain's shared C++ runtime rather than embedding a second
+# one (mcpp's docs/20). The statement is project-wide because mcpp reads a
+# `[target.<triple>]` table only when a target is named. On Windows it keeps
+# `/MD`, which Qt's MSVC build uses, and stages the toolset's runtime DLLs; on
+# macOS mcpp reports that it keeps the default.
 cxx_runtime = "toolchain-coupled"
+sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts"]
 
 [targets.qt-consumer]
 kind = "bin"
