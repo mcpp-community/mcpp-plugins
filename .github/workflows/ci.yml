@@ -1650,6 +1650,13 @@ jobs:
       - name: deps-vcpkg installs a manifest as an action, and planning installs nothing
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-consumer
 
+      # Linux has two C++ standard libraries. Under a libc++ toolchain the
+      # ports build with mcpp's clang, and the two toolchains' prefixes coexist.
+      - name: deps-vcpkg and deps-cmake build with mcpp's clang under a libc++ toolchain
+        run: |
+          "$MCPP" toolchain install llvm 22.1.8
+          bash .github/scripts/check-deps-and-qt.sh vcpkg-libcxx
+
       - name: deps-archive extracts a zip the project keeps and deploys its tree beside the program
         run: bash .github/scripts/check-deps-and-qt.sh archive-consumer
 

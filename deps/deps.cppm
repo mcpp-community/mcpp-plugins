@@ -180,6 +180,49 @@ inline void runtime_directory(const std::string& bin, const std::string& lib) {
     mcpp::runtime_search_dir(dir.c_str());
 }
 
+// ── The compiler a subproject builds with ──────────────────────────────────
+//
+// A prefix's C++ libraries are linked into the program, so their C++ standard
+// library must be the program's. On Windows every compiler of the MSVC ABI
+// uses Microsoft's, and on macOS every compiler uses libc++; on Linux two
+// incompatible libraries exist, the host compiler that vcpkg and CMake choose
+// uses libstdc++, and mcpp's clang uses libc++ (`std::__1::`). So when the
+// program's library is libc++ on Linux, a subproject builds with mcpp's own
+// clang, whose configuration file names libc++ and the C library mcpp links
+// against; otherwise the installer's own choice already agrees and nothing is
+// stated.
+struct compilers {
+    std::string c, cxx;
+    explicit operator bool() const { return !cxx.empty(); }
+};
+
+inline compilers program_compilers() {
+    namespace fs = std::filesystem;
+    if (std::string_view(mcpp::target_os()) != "linux"
+        || std::string_view(mcpp::cxx_stdlib()) != "libc++"
+        || std::string_view(mcpp::compiler()) != "clang"
+        || std::string_view(mcpp::host()) != std::string_view(mcpp::target())) return {};
+    const fs::path bin = fs::path(mcpp::toolchain_dir()) / "bin";
+    std::error_code ec;
+    if (!fs::is_regular_file(bin / "clang++", ec) || !fs::is_regular_file(bin / "clang", ec)) return {};
+    return { generic(bin / "clang"), generic(bin / "clang++") };
+}
+
+// Writes `content` to `file` unless the file already holds it, so a file the
+// build program generates keeps its time stamp from one plan to the next and
+// the action that reads it does not run again.
+inline void write_if_changed(const std::filesystem::path& file, const std::string& content) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::is_regular_file(file, ec)) {
+        std::ifstream in(file, std::ios::binary);
+        const std::string old{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+        if (old == content) return;
+    }
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << content;
+}
+
 // ── Files beside the program ───────────────────────────────────────────────
 //
 // Data a program reads at run time from beside itself -- a dictionary, a

@@ -85,3 +85,20 @@ GalTranslPP 在 0.13.1 上构建成功后仍有两个手动步骤（解压嵌入
 
 实测：库包中的 `artifact` 输出经 `mcpp::deploy` 传播到依赖它的程序的 `bin/` 与 `mcpp pack` 目录；依赖包中无下游
 消费者的 `artifact` action 随下游构建执行。
+
+## 7. 0.14.1：Linux 上依赖的 C++ 标准库与程序一致
+
+Windows 上 MSVC ABI 的编译器共用 Microsoft 的标准库，macOS 上共用 libc++；Linux 上主机编译器使用
+libstdc++，mcpp 的 clang 使用 libc++，两者的 `std::` 符号互不链接。0.14.1 在 Linux 的 libc++ 工具链下：
+
+| 交付 | 机制 |
+|---|---|
+| `deps-vcpkg` 生成的 triplet | 默认 triplet 为 `<arch>-linux-libcxx`，经 `VCPKG_CHAINLOAD_TOOLCHAIN_FILE` 以 mcpp 的 clang 编译端口，再接 vcpkg 自身的 Linux 工具链；clang 的配置文件给出 libc++ 与 mcpp 链接的 C 库 |
+| 每个 triplet 一个 vcpkg 安装 | vcpkg 的清单模式从安装中移除其余 triplet 的包；前缀改为 `<install root>/<triplet>/<triplet>`，两个工具链的前缀并存，切换不重装 |
+| `deps-cmake` | 未经 `cache_args` 指定编译器或工具链文件时，传入 mcpp 的 clang |
+
+判据（Linux CI `vcpkg-libcxx`）：llvm 下 `libfmt.a` 含 `std::__1::` 符号且程序运行；默认工具链构建后 libc++
+前缀仍在；切回 llvm 不重跑安装；deps-cmake 子项目的 `CMAKE_CXX_COMPILER` 为 mcpp 的 clang。
+
+GalTranslPP 上游仅支持 Windows（README 所述，代码直接调用 WinAPI），Linux 的判据由本仓库的 fixture 承担；
+GalTranslPP PR2 作为 Windows 回归验证。

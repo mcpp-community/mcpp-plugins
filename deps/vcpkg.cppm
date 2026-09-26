@@ -11,12 +11,12 @@
 // and three things follow, none of which the project states again:
 //
 //   1. INSTALLATION IS AN EDGE. One `prepare` action (mcpp's SPEC-007 R3.3)
-//      runs `vcpkg install` for the manifest and fills `<install root>/<triplet>`,
-//      its declared `output_dir`; this package's compile and link edges wait
+//      runs `vcpkg install` for the manifest and fills the prefix
+//      `<install root>/<triplet>/<triplet>`, its declared `output_dir`; this package's compile and link edges wait
 //      for it. It re-runs when `vcpkg.json`, `vcpkg-configuration.json` or an
 //      overlay changes, and never under `mcpp emit build-database`.
-//   2. THE PREFIX REACHES THE BUILD BY NAME. `<install root>/<triplet>/include`
-//      is an include directory; each listed library is linked by its full path;
+//   2. THE PREFIX REACHES THE BUILD BY NAME. `<prefix>/include` is an include
+//      directory; each listed library is linked by its full path;
 //      `bin/` (Windows) or `lib/` is a runtime search directory, so the
 //      program's run path, `mcpp run`, `mcpp pack` and -- on Windows -- the
 //      DLLs placed beside the program all come from the engine (R4.1, R4.3).
@@ -47,8 +47,10 @@ export namespace mcpp::deps::vcpkg {
 struct options {
     // The vcpkg triplet. Empty derives it from the target: `x64-windows`,
     // `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`,
-    // `x64-osx`, `arm64-osx`. A custom triplet is named here and found through
-    // the manifest's `overlay-triplets` like any other.
+    // `x64-osx`, `arm64-osx`; on Linux under a libc++ toolchain, the generated
+    // `x64-linux-libcxx` or `arm64-linux-libcxx`, whose ports build with mcpp's
+    // clang. A custom triplet is named here and found through the manifest's
+    // `overlay-triplets` like any other.
     std::string triplet;
     // Library names in link order: `fmt` denotes `lib/fmt.lib` on Windows and
     // `lib/libfmt.a` or `lib/libfmt.so` elsewhere; a name with an extension
@@ -59,7 +61,12 @@ struct options {
     // root.
     std::string manifest_root;
     // Where vcpkg installs. Empty is vcpkg's own default,
-    // `<manifest root>/vcpkg_installed`.
+    // `<manifest root>/vcpkg_installed`. Each triplet is its own vcpkg
+    // installation, `<install root>/<triplet>`, whose prefix is
+    // `<install root>/<triplet>/<triplet>`: vcpkg's manifest mode removes from
+    // an installation the packages of every triplet but the one it installs,
+    // so two triplets sharing one -- a target switched, a toolchain whose C++
+    // library differs -- would each remove the other's prefix.
     std::string install_root;
     // Further overlay-triplet directories, beside the manifest's own.
     std::vector<std::string> overlay_triplets;
@@ -76,7 +83,7 @@ struct options {
 // The prefix, by name: the installation fills it during the build, and the
 // build program refers to it without looking inside (SPEC-007 R1.3).
 struct prefix {
-    std::string root;       // <install root>/<triplet>
+    std::string root;       // <install root>/<triplet>/<triplet>
     std::string include;    // root/include
     std::string lib;        // root/lib
     std::string bin;        // root/bin
@@ -182,8 +189,16 @@ inline prefix use(const options& opt = {}) {
         return {};
     }
 
-    const std::string triplet = opt.triplet.empty() ? default_triplet() : opt.triplet;
-    if (triplet.empty()) {
+    // THE C++ LIBRARY. Where the host compiler's C++ library is not the
+    // program's -- libc++ on Linux -- the default triplet is a generated one,
+    // `<triplet>-libcxx`, whose ports build with mcpp's own clang
+    // (`mcpp::deps::program_compilers`). A triplet the project names is used
+    // as it stands.
+    const mcpp::deps::compilers cc = opt.triplet.empty() ? mcpp::deps::program_compilers()
+                                                         : mcpp::deps::compilers{};
+    const std::string triplet = !opt.triplet.empty() ? opt.triplet
+                              : cc ? default_triplet() + "-libcxx" : default_triplet();
+    if (triplet.empty() || triplet == "-libcxx") {
         std::cerr << std::format("{}: no default vcpkg triplet for the target '{}'; name one with "
                                  "options::triplet.\n", who, std::string(mcpp::target()));
         return {};
@@ -191,7 +206,8 @@ inline prefix use(const options& opt = {}) {
 
     const fs::path installRoot = opt.install_root.empty()
         ? manifestRoot / "vcpkg_installed" : mcpp::deps::absolute_from_root(opt.install_root);
-    const fs::path root = installRoot / triplet;
+    const fs::path tripletRoot = installRoot / triplet;
+    const fs::path root = tripletRoot / triplet;
 
     prefix p;
     p.root      = mcpp::deps::generic(root);
@@ -213,7 +229,31 @@ inline prefix use(const options& opt = {}) {
     for (auto const& d : opt.overlay_triplets) overlayTriplets.push_back(mcpp::deps::absolute_from_root(d));
     const std::vector<fs::path> overlayPorts = manifest_overlays(manifestRoot, "overlay-ports");
 
+    // The generated triplet and the toolchain file it chains: vcpkg's own
+    // Linux toolchain, with the compilers set first.
+    fs::path generated;
+    if (cc && !vcpkgRoot.empty()) {
+        generated = fs::path(mcpp::out_dir()) / "deps-vcpkg" / "triplets";
+        const std::string arch = triplet.substr(0, triplet.find('-'));
+        const fs::path chain = generated / (triplet + ".toolchain.cmake");
+        mcpp::deps::write_if_changed(generated / (triplet + ".cmake"), std::format(
+            "# Written by mcpp.deps.vcpkg: the ports build with the program's compiler,\n"
+            "# so their C++ standard library is the program's.\n"
+            "set(VCPKG_TARGET_ARCHITECTURE {})\n"
+            "set(VCPKG_CRT_LINKAGE dynamic)\n"
+            "set(VCPKG_LIBRARY_LINKAGE static)\n"
+            "set(VCPKG_CMAKE_SYSTEM_NAME Linux)\n"
+            "set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE \"{}\")\n",
+            arch, mcpp::deps::generic(chain)));
+        mcpp::deps::write_if_changed(chain, std::format(
+            "set(CMAKE_C_COMPILER \"{}\")\n"
+            "set(CMAKE_CXX_COMPILER \"{}\")\n"
+            "include(\"{}\")\n",
+            cc.c, cc.cxx, mcpp::deps::generic(fs::path(vcpkgRoot) / "scripts" / "toolchains" / "linux.cmake")));
+    }
+
     std::vector<fs::path> tripletSearch = overlayTriplets;
+    if (!generated.empty()) tripletSearch.insert(tripletSearch.begin(), generated);
     if (!vcpkgRoot.empty()) {
         tripletSearch.push_back(fs::path(vcpkgRoot) / "triplets");
         tripletSearch.push_back(fs::path(vcpkgRoot) / "triplets" / "community");
@@ -238,7 +278,7 @@ inline prefix use(const options& opt = {}) {
         const std::string desc  = "VCPKG install " + triplet;
         const std::string exeS  = mcpp::deps::generic(exe);
         const std::string mRoot = mcpp::deps::generic(manifestRoot);
-        const std::string iRoot = mcpp::deps::generic(installRoot);
+        const std::string iRoot = mcpp::deps::generic(tripletRoot);
         mcpp::action a;
         a.id          = id.c_str();
         a.role        = mcpp::roles::prepare;
@@ -253,6 +293,10 @@ inline prefix use(const options& opt = {}) {
         // below need not outlive the call.
         for (auto const& d : opt.overlay_triplets)
             a.arg("--overlay-triplets").arg(mcpp::deps::generic(mcpp::deps::absolute_from_root(d)).c_str());
+        if (!generated.empty()) {
+            a.arg("--overlay-triplets").arg(mcpp::deps::generic(generated).c_str());
+            for (auto const& f : mcpp::deps::files_under(generated)) a.input(f.c_str());
+        }
         if (!opt.install_args.empty()) {
             a.arg("--");
             for (auto const& x : opt.install_args) a.arg(x.c_str());

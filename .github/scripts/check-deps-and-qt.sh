@@ -72,7 +72,7 @@ vcpkg_consumer() {
 
     if is_windows; then
         # The pack collects it from the runtime search directory.
-        ls target/vcpkg_installed/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
+        ls target/vcpkg_installed/x64-windows/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
         run_directly vcpkg-consumer | tee target/ci/direct.log
         grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/direct.log ||
             fail "started from the build directory, the program did not find fmt.dll"
@@ -81,6 +81,51 @@ vcpkg_consumer() {
         find target/dist -path '*/licenses/fmt/copyright' | grep -q . || fail "the packed tree carries no deployed copyright"
         echo "ok: the packed tree carries fmt.dll"
     fi
+}
+
+# LINUX UNDER A libc++ TOOLCHAIN. The host compiler vcpkg and CMake find uses
+# libstdc++, whose `std::` symbols a libc++ program cannot link. The default
+# triplet is then the generated `x64-linux-libcxx`, whose ports build with
+# mcpp's clang; fmt's interface returns `std::string`, so the link itself is the
+# criterion. The prefix is then shown to survive the default toolchain's own
+# installation, which vcpkg would remove if the two triplets shared one.
+vcpkg_libcxx() {
+    local llvm="${MCPP_LLVM:-llvm@22.1.8}" gen=x64-linux-libcxx
+    [ "$(uname -m)" = aarch64 ] && gen=arm64-linux-libcxx
+    cd "$ROOT/tests/vcpkg-consumer"
+    rm -rf target vcpkg_installed
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
+    "$MCPP" run --toolchain "$llvm" | tee target/ci/libcxx-run.log
+    grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/libcxx-run.log || fail "the libc++ program did not print through fmt"
+    local lib; lib=$(find target/vcpkg_installed -path "*/$gen/$gen/lib/libfmt.a" | head -1)
+    [ -n "$lib" ] || fail "no $gen prefix with libfmt.a"
+    grep -q 'std::__1::' <(nm -C "$lib") || fail "$lib is not built against libc++"
+    echo "ok: under $llvm the ports build with mcpp's clang and the program links them"
+
+    "$MCPP" build 2>&1 | tee target/ci/default-build.log
+    "$MCPP" run | tee target/ci/default-run.log
+    grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/default-run.log || fail "the default toolchain's program did not print through fmt"
+    [ -f "$lib" ] || fail "the default toolchain's installation removed the $gen prefix"
+    local stamp; stamp=$(find target -path '*deps-vcpkg*' -name "$gen.stamp" | head -1)
+    [ -n "$stamp" ] || fail "no $gen installation stamp"
+    touch -r "$stamp" target/ci/before-switch-back
+    sleep 1
+    "$MCPP" build --toolchain "$llvm" --profile dev > target/ci/switch-back.log 2>&1 ||
+        { cat target/ci/switch-back.log; fail "the build switched back to $llvm failed"; }
+    [ -z "$(find "$stamp" -newer target/ci/before-switch-back)" ] ||
+        fail "switching back to $llvm re-ran its installation"
+    echo "ok: the two toolchains' prefixes coexist, and switching back installs nothing"
+
+    # deps-cmake takes the same compilers.
+    cd "$ROOT/tests/cmake-consumer"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
+    "$MCPP" run --toolchain "$llvm" | grep -q '^cmake-consumer: greet says 42$' || fail "the libc++ cmake-consumer did not run"
+    grep -rqs 'CMAKE_CXX_COMPILER:[A-Z]*=.*xim-x-llvm.*/clang++' target --include=CMakeCache.txt ||
+        fail "deps-cmake configured the subproject without mcpp's clang"
+    echo "ok: deps-cmake configures the subproject with mcpp's clang under $llvm"
 }
 
 vcpkg_workspace() {
@@ -239,10 +284,11 @@ qt_widgets_consumer() {
 
 case "${1:-}" in
     vcpkg-consumer)      vcpkg_consumer ;;
+    vcpkg-libcxx)        vcpkg_libcxx ;;
     archive-consumer)    archive_consumer ;;
     vcpkg-workspace)     vcpkg_workspace ;;
     cmake-consumer)      cmake_consumer ;;
     qt-consumer)         qt_consumer ;;
     qt-widgets-consumer) qt_widgets_consumer ;;
-    *) echo "usage: $0 vcpkg-consumer|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer"; exit 2 ;;
 esac

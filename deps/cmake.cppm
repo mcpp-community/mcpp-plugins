@@ -18,12 +18,13 @@
 // include directory, libraries by full path, the shared libraries deployed
 // beside the program.
 //
-// THE COMPILER IS CMAKE'S OWN CHOICE. A subproject is configured the way its
-// authors build it -- on Windows, CMake's default generator and the Visual
-// Studio toolset it finds -- unless the project passes `-G`, `-DCMAKE_CXX_COMPILER`
-// or a toolchain file through `cache_args`. Keeping the C runtime and the C++
-// standard library consistent with the program is the project's decision, as it
-// is with any prebuilt library.
+// THE COMPILER IS CMAKE'S OWN CHOICE, EXCEPT WHERE ITS C++ LIBRARY DIFFERS. A
+// subproject is configured the way its authors build it -- on Windows, CMake's
+// default generator and the Visual Studio toolset it finds. On Linux under a
+// libc++ toolchain the compilers are mcpp's own clang (`-DCMAKE_C_COMPILER`,
+// `-DCMAKE_CXX_COMPILER`), because the host compiler CMake finds uses libstdc++
+// and the two do not link (`mcpp::deps::program_compilers`). A project that
+// passes either compiler or a toolchain file through `cache_args` decides.
 //
 // `xim:cmake` is declared by this feature; `options::cmake` names another.
 
@@ -147,6 +148,14 @@ inline prefix use(const options& opt) {
                 joined += mcpp::deps::generic(mcpp::deps::absolute_from_root(d));
             }
             a.arg(("-DCMAKE_PREFIX_PATH=" + joined).c_str());
+        }
+        const bool chosen = std::ranges::any_of(opt.cache_args, [](const std::string& x) {
+            return x.contains("CMAKE_C_COMPILER") || x.contains("CMAKE_CXX_COMPILER")
+                || x.contains("CMAKE_TOOLCHAIN_FILE");
+        });
+        if (const auto cc = mcpp::deps::program_compilers(); cc && !chosen) {
+            a.arg(("-DCMAKE_C_COMPILER=" + cc.c).c_str());
+            a.arg(("-DCMAKE_CXX_COMPILER=" + cc.cxx).c_str());
         }
         for (auto const& x : opt.cache_args) a.arg(x.c_str());
         a.input(tool.c_str());
