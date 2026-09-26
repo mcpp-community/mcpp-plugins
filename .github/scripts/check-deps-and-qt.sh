@@ -328,6 +328,17 @@ qt_sdk_consumer() {
     echo "ok: options::root names the SDK ahead of QT_ROOT_DIR"
 }
 
+qt_import_only() {
+    cd "$ROOT/tests/qt-import-only"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    grep -q 'build.mcpp running' target/ci/build.log || fail "mcpp synthesised no build program for the rule"
+    ! grep -q 'no Qt SDK' target/ci/build.log ||
+        fail "a synthesised program with no SDK and no Qt source reported a missing SDK"
+    echo "ok: a package that enables rules-qt only for its module builds without a report"
+}
+
 case "${1:-}" in
     vcpkg-consumer)      vcpkg_consumer ;;
     vcpkg-libcxx)        vcpkg_libcxx ;;
@@ -337,5 +348,6 @@ case "${1:-}" in
     qt-consumer)         qt_consumer ;;
     qt-widgets-consumer) qt_widgets_consumer ;;
     qt-sdk-consumer)     qt_sdk_consumer ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer|qt-sdk-consumer"; exit 2 ;;
+    qt-import-only)      qt_import_only ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only"; exit 2 ;;
 esac

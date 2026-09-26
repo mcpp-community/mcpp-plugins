@@ -1,0 +1,27 @@
+# Fixture: a package that enables `rules-qt` only to import `mcpp.rules.qt`,
+# the shape of a library of build logic that other packages' build programs
+# import (GalTranslPP's `gpp.build`). It writes no `build.mcpp`, has no `.ui`,
+# `.qrc` or `.ts`, and declares no Qt, so the program mcpp synthesises for it
+# asks for nothing and reports nothing (0.15.2; mcpp#715).
+[package]
+name        = "qt-import-only"
+version     = "0.1.0"
+description = "Fixture: rules-qt enabled only for its module"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qt"], host-module = true }
+
+[build]
+cxx_runtime = "toolchain-coupled"
+sources = ["src/*.cpp"]
+
+[targets.qt-import-only]
+kind = "bin"
+main = "src/main.cpp"

@@ -25,7 +25,7 @@ plugins = { path = "../..", features = ["rules-qt"], host-module = true }
 # The SDK is the project's declaration: the full base package here, and
 # `xim:qt-base` in tests/qt-consumer.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
-"xim:qt" = "6.11.1.1"
+"xim:qt" = "6.11.1"
 
 # Built, run and packed on every host by CI. On Linux the payload carries
 # QtGui's runtime closure (libdbus, fontconfig, xcb, ...); on Windows, the VC++
