@@ -7,5 +7,8 @@ int main() {
     mcpp::rules::qt::options o;
     o.modules        = { "Core" };
     o.deploy_plugins = {};
+    // lupdate brings the `.ts` up to date with src/ before lrelease reads it.
+    // The committed file is lupdate's own output, so a build leaves it as is.
+    o.i18n.update_sources = true;
     return mcpp::rules::qt::compile(o) ? 0 : 1;
 }
