@@ -443,7 +443,7 @@ inline bool compile(options opt = {}) {
             "{}: module(s){} not found in {}. The base package carries Core, Gui, Widgets, "
             "Network, Svg, Qml, Quick and the other qtbase/qtdeclarative modules; the "
             "additional libraries (Multimedia, Charts, WebSockets, ...) are `xim:qt-addons`, "
-            "which the `rules-qt-xim-addons` feature declares.",
+            "which the project declares beside `xim:qt`.",
             who, list, generic(main)));
     }
 
