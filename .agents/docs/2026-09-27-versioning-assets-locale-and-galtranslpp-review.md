@@ -145,3 +145,19 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 | brotli 恢复规范名（§2.2 第 2、3 步） | 我，在你完成删除后执行 |
 | PR2 文档修正（G1、G5）与 G2 验证 | 我 |
 | glibc locale（§3.3）、xlings 修订号（§1.3-1）、mcpp 解析一致性（§1.3-2）与可覆盖声明（G3） | 各仓库 issue，待你确认后提交 |
+
+## 6. 0.15.2 之后的状态（2026-09-27）
+
+执行方案见 `2026-09-27-plugins-0.15.2-plan.md`。本文件前几节的结论按如下更新：
+
+| 项 | 状态 |
+|---|---|
+| §1 Qt 版本 | 索引只保留 `6.11.1`（xim-pkgindex#891）；消费方书写上游版本 |
+| §2 brotli | 两端均为规范名，内容一致；GitHub 的 `-r1` 已删除 |
+| §3 locale | 已提交 openxlings/xlings#621 |
+| G1、G5 | 已完成：`how-to-build.md` 用 `> 注:` 列出 Qt、vcpkg、vcpkg 缓存、工具链与插件版本的配置方式 |
+| G2 | 部分成立：成员以 `.workspace = true` 继承插件版本；`gpp.build` 不是成员，无法继承（mcpp#714）；`xim:qt-base` 仍逐成员声明（mcpp#713） |
+| G3 | 属预期行为：不使用 xim 提供的 Qt 时，注释掉声明，再设置 `QT_ROOT_DIR` 或 `gpp::qt_root` |
+| G4 | 不变：仍需 VS Build Tools |
+| G7 | 已提交 mcpp#710（宿主工具不使用工作区工具链）、#711（缺少目标产物依赖） |
+| emit | 首次 258 s（包缓存为空）；构建后再次 emit 62 s，原因见执行方案 §6 |
