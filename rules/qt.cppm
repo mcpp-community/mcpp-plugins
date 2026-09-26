@@ -366,7 +366,7 @@ inline bool compile(options opt = {}) {
             "{}: no Qt SDK{}. Nothing Qt-specific is planned. Name one with options::root or "
             "QT_ROOT_DIR, or declare a payload, which `mcpp build` provisions:\n"
             "    [target.'cfg(any(windows, linux, macos))'.xlings.workspace]\n"
-            "    \"xim:qt-base\" = \"6.11.1\"",
+            "    \"xim:qt-base\" = \"6.11.1.1\"",
             who, source.level.empty() ? std::string()
                                       : " at the directory " + source.level + " names"));
         return true;

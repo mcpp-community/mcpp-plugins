@@ -10,7 +10,7 @@ plugins = { version = "0.15.0", features = ["rules-qt"], host-module = true }
 
 # The SDK and its version are the project's declaration.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
-"xim:qt-base" = "6.11.1"
+"xim:qt-base" = "6.11.1.1"
 
 [build]
 sources = ["src/*.cpp", "res/*.qrc", "i18n/*.ts", "ui/*.ui"]
@@ -45,7 +45,7 @@ The first of three levels that names an SDK decides, and the rule records which 
 | `xim:qt` | qtbase, qtsvg, qtdeclarative, qttools, qttranslations |
 | `xim:qt-addons` | the additional libraries, beside `xim:qt` |
 
-0.15.0 removed the features `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`, which declared a payload at a fixed version: a feature states a mechanism, and the SDK a program links is the project's choice. A project that named one declares the payload instead, as above.
+The payloads that carry their runtime closure are version `6.11.1.1` (the Qt 6.11.1 archives, laid out anew); a machine that holds `6.11.1` keeps the earlier layout. 0.15.0 removed the features `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`, which declared a payload at a fixed version: a feature states a mechanism, and the SDK a program links is the project's choice. A project that named one declares the payload instead, as above.
 
 ## Options
 

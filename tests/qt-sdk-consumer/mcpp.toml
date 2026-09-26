@@ -21,7 +21,7 @@ import_std = false
 plugins = { path = "../..", features = ["rules-qt"], host-module = true }
 
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
-"xim:qt-base" = "6.11.1"
+"xim:qt-base" = "6.11.1.1"
 
 [build]
 # Qt's Linux libraries load the shared libstdc++; see tests/qt-consumer.
