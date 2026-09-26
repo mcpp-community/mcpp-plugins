@@ -2,14 +2,6 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="de_DE">
 <context>
-    <name>QProgressDialog</name>
-    <message>
-        <location filename="src/main.cpp" line="52"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>main</name>
     <message>
         <location filename="src/main.cpp" line="51"/>

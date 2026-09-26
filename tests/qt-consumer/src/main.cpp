@@ -49,7 +49,11 @@ int main(int argc, char** argv) {
     }
     QCoreApplication::installTranslator(&qtTranslator);
     const QString hello  = QCoreApplication::translate("main", "hello");
-    const QString cancel = QCoreApplication::translate("QProgressDialog", "Cancel");
+    // Through variables, so lupdate does not take Qt's own string into this
+    // program's .ts: it extracts literals only.
+    const char* qtContext = "QProgressDialog";
+    const char* qtSource  = "Cancel";
+    const QString cancel = QCoreApplication::translate(qtContext, qtSource);
 
     std::printf("qt-consumer: signal %d, resource '%s', translation '%s', Qt %s, Qt's own '%s'\n",
                 relay.seen, text.constData(), hello.toUtf8().constData(), qVersion(),
