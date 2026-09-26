@@ -180,4 +180,65 @@ inline void runtime_directory(const std::string& bin, const std::string& lib) {
     mcpp::runtime_search_dir(dir.c_str());
 }
 
+// ── Files beside the program ───────────────────────────────────────────────
+//
+// Data a program reads at run time from beside itself -- a dictionary, a
+// configuration, an embedded interpreter -- is DEPLOYED (`mcpp::deploy`): the
+// engine places it beside the program after the build, `mcpp run` finds it
+// there, and `mcpp pack` carries it. A deployed file must be one the build
+// graph knows how to produce, and a file that a `prepare` action installs is
+// not: its name is unknown to the graph until the action has run. So the file
+// is first copied by an action that NAMES it as an output (SPEC-007 R3.2), and
+// the copy is deployed. Everything here is declared before anything exists, so
+// `mcpp emit build-database` plans it on a machine that never built.
+
+// One file of a prefix to place beside the program: `file` relative to the
+// prefix root (`share/opencc/t2s.json`), `to` the directory beside the program
+// it is placed in (`BaseConfig/opencc`; empty or `.` is the program's own
+// directory).
+struct deploy_entry {
+    std::string file;
+    std::string to;
+};
+
+// A file this package deploys: `path`, the copy the build produces (a node of
+// the build graph, which a project's own actions may take as an input), and
+// `to`, its path beside the program.
+struct deployed_file {
+    std::string path;
+    std::string to;
+};
+
+// Copies each entry's file out of `root` once the action that writes `stamp`
+// has run, and deploys the copy. `who` names the member in action ids.
+inline std::vector<deployed_file> deploy_after(std::string_view who, const std::string& stamp,
+                                               const std::filesystem::path& root,
+                                               std::span<const deploy_entry> entries) {
+    namespace fs = std::filesystem;
+    std::vector<deployed_file> out;
+    const fs::path base = fs::path(mcpp::out_dir()) / "deps-deploy" / std::string(who);
+    for (auto const& e : entries) {
+        const fs::path rel = fs::path(e.file).lexically_normal();
+        const std::string src  = generic(root / rel);
+        const std::string copy = generic(base / rel);
+        // Index loops over a string: GCC 16 fails to inline a string iterator
+        // inside a module's interface.
+        std::string key = rel.generic_string();
+        for (std::size_t i = 0; i < key.size(); ++i) if (key[i] == '/') key[i] = '.';
+        const std::string id   = std::format("{}:deploy:{}", who, key);
+        const std::string desc = std::format("DEPLOY {}", rel.generic_string());
+        mcpp::action a;
+        a.id          = id.c_str();
+        a.role        = mcpp::roles::artifact;
+        a.description = desc.c_str();
+        a.arg("${mcpp.self}").arg("stage").arg("--output").arg(copy.c_str()).arg(src.c_str())
+         .input(stamp.c_str()).output(copy.c_str()).submit();
+        const std::string dir = e.to.empty() ? std::string(".") : e.to;
+        mcpp::deploy(copy.c_str(), dir.c_str());
+        const std::string to = generic(fs::path(dir) / rel.filename());
+        out.push_back({copy, to});
+    }
+    return out;
+}
+
 } // namespace mcpp::deps

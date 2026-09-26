@@ -67,6 +67,10 @@ struct options {
     std::vector<std::string> install_args;
     // The vcpkg root. Empty is the `xim:vcpkg` payload this feature declares.
     std::string vcpkg_root;
+    // Files of the prefix the program reads at run time, placed beside it
+    // (`{"share/opencc/t2s.json", "BaseConfig/opencc"}`): `mcpp run` finds them
+    // and `mcpp pack` carries them. See `mcpp::deps::deploy_after`.
+    std::vector<mcpp::deps::deploy_entry> deploy;
 };
 
 // The prefix, by name: the installation fills it during the build, and the
@@ -78,6 +82,8 @@ struct prefix {
     std::string bin;        // root/bin
     std::string share;      // root/share
     std::string triplet;
+    // The copies `options::deploy` produced, for a project's own layout.
+    std::vector<mcpp::deps::deployed_file> deployed;
     explicit operator bool() const { return !root.empty(); }
 };
 
@@ -267,6 +273,7 @@ inline prefix use(const options& opt = {}) {
         a.output(stamp.c_str());
         a.output_dir(p.root.c_str());
         a.submit();
+        p.deployed = mcpp::deps::deploy_after("deps-vcpkg-" + triplet, stamp, root, opt.deploy);
     }
 
     // ── the prefix, into the build ──

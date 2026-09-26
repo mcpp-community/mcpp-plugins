@@ -1650,6 +1650,9 @@ jobs:
       - name: deps-vcpkg installs a manifest as an action, and planning installs nothing
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-consumer
 
+      - name: deps-archive extracts a zip the project keeps and deploys its tree beside the program
+        run: bash .github/scripts/check-deps-and-qt.sh archive-consumer
+
       - name: deps-vcpkg in two workspace members that share no dependency
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-workspace
 
@@ -2324,6 +2327,9 @@ jobs:
 
       - name: deps-vcpkg installs a manifest as an action, and planning installs nothing
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-consumer
+
+      - name: deps-archive extracts a zip the project keeps and deploys its tree beside the program
+        run: bash .github/scripts/check-deps-and-qt.sh archive-consumer
 
       - name: deps-vcpkg in two workspace members that share no dependency
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-workspace
