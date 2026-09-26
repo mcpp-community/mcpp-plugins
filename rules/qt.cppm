@@ -425,15 +425,21 @@ inline bool compile(options opt = {}) {
         headers.clear();
         inlineMoc.clear();
     }
-    std::map<std::string, fs::path> mocNames;
+    // EVERY GENERATED NAME HAS ONE SOURCE. Each generator names its output
+    // after the input's stem, in one directory, so two inputs with one stem in
+    // different directories would be two actions writing one file; refused
+    // naming both, for moc, uic, rcc and lrelease alike.
+    std::map<std::string, fs::path> claimed;
+    auto claim = [&](const std::string& outName, const fs::path& in) -> bool {
+        auto [it, fresh] = claimed.try_emplace(outName, in);
+        if (fresh) return true;
+        std::cerr << std::format("{}: two files produce `{}`: {} and {}. Generated files are "
+                                 "named after the input's stem; rename one.\n",
+                                 who, outName, generic(it->second), generic(in));
+        return false;
+    };
     auto mocOne = [&](const fs::path& in, const std::string& outName) -> bool {
-        auto [it, fresh] = mocNames.try_emplace(outName, in);
-        if (!fresh) {
-            std::cerr << std::format("{}: two files produce `{}`: {} and {}. moc outputs are named "
-                                     "after the file's stem; rename one.\n",
-                                     who, outName, generic(it->second), generic(in));
-            return false;
-        }
+        if (!claim(outName, in)) return false;
         const std::string out = generic(gen / outName);
         const std::string dep = out + ".d";
         const std::string src = generic(in);
@@ -464,6 +470,7 @@ inline bool compile(options opt = {}) {
             forms.clear();
         }
         for (auto const& f : forms) {
+            if (!claim("ui_" + fs::path(f).stem().string() + ".h", detail::absolute_from_root(f))) return false;
             const std::string in  = generic(detail::absolute_from_root(f));
             const std::string out = generic(gen / ("ui_" + fs::path(f).stem().string() + ".h"));
             const std::string id  = "qt:uic:" + fs::path(f).stem().string();
@@ -490,6 +497,7 @@ inline bool compile(options opt = {}) {
         for (auto const& r : resources) {
             const fs::path qrc = detail::absolute_from_root(r);
             const std::string stem = qrc.stem().string();
+            if (!claim("qrc_" + stem + ".cpp", qrc)) return false;
             const std::string in  = generic(qrc);
             const std::string out = generic(gen / ("qrc_" + stem + ".cpp"));
             const std::string id  = "qt:rcc:" + stem;
@@ -532,6 +540,7 @@ inline bool compile(options opt = {}) {
         for (auto const& t : ts) {
             const fs::path file = detail::absolute_from_root(t);
             const std::string stem = file.stem().string();
+            if (!claim(stem + ".qm", file)) return false;
             const std::string in = generic(file);
             const fs::path qmDir = opt.i18n.out_dir.empty() ? gen / "translations"
                                                             : detail::absolute_from_root(opt.i18n.out_dir);

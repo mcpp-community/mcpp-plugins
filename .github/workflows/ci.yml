@@ -2334,6 +2334,8 @@ jobs:
       - name: rules-qt runs moc, rcc and lrelease, with the SDK from xim:qt
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
+      # Windows and macOS: QtGui's dependencies are the system's there. On Linux
+      # QtGui loads libdbus, which the ecosystem does not publish, so the Linux
+      # job runs the console fixture only.
       - name: rules-qt builds a Widgets program with a .ui form, and it runs offscreen
-        if: runner.os == 'Windows'
         run: bash .github/scripts/check-deps-and-qt.sh qt-widgets-consumer

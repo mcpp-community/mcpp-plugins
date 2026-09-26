@@ -146,6 +146,7 @@ inline prefix use(const options& opt) {
         for (auto const& x : opt.cache_args) a.arg(x.c_str());
         a.input(tool.c_str());
         for (auto const& f : mcpp::deps::files_under(source)) a.input(f.c_str());
+        mcpp::deps::watch_tree(source);
         a.output(stamp.c_str());
         a.output_dir(p.root.c_str());
         a.submit();

@@ -256,10 +256,14 @@ inline prefix use(const options& opt = {}) {
         if (fs::is_regular_file(configFile, ec)) a.input(mcpp::deps::generic(configFile).c_str());
         // An overlay's files are inputs: a changed patch or triplet is a
         // different installation.
-        for (auto const& d : overlayTriplets)
+        for (auto const& d : overlayTriplets) {
             for (auto const& f : mcpp::deps::files_under(d)) a.input(f.c_str());
-        for (auto const& d : overlayPorts)
+            mcpp::deps::watch_tree(d);
+        }
+        for (auto const& d : overlayPorts) {
             for (auto const& f : mcpp::deps::files_under(d)) a.input(f.c_str());
+            mcpp::deps::watch_tree(d);
+        }
         a.output(stamp.c_str());
         a.output_dir(p.root.c_str());
         a.submit();

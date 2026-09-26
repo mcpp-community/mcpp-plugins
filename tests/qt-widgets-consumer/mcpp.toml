@@ -25,9 +25,9 @@ plugins = { path = "../..", features = ["rules-qt-xim"], host-module = true }
 [build]
 sources = ["src/*.cpp", "ui/*.ui"]
 
-# Built and run on Windows by CI; on Linux QtGui needs libdbus, which the
-# ecosystem does not publish. The Linux runtime contract below states what a
-# Linux build of it will need once it does.
+# Built and run on Windows and macOS by CI; on Linux QtGui needs libdbus, which
+# the ecosystem does not publish. The Linux runtime contract below is what a
+# Linux build of it states.
 #
 # Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so a
 # program that links them uses the toolchain's shared C++ runtime rather than

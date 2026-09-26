@@ -15,6 +15,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 fail() { echo "FAIL: $*"; exit 1; }
 
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
+is_macos() { [ "$(uname -s)" = Darwin ]; }
 
 # The stamp an installation action leaves: the file mcpp writes when a `check`
 # action's command succeeds. Its modification time is the criterion for "the
@@ -104,6 +105,17 @@ cmake_consumer() {
     # And not again: the engine moves the stamp past the input that changed
     # (mcpp's SPEC-007 R3.5).
     assert_not_rerun "$(stamp_of deps-cmake)"
+
+    # A file ADDED to the subproject is an input too: the build program watches
+    # the tree, so the next plan names it and the installation runs again.
+    trap 'rm -f "$ROOT/tests/cmake-consumer/greet/added.txt"' RETURN
+    touch -r "$(stamp_of deps-cmake)" target/ci/before-added-file
+    sleep 1
+    echo added > greet/added.txt
+    "$MCPP" build > target/ci/added-build.log 2>&1 || { cat target/ci/added-build.log; fail "the build after adding a file failed"; }
+    [ -n "$(find "$(stamp_of deps-cmake)" -newer target/ci/before-added-file)" ] ||
+        fail "a file added to the subproject did not re-run its installation"
+    echo "ok: a file added to the subproject re-ran its installation"
 }
 
 qt_consumer() {
@@ -124,6 +136,10 @@ qt_widgets_consumer() {
     QT_QPA_PLATFORM=offscreen "$MCPP" run | tee run.log
     grep -q "^qt-widgets-consumer: platform offscreen, label 'made by uic'$" run.log ||
         fail "the platform plugin or the uic form did not reach the program"
+    if is_macos; then
+        find target -path '*/bin/platforms/libqoffscreen.dylib' | grep -q . ||
+            fail "no platforms/libqoffscreen.dylib was deployed beside the program"
+    fi
     if is_windows; then
         QT_QPA_PLATFORM=offscreen run_directly qt-widgets-consumer | tee direct.log
         grep -q "^qt-widgets-consumer: platform offscreen" direct.log ||

@@ -123,6 +123,16 @@ inline std::vector<std::string> files_under(const std::filesystem::path& dir) {
     return out;
 }
 
+// Re-runs the build program when the SET of files under `dir` changes, so a
+// file added to a subproject or an overlay becomes an input of the action the
+// next plan declares; `files_under` names the files that exist now. The
+// pattern is relative to the package root, as `rerun_if_changed_glob` takes it.
+inline void watch_tree(const std::filesystem::path& dir) {
+    const auto rel = dir.lexically_relative(std::filesystem::path(mcpp::manifest_dir()));
+    const std::string pattern = (rel.empty() ? std::string(".") : rel.generic_string()) + "/**";
+    mcpp::rerun_if_changed_glob(pattern.c_str());
+}
+
 // The file a library name denotes under `lib_dir`. A name that already carries
 // an extension is a file name and is taken as written; otherwise the target's
 // convention decides: `<name>.lib` on Windows (an import library and a static
