@@ -362,16 +362,10 @@ inline bool compile(options opt = {}) {
     const sdk_source source = locate(opt);
     const auto& sdks = source.roots;
     if (sdks.empty()) {
-        // A package that enables `rules-qt` only to import this module, such as
-        // a library of build logic, and writes no `build.mcpp` gets the program
-        // mcpp synthesises, which calls compile() with the defaults. Without an
-        // SDK and without a `.ui`, `.qrc` or `.ts` of its own, that program
-        // asked for nothing, so it says nothing (0.15.2; mcpp#715).
-        std::error_code missing_ec;
-        if (!fs::exists(fs::path(mcpp::manifest_dir()) / "build.mcpp", missing_ec)
-            && detail::device(".ui").empty() && detail::device(".qrc").empty()
-            && detail::device(".ts").empty())
-            return true;
+        // Reached by a build program that asked for Qt: since mcpp 2026.9.27.1
+        // (mcpp#715) a package that enables `rules-qt` only to import this
+        // module, and has no `.ui`, `.qrc` or `.ts` of its own, gets no
+        // synthesised program at all.
         detail::warn(std::format(
             "{}: no Qt SDK{}. Nothing Qt-specific is planned. Name one with options::root or "
             "QT_ROOT_DIR, or declare a payload, which `mcpp build` provisions:\n"

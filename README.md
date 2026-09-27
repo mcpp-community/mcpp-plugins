@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.15.2", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.16.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -52,7 +52,7 @@ families, and of how the engine routes a file to a rule, is in
 | `rules-cuda` | `mcpp.rules.cuda` | 2026.9.6.6 | Compiles CUDA (`*.cu`) through clang with an LLVM toolchain or nvcc with a GCC one. | [rules](docs/rules.md#rules-cuda) |
 | `rules-hip` | `mcpp.rules.hip` | 2026.9.6.6 | Compiles HIP (`*.hip`) with the project's clang on the NVIDIA platform. | [rules](docs/rules.md#rules-hip) |
 | `rules-metal` | `mcpp.rules.metal` | 2026.9.8.1 | Compiles `.metal` shaders into Metal libraries with the host's Xcode and deploys them beside the program. | [rules](docs/rules.md#rules-metal) |
-| `rules-qt` | `mcpp.rules.qt` | 2026.9.26.2 | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [rules-qt](docs/rules-qt.md) |
+| `rules-qt` | `mcpp.rules.qt` | 2026.9.27.1 | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [rules-qt](docs/rules-qt.md) |
 | `rules-slang` | `mcpp.rules.slang` | 2026.9.7.1 | Compiles Slang (`*.slang`) and embeds or places the result. | [rules](docs/rules.md#rules-slang) |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.9.6.6 | Compiles GLSL and HLSL shader stages to SPIR-V and embeds or places the result. | [rules](docs/rules.md#rules-spirv) |
 | `rules-swift` | `mcpp.rules.swift` | 2026.9.8.1 | Compiles a package's `.swift` sources into one module the C and C++ sources call. | [rules](docs/rules.md#rules-swift) |

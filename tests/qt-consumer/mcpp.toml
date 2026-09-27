@@ -40,16 +40,19 @@ plugins = { path = "../..", features = ["rules-qt"], host-module = true }
 "xim:qt-base" = "6.11.1"
 
 [build]
-# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so the
-# program uses the toolchain's shared C++ runtime rather than embedding a second
-# one (mcpp's docs/20). The statement is project-wide because mcpp reads a
-# `[target.<triple>]` table only when a target is named (mcpp#704). Elsewhere
-# mcpp reports what it delivers instead: on macOS the default, and under clang
-# on the MSVC ABI the static CRT; a PE image resolves its imports per DLL, so
-# Qt's DLLs keep their own CRT.
-cxx_runtime = "toolchain-coupled"
 sources = ["src/*.cpp", "res/*.qrc", "*.ts"]
 
 [targets.qt-consumer]
 kind = "bin"
 main = "src/main.cpp"
+
+# Qt's Linux libraries load the shared libstdc++ (`libstdc++.so.6`), so on
+# Linux the program uses the toolchain's shared C++ runtime rather than
+# embedding a second one (mcpp's docs/20). The row is the host's own, which a
+# plain `mcpp build` applies since mcpp 2026.9.27.1 (mcpp#704); macOS and
+# the MSVC ABI keep mcpp's default.
+[target.x86_64-linux-gnu]
+cxx_runtime = "toolchain-coupled"
+
+[target.aarch64-linux-gnu]
+cxx_runtime = "toolchain-coupled"

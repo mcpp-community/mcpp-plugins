@@ -1,12 +1,12 @@
 # `rules-qt`
 
-`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.9.26.2 (mcpp#702); from 0.13.0.
+`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
 
 ## Use
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.15.2", features = ["rules-qt"], host-module = true }
+plugins = { version = "0.16.0", features = ["rules-qt"], host-module = true }
 
 # The SDK and its version are the project's declaration.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
@@ -59,7 +59,7 @@ mcpp::rules::qt::options o;
 o.root = "D:/Qt/6.11.1/msvc2022_64";   // or leave empty and set QT_ROOT_DIR
 ```
 
-A package that enables `rules-qt` only to import `mcpp.rules.qt`, and writes no `build.mcpp`, runs the program mcpp synthesises. When it has no SDK and no `.ui`, `.qrc` or `.ts` of its own, that program reports nothing (0.15.2; mcpp#715).
+A package that enables `rules-qt` only to import `mcpp.rules.qt`, and has no `build.mcpp` and no `.ui`, `.qrc` or `.ts` of its own, gets no synthesised build program, so nothing reports a missing SDK for it (mcpp 2026.9.27.1, mcpp#715; 0.15.2 silenced the report in the plugin, 0.16.0 leaves it to the engine).
 
 ## Options
 
@@ -95,4 +95,4 @@ A program packed by `mcpp pack` starts on a machine that has only its operating 
 
 The rule names none of these libraries (0.15.0; 0.13.0 and 0.14.0 declared glib, zstd and zlib on Linux and served QtCore only). A Qt from elsewhere carries what its installer arranged. On Linux, QtNetwork additionally loads `libgssapi_krb5` and `libbrotlidec`, which the ecosystem does not publish yet.
 
-Qt's official Linux build uses the shared libstdc++, so a Linux program states `[build] cxx_runtime = "toolchain-coupled"` (mcpp's docs/20) and builds with a gcc toolchain; under a libc++ toolchain the rule warns. The statement is project-wide because mcpp reads a `[target.<triple>]` table only when a target is named (mcpp#704).
+Qt's official Linux build uses the shared libstdc++, so a Linux program states `cxx_runtime = "toolchain-coupled"` (mcpp's docs/20) in its Linux host rows, `[target.x86_64-linux-gnu]` and `[target.aarch64-linux-gnu]`, and builds with a gcc toolchain; under a libc++ toolchain the rule warns. A plain `mcpp build` applies the host's row since mcpp 2026.9.27.1 (mcpp#704); with an older engine the statement goes in `[build]`, which applies it on every platform.
