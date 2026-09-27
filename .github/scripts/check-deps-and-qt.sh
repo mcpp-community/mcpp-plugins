@@ -333,10 +333,11 @@ qt_import_only() {
     rm -rf target
     mkdir -p target/ci
     "$MCPP" build 2>&1 | tee target/ci/build.log
-    grep -q 'build.mcpp running' target/ci/build.log || fail "mcpp synthesised no build program for the rule"
+    ! grep -q 'build.mcpp running' target/ci/build.log ||
+        fail "mcpp synthesised a build program for a package with no Qt source (mcpp#715)"
     ! grep -q 'no Qt SDK' target/ci/build.log ||
-        fail "a synthesised program with no SDK and no Qt source reported a missing SDK"
-    echo "ok: a package that enables rules-qt only for its module builds without a report"
+        fail "a package with no Qt source reported a missing SDK"
+    echo "ok: a package that enables rules-qt only for its module runs no build program and reports nothing"
 }
 
 case "${1:-}" in

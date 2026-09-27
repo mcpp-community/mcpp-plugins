@@ -51,7 +51,12 @@ env:
   # directory, the `prepare` role with `output_dir` for an installation, a
   # stamp moved past the inputs that changed, and on Windows the imported DLLs
   # placed beside the program after the link.
-  MCPP_VERSION: 2026.9.26.2
+  #
+  # 2026.9.27.1 IS WHAT 0.16.0's `rules-qt` NEEDS: a plain `mcpp build`
+  # applies the host's own `[target.<triple>]` row (mcpp#704), where the Qt
+  # fixtures state their Linux C++ runtime, and a package with no Qt source
+  # gets no synthesised build program (mcpp#715), which qt-import-only asserts.
+  MCPP_VERSION: 2026.9.27.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.

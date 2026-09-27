@@ -24,7 +24,7 @@ Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.15.2", features = ["deps-vcpkg"], host-module = true }
+plugins = { version = "0.16.0", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
