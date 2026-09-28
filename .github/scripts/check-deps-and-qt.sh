@@ -474,8 +474,15 @@ vcpkg_make_port() {
     cd "$ROOT/tests/vcpkg-make-port"
     rm -rf target
     mkdir -p target/ci
-    "$MCPP" build --toolchain "$MSVC_MANAGED" > target/ci/build.log 2>&1 ||
-        { tail -80 target/ci/build.log; fail "the make-based port did not build with the managed toolset"; }
+    if ! "$MCPP" build --toolchain "$MSVC_MANAGED" > target/ci/build.log 2>&1; then
+        tail -80 target/ci/build.log
+        # autoconf records the invocation and the failing test in config.log,
+        # which vcpkg's own report does not show.
+        local cfg
+        cfg=$(find "$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "$HOME")/vcpkg/mcpp" -path '*icu*' -name config.log 2>/dev/null | head -1)
+        [ -n "$cfg" ] && { echo "--- $cfg"; head -40 "$cfg"; echo "..."; grep -n "invalid variable\|error" "$cfg" | head -20; }
+        fail "the make-based port did not build with the managed toolset"
+    fi
     "$MCPP" run --toolchain "$MSVC_MANAGED" | tee target/ci/run.log
     grep -qE '^vcpkg-make-port: icu [0-9]' target/ci/run.log || fail "the program did not read icu's version"
     echo "ok: a make-based port builds with the managed toolset first on the kept PATH"
