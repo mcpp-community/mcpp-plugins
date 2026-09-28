@@ -20,7 +20,6 @@ export module mcpp.deps.compat;
 import std;
 import mcpp;
 import mcpp.plugins.fs;
-import mcpp.plugins.toolset;
 
 export namespace mcpp::deps {
 
@@ -35,6 +34,10 @@ struct compilers {
 };
 
 // 0.16.0's answer: mcpp's clang on the Linux libc++ row, nothing elsewhere.
+// Computed here rather than through `mcpp.plugins.toolset`: `mcpp.deps`
+// re-exports this unit, and with the toolset module in that chain GCC 16
+// emitted no `std::vector<std::string>::push_back(std::string&&)` for a build
+// program calling `mcpp::deps::archive::unpack` (undefined at its link).
 inline compilers program_compilers() {
     static bool noted = false;
     if (!noted) {
@@ -51,10 +54,11 @@ inline compilers program_compilers() {
         || std::string_view(mcpp::cxx_stdlib()) != "libc++"
         || std::string_view(mcpp::compiler()) != "clang"
         || std::string_view(mcpp::host()) != std::string_view(mcpp::target())) return {};
-    auto r = mcpp::plugins::toolset::resolve({mcpp::plugins::toolset::source::resolved,
-                                              mcpp::plugins::toolset::compiler::row});
-    if (!r) return {};
-    return { r->cc, r->cxx };
+    const std::filesystem::path bin = std::filesystem::path(mcpp::toolchain_dir()) / "bin";
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(bin / "clang++", ec) || !std::filesystem::is_regular_file(bin / "clang", ec))
+        return {};
+    return { mcpp::plugins::fs::generic(bin / "clang"), mcpp::plugins::fs::generic(bin / "clang++") };
 }
 
 } // namespace mcpp::deps
