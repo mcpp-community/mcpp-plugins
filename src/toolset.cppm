@@ -14,13 +14,15 @@
 //              toolset loading stays in place, pointed at the instance mcpp
 //              resolved, so MSBuild is present and every kind of project
 //              builds.
-//   chain      Any other toolset -- a managed MSVC toolset, and every toolset
-//              on the other rows -- is named: absolute tool paths, the
+//   chain      Any other toolset -- a managed MSVC toolset, and the clang
+//              toolsets of the other rows -- is named: absolute tool paths, the
 //              environment they run with, and the directories that go first
 //              on PATH. On the MSVC ABI without an instance no MSBuild exists.
-//   detected   `source::detected`: nothing is named, and the foreign system
-//              finds its own toolset, as the deps members did before 0.17.0.
-//              Kept by `src/compat/detected_toolset.cppm` until 2027-03-28.
+//   detected   Nothing is named, and the foreign system finds its own
+//              toolset. `source::detected` asks for it (kept by
+//              `src/compat/detected_toolset.cppm` until 2027-03-28); `resolved`
+//              answers it on the Linux GCC row, whose payload driver is not a
+//              complete handover (see `resolve`).
 //
 // NONE OF THIS NAMES A FOREIGN SYSTEM. vcpkg's triplet and CMake's generator
 // are written by the plugins that drive them (`mcpp.deps.vcpkg`,
@@ -73,6 +75,9 @@ struct resolved_tools {
     std::string identity;           // toolset_identity(): "msvc 14.44.35207; sdk 10.0.26100.0", "clang 22.1.8"
     std::string crt;                // msvc_crt_linkage(): "static", "dynamic", or empty off the MSVC ABI
     bool        msvc_abi = false;
+    // Why `resolved` answered `detected`: empty unless the resolved toolset
+    // cannot be handed over by its tools alone.
+    std::string reason;
 };
 
 inline bool msvc_abi() {
@@ -215,6 +220,22 @@ inline std::expected<resolved_tools, std::string> resolve(const choice& c = {}) 
             "the engine states no toolset identity: build information for build programs "
             "arrived in mcpp 2026.9.28.3 (protocol 14). Pin \"mcpp\": \"2026.9.28.3\" or newer "
             "in .xlings.json, or set the plugin's `toolset` option to `detected`."));
+
+    // THE GCC PAYLOAD IS NOT A COMPLETE HANDOVER. mcpp runs it with a sysroot,
+    // a binutils directory and a link model (`--sysroot`, `-B`, the payload's
+    // dynamic linker and C library) that its own command lines add and a
+    // foreign build system does not receive; given the driver alone, vcpkg's
+    // compiler detection failed on CI while it passed on a machine whose host
+    // compiler filled the gaps. The clang payloads carry their configuration in
+    // their own `.cfg` files and are complete. On the GCC row the host
+    // compiler's libstdc++ is the same C++ library, so the foreign system's
+    // detection agrees with the program, as it did before 0.17.0.
+    if (!r.msvc_abi && std::string_view(mcpp::compiler()) == "gcc") {
+        r.how    = mechanism::detected;
+        r.reason = "the GCC payload runs with a sysroot, binutils and a link model that only mcpp's "
+                   "own command lines carry; the host compiler's libstdc++ is the program's C++ library";
+        return r;
+    }
 
     const std::string instance = forward(mcpp::msvc_instance_dir());
     if (r.msvc_abi && !instance.empty() && c.cc == compiler::abi_native) {

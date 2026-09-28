@@ -72,18 +72,25 @@ vcpkg_consumer() {
 
     # THE MECHANISM (0.17.0). On the Visual Studio row the instance mcpp
     # resolved is selected and the standard triplet is used, so the ABI hash is
-    # the one vcpkg computes by itself; on the other rows a derived triplet
-    # names the resolved tools.
+    # the one vcpkg computes by itself. On the Linux GCC row (this job's
+    # default) vcpkg's own detection is kept: the payload driver runs with
+    # flags only mcpp's command lines carry. On the clang rows (macOS here) a
+    # derived triplet names the resolved tools.
     if is_windows; then
         grep -rqs 'VCPKG_VISUAL_STUDIO_PATH=' target --include=build.ninja ||
             fail "the installation does not select the Visual Studio instance mcpp resolved"
         [ -d target/vcpkg_installed/x64-windows/x64-windows ] || fail "the instance mechanism did not use x64-windows"
         echo "ok: the installation selects the Visual Studio instance and keeps the standard triplet"
-    else
+    elif is_macos; then
         ls -d target/vcpkg_installed/*-mcpp-*/*-mcpp-* > /dev/null 2>&1 ||
             fail "no derived <base>-mcpp-<hash> prefix under target/vcpkg_installed"
         grep -rqs 'MCPP_VCPKG_CXX=' target --include=build.ninja || fail "the installation does not hand vcpkg the resolved compiler"
         echo "ok: the installation names the resolved compiler in a derived triplet"
+    else
+        ls -d target/vcpkg_installed/*-linux/*-linux > /dev/null 2>&1 ||
+            fail "the GCC row did not keep the standard <arch>-linux triplet"
+        ! grep -rqs 'MCPP_VCPKG_CXX=' target --include=build.ninja || fail "the GCC row named its compiler to vcpkg"
+        echo "ok: the GCC row keeps vcpkg's detection and the standard triplet"
     fi
 
     if is_windows; then
@@ -126,8 +133,8 @@ vcpkg_libcxx() {
     "$MCPP" run | tee target/ci/default-run.log
     grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/default-run.log || fail "the default toolchain's program did not print through fmt"
     [ -f "$lib" ] || fail "the default toolchain's installation removed the $gen prefix"
-    [ "$(ls -d target/vcpkg_installed/*-mcpp-* | wc -l)" -ge 2 ] ||
-        fail "the default toolchain did not derive a triplet of its own"
+    [ "$(ls -d target/vcpkg_installed/*/ | wc -l)" -ge 2 ] ||
+        fail "the default toolchain did not install a prefix of its own"
     local stamp; stamp=$(find target -path '*deps-vcpkg*' -name "$gen.stamp" | head -1)
     [ -n "$stamp" ] || fail "no $gen installation stamp"
     touch -r "$stamp" target/ci/before-switch-back
@@ -455,7 +462,7 @@ vcpkg_msbuild_refused() {
     if "$MCPP" build --toolchain "$MSVC_MANAGED" > target/ci/build.log 2>&1; then
         cat target/ci/build.log; fail "an MSBuild port built without Visual Studio"
     fi
-    grep -q "builds with MSBuild, which needs a Visual Studio instance" target/ci/build.log ||
+    grep -q "builds with MSBuild" target/ci/build.log ||
         { tail -60 target/ci/build.log; fail "the MSBuild port failed without the plugin's reason"; }
     echo "ok: an MSBuild port is refused by name without Visual Studio"
 }

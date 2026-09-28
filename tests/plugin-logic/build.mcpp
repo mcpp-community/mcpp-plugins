@@ -176,39 +176,43 @@ int main(int argc, char** argv) {
                        "the compatibility note is printed");
           } },
 
-        { "vcpkg: the Linux GCC row is chained with vcpkg's linux.cmake",
+        { "vcpkg: the Linux GCC row keeps vcpkg's detection, and says why",
           with_vcpkg(t::row::linux_gcc()),
+          [] {
+              const auto r = ts::resolve();
+              std::printf("reason=%s\n", r ? r->reason.c_str() : "");
+              return vcpkg_use();
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("mcpp:action=", {"deps-vcpkg:install:x64-linux\""}),
+                       "the standard triplet x64-linux is used");
+              c.expect(!r.has_line("mcpp:action=", {"MCPP_VCPKG_CXX="}), "no compiler is named");
+              c.expect(r.has_line("reason=", {"GCC payload"}), "the resolution states why");
+          } },
+
+        { "vcpkg: the Linux libc++ row hands over mcpp's clang through linux.cmake",
+          with_vcpkg(t::row::linux_libcxx()),
           [] { return vcpkg_use(); },
           [](const t::result& r, t::checker& c) {
-              const auto f = derived_triplet(r);
-              const auto name = stem(f);
+              const auto name = stem(derived_triplet(r));
               c.expect(name.starts_with("x64-linux-mcpp-"), "the derived triplet is x64-linux-mcpp-<hash>");
               c.expect(r.file("out/deps-vcpkg/triplets/mcpp-chain-linux.cmake")
                            .find("/scripts/toolchains/linux.cmake\")") != std::string::npos,
                        "the toolchain includes vcpkg's linux.cmake");
               const auto a = r.line("mcpp:action=", {"deps-vcpkg:install:" + name});
-              c.expect(a.find("MCPP_VCPKG_CXX=") != std::string::npos && a.find("gcc/bin/g++") != std::string::npos,
-                       "the row's g++ is handed to vcpkg");
+              c.expect(a.find("MCPP_VCPKG_CXX=") != std::string::npos && a.find("llvm/bin/clang++") != std::string::npos,
+                       "clang++ is handed to vcpkg");
               c.expect(a.find("--host-triplet") == std::string::npos, "host tools keep vcpkg's host triplet");
               c.expect(a.find("\"PATH=") == std::string::npos, "PATH is left alone off the MSVC ABI");
               first_linux_name = name;
           } },
 
         { "vcpkg: the derived triplet's name does not depend on where the tools are",
-          with_vcpkg(t::row::linux_gcc()),
+          with_vcpkg(t::row::linux_libcxx()),
           [] { return vcpkg_use(); },
           [](const t::result& r, t::checker& c) {
               c.expect(!first_linux_name.empty() && stem(derived_triplet(r)) == first_linux_name,
                        "the same toolset under another root derives the same triplet");
-          } },
-
-        { "vcpkg: the Linux libc++ row hands over mcpp's clang",
-          with_vcpkg(t::row::linux_libcxx()),
-          [] { return vcpkg_use(); },
-          [](const t::result& r, t::checker& c) {
-              c.expect(r.has_line("mcpp:action=", {"MCPP_VCPKG_CXX=", "llvm/bin/clang++"}),
-                       "clang++ is handed to vcpkg");
-              c.expect(stem(derived_triplet(r)) != first_linux_name, "the two toolsets derive two triplets");
           } },
 
         // ── deps-cmake ──────────────────────────────────────────────────────

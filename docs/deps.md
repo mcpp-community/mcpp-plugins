@@ -108,8 +108,18 @@ vcpkg follows where the toolset came from:
 | mechanism | when | what vcpkg receives | port kinds that build |
 |---|---|---|---|
 | `instance` | an MSVC toolset from a Visual Studio instance (`msvc@system`, the default on a machine with Visual Studio) | `VCPKG_VISUAL_STUDIO_PATH` naming that instance; the standard triplet, or a derived one with `VCPKG_PLATFORM_TOOLSET_VERSION` when the resolved toolset is not the instance's default | CMake, make and MSBuild |
-| `chain` | any other toolset: a managed MSVC toolset (`xim:msvc@<version>`), and the toolsets of the Linux and macOS rows | a derived triplet `<base>-mcpp-<hash>` that chain-loads a toolchain naming the tools, and the tools' environment | CMake and make; an MSBuild port is refused by name |
-| `detected` | `options.toolset.toolset = detected` | nothing: vcpkg finds its own toolset, as in 0.16.0 | as vcpkg's own detection allows |
+| `chain` | a managed MSVC toolset (`xim:msvc@<version>`), and the clang toolsets of the Linux and macOS rows | a derived triplet `<base>-mcpp-<hash>` that chain-loads a toolchain naming the tools, and the tools' environment | CMake and make; an MSBuild port is refused by name |
+| `detected` | `options.toolset.toolset = detected`; and, under `resolved`, the Linux GCC row | nothing: vcpkg finds its own toolset, as in 0.16.0 | as vcpkg's own detection allows |
+
+**The Linux GCC row.** mcpp runs its GCC payload with a sysroot, a binutils
+directory and a link model (the payload's dynamic linker and C library) that
+its own command lines add; the driver alone is not a complete toolset, and
+vcpkg's compiler detection fails with it on a machine whose host compiler does
+not fill the gaps (measured on the plugins' CI). The clang payloads carry their
+configuration in their own `.cfg` files and are complete. On the GCC row the
+host compiler's libstdc++ is the program's C++ library, so `resolved` keeps
+vcpkg's detection there and the member states why in `mcpp.plugins.toolset`'s
+`reason`.
 
 **The derived triplet.** The base triplet's text is copied into it, not
 included, because vcpkg hashes a triplet file's content and not the files it
@@ -145,14 +155,15 @@ a second C++ runtime into the process without a word. `crt_linkage` states the
 ports' linkage explicitly and wins.
 
 **Linux.** Linux has two C++ standard libraries that do not link with each
-other. The derived triplet names the program's compiler, so the ports use the
-program's library on every row: libc++ under mcpp's clang (`std::__1::`), and
-the GCC payload's libstdc++ under mcpp's GCC.
+other. Under mcpp's clang the derived triplet names that clang, so the ports
+use libc++ (`std::__1::`) as the program does; under mcpp's GCC the host
+compiler's libstdc++ is the program's library, and vcpkg's detection is kept.
 
-**Upgrading from 0.16.0.** On Linux and macOS, and on Windows with a managed
-toolset, the installation moves to a derived triplet, so each port is built once
-more (or restored from a binary cache that already holds it); the prefixes of
-0.16.0 (`<arch>-linux-libcxx`, `x64-linux`) are left where they are. With
+**Upgrading from 0.16.0.** On the clang rows of Linux and macOS, and on Windows
+with a managed toolset, the installation moves to a derived triplet, so each
+port is built once more (or restored from a binary cache that already holds
+it); the prefixes of 0.16.0 (`<arch>-linux-libcxx`) are left where they are. The
+Linux GCC row is unchanged. With
 Visual Studio and the dynamic C runtime nothing changes: the standard triplet
 and the instance vcpkg selects by itself give the same ABI hash. A program that
 links the C runtime statically moves to `x64-windows-static`.

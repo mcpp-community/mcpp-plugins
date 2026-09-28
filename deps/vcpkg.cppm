@@ -267,17 +267,24 @@ inline std::string chain_toolchain_text() {
 }
 
 // What an MSBuild port meets under `chain`: vcpkg runs MSBuild with
-// `/p:PlatformToolset=external` and fails without naming the cause. The
-// MSBuild helpers read `VCPKG_PLATFORM_TOOLSET` to build that argument; the
-// watch stops the port there and says why.
+// `/p:PlatformToolset=external` and fails without naming the cause ("msbuild:
+// no such file or directory" when no Visual Studio exists). The MSBuild
+// helpers read `VCPKG_PLATFORM_TOOLSET` to build that argument; the watch
+// stops the port there and says why. The helper is recognised in the watch's
+// CALL STACK, not its current file: a read inside a function reports the
+// caller's file (the portfile), and the stack names the file that defines the
+// function (measured with CMake 4.4). The pattern names the helper's own
+// directory and files, so a project whose path contains "msbuild" is not
+// refused.
 inline std::string msbuild_refusal_text(std::string_view identity) {
     return std::format(
         "# mcpp.deps.vcpkg: a port that builds with MSBuild needs a Visual Studio\n"
         "# instance, and this toolset comes from none.\n"
         "if(PORT AND NOT DEFINED Z_MCPP_MSBUILD_WATCH)\n"
         "  set(Z_MCPP_MSBUILD_WATCH 1)\n"
-        "  function(z_mcpp_msbuild_watch variable access value current_file)\n"
-        "    if(access STREQUAL \"READ_ACCESS\" AND current_file MATCHES \"msbuild\")\n"
+        "  function(z_mcpp_msbuild_watch variable access value current_file stack)\n"
+        "    if(access STREQUAL \"READ_ACCESS\" AND stack MATCHES "
+        "\"/vcpkg-msbuild/|vcpkg_install_msbuild\\\\.cmake|vcpkg_build_msbuild\\\\.cmake\")\n"
         "      message(FATAL_ERROR \"mcpp.deps.vcpkg: the port '${{PORT}}' builds with MSBuild, which "
         "needs a Visual Studio instance; the toolset mcpp resolved ({}) comes from none. Build with "
         "the toolchain msvc@system on a machine with Visual Studio, or set the deps-vcpkg option "
