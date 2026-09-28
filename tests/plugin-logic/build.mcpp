@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
 
         // ── compatibility ───────────────────────────────────────────────────
         { "compat: program_compilers keeps its 0.16.0 answer and says until when",
-          t::row::linux_libcxx(),
+          t::row::linux_libcxx().file("llvm/bin/clang").file("llvm/bin/clang++"),
           [] {
               const auto cc = mcpp::deps::program_compilers();
               std::printf("answer=%s\n", cc.cxx.c_str());
