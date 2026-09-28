@@ -56,7 +56,11 @@ env:
   # applies the host's own `[target.<triple>]` row (mcpp#704), where the Qt
   # fixtures state their Linux C++ runtime, and a package with no Qt source
   # gets no synthesised build program (mcpp#715), which qt-import-only asserts.
-  MCPP_VERSION: 2026.9.27.1
+  #
+  # 2026.9.28.3 IS WHAT 0.17.0 NEEDS, and the package floor states it: the
+  # build information `mcpp.plugins.toolset` reads, `mcpp::report`, and one
+  # placement edge for many files (mcpp#734).
+  MCPP_VERSION: 2026.9.28.3
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
@@ -1441,7 +1445,7 @@ jobs:
           # incomplete while the extractor was what broke.
           # MEMBERS, NOT EVERY FEATURE. A member is a feature named for its
           # family -- `rules-*`, `tools-*`, `dist-*`, the README's naming table
-          # -- and a consumer names it. `surface` is not one: it carries the
+          # -- and a consumer names it. `plugins-core` is not one: it carries the
           # build-program half of the generated surface, every member implies
           # it, and a consumer never writes it. Keeping it out keeps this check
           # meaning "the fixture names every member a consumer can activate";
@@ -1638,6 +1642,21 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ]
+
+      # ── the general library and the test kit (0.17.0, mcpp#734) ───────────
+      #
+      # The deps members' decisions -- which mechanism reaches the foreign
+      # system, which triplet, which C runtime -- tested against stated build
+      # contexts (a Visual Studio row, a managed MSVC row, the Linux GCC and
+      # libc++ rows) with nothing installed. The verdicts are counted against
+      # the cases the fixture declares.
+      - name: the deps members' decisions hold against stated build contexts (mcpp.plugins.testing)
+        run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
+
+      # A compatibility unit keeps a behaviour for six months after the release
+      # that replaced it, and this step fails once its date has passed.
+      - name: compatibility units retire themselves
+        run: bash .github/scripts/check-compat-retirement.sh
 
       # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
       #
@@ -1845,7 +1864,7 @@ jobs:
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
           # MEMBERS, NOT EVERY FEATURE: a feature named for its family
-          # (`rules-*`, `tools-*`, `dist-*`), which a consumer names; `surface`,
+          # (`rules-*`, `tools-*`, `dist-*`), which a consumer names; `plugins-core`,
           # which every member implies and no consumer writes, is not one. By
           # name and not by "nothing implies it" since 0.11.0, when
           # `dist-apk-kotlin` and `dist-apk-maven` came to imply `dist-apk`. The
@@ -2331,6 +2350,11 @@ jobs:
             exit 1; }
           echo "ok: $(grep -m1 'entries declared by dependencies' prov.log)"
 
+      # The test kit on this host: the same stated contexts, so a decision that
+      # depends on the host the build program runs on is caught here.
+      - name: the deps members' decisions hold against stated build contexts (mcpp.plugins.testing)
+        run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
+
       # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
       #
       # The same criteria as the Linux job, from the same script. On Windows the
@@ -2357,6 +2381,13 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
+      # The C runtime linkage follows the program's contract (0.17.0): a
+      # self-contained program's ports are x64-windows-static, and a project
+      # triplet that contradicts it is refused. Windows only; the function
+      # skips elsewhere.
+      - name: deps-vcpkg follows the program's C runtime, and refuses a contradicting triplet
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-crt
+
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
@@ -2371,3 +2402,146 @@ jobs:
 
       - name: a package that enables rules-qt only for its module builds without a report
         run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
+
+  # ── deps WITHOUT VISUAL STUDIO (0.17.0, mcpp#734) ───────────────────────────
+  #
+  # The managed toolset `xim:msvc@14.44.35207` on a runner whose Visual Studio
+  # is masked: no instance exists, so deps-vcpkg and deps-cmake name the
+  # toolset (the `chain` mechanism). The legs are the ones the design measured
+  # before implementing it (design §2.2, M3a to M3c and M2c): a CMake port
+  # (fmt) and a CMake subproject build; a make-based port (icu) finds link.exe
+  # on the PATH vcpkg keeps; an MSBuild port (libusb) is refused by name.
+  deps-managed-msvc:
+    name: deps without Visual Studio (windows x86_64, managed msvc)
+    runs-on: windows-2022
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      MSVC_MANAGED: xim:msvc@14.44.35207
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin MCPP_HOME under this runner's home
+        run: |
+          set -e
+          # The value has to be in the HOST's path syntax, not Git Bash's.
+          # `$HOME` there is `/c/Users/runneradmin`, and mcpp hands this
+          # variable to xlings, which is a native Windows program: it answered
+          # `The filename, directory name, or volume label syntax is
+          # incorrect.` and exited 1, from inside a provisioning step whose own
+          # message named a package rather than a path.
+          H="$HOME/.mcpp"
+          command -v cygpath >/dev/null && H=$(cygpath -m "$H")
+          echo "MCPP_HOME=$H" >> "$GITHUB_ENV"
+
+      - name: Cache the mcpp sandbox
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp
+          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/vcpkg-consumer/mcpp.toml') }}
+          restore-keys: |
+            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+
+      - name: Fetch the released mcpp
+        run: |
+          set -e
+          curl -L -fsS --retry 3 --retry-all-errors -o mcpp.pkg \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-windows-x86_64.zip"
+          case "windows-x86_64.zip" in
+            *.zip) unzip -q mcpp.pkg ;;
+            *)     tar -xzf mcpp.pkg ;;
+          esac
+          dir="mcpp-${MCPP_VERSION}-windows-x86_64"
+          MCPP="$PWD/$dir/bin/mcpp"
+          "$MCPP" --version
+          # The bundled xlings, named explicitly because MCPP_HOME is pinned
+          # away from the tarball. See the Linux job for the measurement.
+          #
+          # The suffix is the host's: the Windows distribution ships
+          # `registry/bin/xlings.exe`, and a variable pointing at a file that
+          # does not exist produces `error: xlings binary not found` naming
+          # three remedies, none of which is the one that applies.
+          # Two host differences, and the second one is the interesting one.
+          # The suffix: the Windows distribution ships `xlings.exe`. The PATH
+          # SHAPE: this job runs under Git Bash, whose `$PWD` is a POSIX path
+          # (`/d/a/...`), while `mcpp` is a native Windows program and reads
+          # this variable as a Windows path. Both failures report the same
+          # `error: xlings binary not found` and offer the same three remedies,
+          # none of which is "the path you gave is in the other syntax".
+          XL="$PWD/$dir/registry/bin/xlings"
+          [ -f "$XL" ] || XL="$XL.exe"
+          test -f "$XL" || { echo "no vendored xlings at $XL"; exit 1; }
+          command -v cygpath >/dev/null && XL=$(cygpath -m "$XL")
+          export MCPP_VENDORED_XLINGS="$XL"
+          "$MCPP" self config --mirror GLOBAL
+          echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      # THE ENGINE THE STEPS BELOW RUN: the release fetched above, or mcpp built
+      # from `MCPP_SOURCE_REF` (see the workflow's `env`). A cold build of mcpp
+      # is the longest step of the job, which is what its timeout is sized for.
+      - name: the mcpp under review, built from MCPP_SOURCE_REF when it is set
+        timeout-minutes: 45
+        run: bash .github/scripts/mcpp-under-review.sh
+
+      # THE CRITERION FOR THE STEP ABOVE, IN A LATER STEP, because what that step
+      # writes to `GITHUB_ENV` governs only the steps after it.
+      - name: the steps below run the mcpp under review
+        if: env.MCPP_SOURCE_REF != ''
+        timeout-minutes: 5
+        run: |
+          set -eu
+          [ "$MCPP" = "$MCPP_UNDER_REVIEW" ] || {
+            echo "::error::the steps run $MCPP, and the mcpp built from $MCPP_SOURCE_REF is $MCPP_UNDER_REVIEW"; exit 1; }
+          version=$("$MCPP" --version | head -1)
+          [ "$version" = "$MCPP_UNDER_REVIEW_VERSION" ] || {
+            echo "::error::$MCPP prints '$version', and the build printed '$MCPP_UNDER_REVIEW_VERSION'"; exit 1; }
+          # A reading, not a criterion: the two engines' versions, which may be
+          # equal when the reference has not moved the version yet, so the
+          # criterion above is the path and not the version.
+          echo "READING released: $("$MCPP_RELEASED" --version | head -1); under review: $version"
+          echo "ok: the steps run $version, built from $MCPP_SOURCE_REF"
+
+      - name: Install the managed MSVC toolset
+        run: |
+          set -e
+          "$MCPP" toolchain install msvc 14.44.35207 2>&1 | tail -5
+          "$MCPP" toolchain list 2>&1 | grep -q 14.44.35207 || { echo "::error::msvc 14.44.35207 is not listed"; exit 1; }
+
+      # The instance is made unreachable the way the measurement did it: vswhere
+      # and every instance's VC directory are renamed, and the step fails if a
+      # toolset is still found.
+      - name: Mask Visual Studio
+        shell: pwsh
+        run: |
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) { Rename-Item $vswhere "vswhere.exe.masked" }
+          Resolve-Path "C:\Program Files*\Microsoft Visual Studio\*\*\VC" -ErrorAction SilentlyContinue | ForEach-Object {
+            try { Rename-Item -LiteralPath $_.Path -NewName "VC.masked" -ErrorAction Stop }
+            catch { Write-Host "could not rename $($_.Path): $_" }
+          }
+          $left = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\*\*\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue
+          if ($left) { Write-Host "FAIL: VC tools still present after masking"; exit 1 }
+          Write-Host "ok: no Visual Studio toolset is reachable"
+
+      - name: Cache vcpkg's per-user directory
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg
+          key: vcpkg-user-managed-${{ runner.os }}-${{ hashFiles('tests/vcpkg-*/vcpkg.json') }}
+          restore-keys: vcpkg-user-managed-${{ runner.os }}-
+
+      - name: the test kit on this row
+        run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
+
+      - name: a CMake port and a CMake subproject build with the managed toolset named
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-managed
+
+      - name: an MSBuild port is refused by name
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-msbuild-refused
+
+      - name: a make-based port finds the toolset on the PATH vcpkg keeps
+        timeout-minutes: 90
+        run: bash .github/scripts/check-deps-and-qt.sh vcpkg-make-port

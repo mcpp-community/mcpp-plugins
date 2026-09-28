@@ -13,7 +13,7 @@
 #   qt_consumer_de.ts   updated from src/ by lupdate    -> lrelease, deployed
 #                                                          under translations/
 #
-# The `.ts` sits in the package root, as it does in GalTranslPP, so lupdate
+# The `.ts` sits in the package root, as it does in the validation project, so lupdate
 # writes one file there and claims no directory.
 #
 # and the program prints what each produced: a signal delivered to a slot, a

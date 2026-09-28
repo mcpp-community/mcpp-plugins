@@ -7,12 +7,12 @@
 | # | 决定 | 对设计的影响 |
 |---|---|---|
 | D6 | 附加模块合为一个包 | 确认 `xim:qt-addons`；按 xim 的载荷私有规则，它有**自己的前缀**，不写入 `xim:qt` 的目录 |
-| D8 | 先做 mcpp / xlings 生态的通用能力；GalTranslPP 的 D 阶段只在 fork 上做初步验证 | 引擎需求 2 在 mcpp 中实现：构建程序声明运行时库目录 |
+| D8 | 先做 mcpp / xlings 生态的通用能力；验证工程的 D 阶段只在 fork 上做初步验证 | 引擎需求 2 在 mcpp 中实现：构建程序声明运行时库目录 |
 | D9 | 免装 VS 不是目标 | 删除 `toolchain::msvc_xim`；`xim:msvc` 由 mcpp 自动匹配，插件不声明 |
 
 另有一项由实测带来的简化：vcpkg-tool 每个发布附带 `vcpkg-standalone-bundle.tar.gz`（3.4 MB，脚本与该工具
 版本严格对应，`vcpkg-bundle.json` 含 `"usegitregistry": true`）。以它为 `VCPKG_ROOT` 时，`builtin-baseline`
-清单经 git registry 解析，registry 落在 vcpkg 的每用户 registries 缓存。已在本机实测：对 GalTranslPP 的
+清单经 git registry 解析，registry 落在 vcpkg 的每用户 registries 缓存。已在本机实测：对验证工程的
 baseline `ea1a7396` 执行 `vcpkg install --dry-run` 解析出 `fmt 12.2.0`，缓存 137 MB。因此设计第 3 版 §3.6 的托管克隆、
 按工具检出与文件锁全部取消。
 
@@ -24,14 +24,14 @@ baseline `ea1a7396` 执行 `vcpkg install --dry-run` 解析出 `fmt 12.2.0`，�
 | openxlings/xim-pkgindex | `xim:vcpkg` 2026.7.27（工具 + standalone bundle）、`xim:qt` 6.11.1、`xim:qt-addons` 6.11.1；`xim:7zip` 说明 `7z.dll` 位置；测试 | 合入即发布索引；`xlings-res/vcpkg` 资源用 `gh` 与 `gtc` 双端上传 |
 | mcpp-community/mcpp-plugins | `0.13.0`：`deps-vcpkg` + `mcpp-vcpkg`、`rules-qt` + `rules-qt-xim` + `rules-qt-xim-addons`、`deps-cmake` + `mcpp-cmake`；fixtures；CI 引擎版本；README | tag `v0.13.0`，GitHub release，`gtc` 上传 `mcpp-res/mcpp-plugins` |
 | mcpp-community/mcpp-index | 登记 `mcpp:plugins 0.13.0` | 合入即发布 |
-| Sunrisepeak/GalTranslPP（fork） | 临时 PR 2：迁移 A–C，D 阶段初步验证 | 不合入 |
+| 验证工程（fork） | 临时 PR 2：迁移 A–C，D 阶段初步验证 | 不合入 |
 
 ## 3. 依赖关系
 
 ```
 T2 xim 包（vcpkg/qt/qt-addons）──► T2r 索引合入（xim-pkgindex#878，已合入）
 T3 插件按 SPEC-007 实现（PR 已开，等待）──┐
-T1 mcpp#702 实现并发布（mcpp 侧）─────────┴──► T3c 插件 CI 全绿 ──► T3r 插件发布 0.13.0 ──► T4 mcpp-index ──► T5 GalTranslPP PR 2
+T1 mcpp#702 实现并发布（mcpp 侧）─────────┴──► T3c 插件 CI 全绿 ──► T3r 插件发布 0.13.0 ──► T4 mcpp-index ──► T5验证工程PR 2
 ```
 
 - T1、T2、T3 并行：T3 在本机用 T1 的源码构建验证 Linux 路径；Windows 与 macOS 路径只能由 CI 验证。
@@ -70,9 +70,9 @@ T1 mcpp#702 实现并发布（mcpp 侧）─────────┴──►
   位于插件仓库之内，因此其安装位于 `target/` 之下，检查脚本的日志写入 `target/ci/`，第二次构建以
   `--profile dev` 绕过快路径，使 Linux 与 Windows、macOS 走同一条规划路径。从索引取得插件的项目不受影响。
 
-## 6. 0.14.0：运行时数据与精简 Qt（GalTranslPP 验证后的第二轮）
+## 6. 0.14.0：运行时数据与精简 Qt（验证工程验证后的第二轮）
 
-GalTranslPP 在 0.13.1 上构建成功后仍有两个手动步骤（解压嵌入式 Python、运行 `Release.py`），Qt 下载量为
+验证工程在 0.13.1 上构建成功后仍有两个手动步骤（解压嵌入式 Python、运行 `Release.py`），Qt 下载量为
 完整基础包。第二轮把固定步骤程序化，并补齐 windeployqt 的 Qt 翻译：
 
 | 交付 | 仓库 | 机制 |
@@ -100,5 +100,5 @@ libstdc++，mcpp 的 clang 使用 libc++，两者的 `std::` 符号互不链接�
 判据（Linux CI `vcpkg-libcxx`）：llvm 下 `libfmt.a` 含 `std::__1::` 符号且程序运行；默认工具链构建后 libc++
 前缀仍在；切回 llvm 不重跑安装；deps-cmake 子项目的 `CMAKE_CXX_COMPILER` 为 mcpp 的 clang。
 
-GalTranslPP 上游仅支持 Windows（README 所述，代码直接调用 WinAPI），Linux 的判据由本仓库的 fixture 承担；
-GalTranslPP PR2 作为 Windows 回归验证。
+验证工程上游仅支持 Windows（README 所述，代码直接调用 WinAPI），Linux 的判据由本仓库的 fixture 承担；
+验证工程PR2 作为 Windows 回归验证。

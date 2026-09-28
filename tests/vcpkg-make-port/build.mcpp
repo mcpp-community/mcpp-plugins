@@ -1,0 +1,10 @@
+// The installation is the criterion; the program links nothing from it.
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+
+int main() {
+    mcpp::deps::vcpkg::options o;
+    o.install_root = "target/vcpkg_installed";
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+}

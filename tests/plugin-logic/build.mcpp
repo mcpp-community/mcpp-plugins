@@ -1,0 +1,282 @@
+// The deps members' decisions, one case per decision (mcpp#734, design §6).
+// Each case states a build context, runs the member, and reads the action it
+// declared and the files it wrote. Nothing is installed or run.
+import std;
+import mcpp;
+import mcpp.plugins.testing;
+import mcpp.plugins.toolset;
+import mcpp.deps;          // the 0.16.0 names, for the compatibility case
+import mcpp.deps.vcpkg;
+import mcpp.deps.cmake;
+
+namespace t  = mcpp::plugins::testing;
+namespace ts = mcpp::plugins::toolset;
+
+namespace {
+
+// A vcpkg root with the three standard triplets the cases use, and a manifest.
+t::context with_vcpkg(t::context c) {
+    const bool win = std::string_view(c.values.front().second).find("windows") != std::string_view::npos;
+    return c.xpkg("xim", "vcpkg", "{root}/vcpkg")
+        .file(win ? "vcpkg/vcpkg.exe" : "vcpkg/vcpkg")
+        .file("vcpkg/triplets/x64-windows.cmake",
+              "set(VCPKG_TARGET_ARCHITECTURE x64)\nset(VCPKG_CRT_LINKAGE dynamic)\nset(VCPKG_LIBRARY_LINKAGE dynamic)\n")
+        .file("vcpkg/triplets/x64-windows-static.cmake",
+              "set(VCPKG_TARGET_ARCHITECTURE x64)\nset(VCPKG_CRT_LINKAGE static)\nset(VCPKG_LIBRARY_LINKAGE static)\n")
+        .file("vcpkg/triplets/x64-linux.cmake",
+              "set(VCPKG_TARGET_ARCHITECTURE x64)\nset(VCPKG_CRT_LINKAGE dynamic)\nset(VCPKG_LIBRARY_LINKAGE static)\n"
+              "set(VCPKG_CMAKE_SYSTEM_NAME Linux)\n")
+        .file("pkg/vcpkg.json", "{ \"dependencies\": [\"fmt\"] }\n");
+}
+
+t::context with_subproject(t::context c) {
+    return c.xpkg("xim", "cmake", "{root}/cmake")
+        .file("cmake/bin/cmake").file("cmake/bin/cmake.exe")
+        .file("pkg/greet/CMakeLists.txt", "project(greet C)\n");
+}
+
+int vcpkg_use(mcpp::deps::vcpkg::options o = {}) {
+    o.libraries = {"fmt"};
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+}
+
+int cmake_use(mcpp::deps::cmake::options o = {}) {
+    o.source = "greet";
+    o.libraries = {"greet"};
+    return mcpp::deps::cmake::use(o) ? 0 : 1;
+}
+
+// The one generated triplet of a case, by file name.
+std::string derived_triplet(const t::result& r) {
+    for (auto const& f : r.files_under("out/deps-vcpkg/triplets"))
+        if (f.find("-mcpp-") != std::string::npos) return f;
+    return {};
+}
+
+std::string stem(const std::string& path) {
+    return std::filesystem::path(path).stem().string();
+}
+
+// The derived triplet's name under two different roots: equal names mean the
+// name, and the text it is hashed from, hold no path (design §6.6).
+std::string first_linux_name;
+
+} // namespace
+
+int main(int argc, char** argv) {
+    return t::run(argc, argv, {
+        // ── deps-vcpkg ──────────────────────────────────────────────────────
+        { "vcpkg: a Visual Studio toolset is selected through its instance",
+          with_vcpkg(t::row::windows_visual_studio()),
+          [] { return vcpkg_use(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const auto a = r.line("mcpp:action=", {"deps-vcpkg:install:x64-windows\""});
+              c.expect(!a.empty(), "the installation uses the standard triplet x64-windows");
+              c.expect(a.find("VCPKG_VISUAL_STUDIO_PATH=") != std::string::npos,
+                       "the action selects the instance with VCPKG_VISUAL_STUDIO_PATH");
+              c.expect(a.find("--host-triplet") == std::string::npos, "the host triplet stays vcpkg's");
+              c.expect(derived_triplet(r).empty(), "no triplet is derived");
+          } },
+
+        { "vcpkg: another toolset version of the instance derives a triplet that names it",
+          with_vcpkg(t::row::windows_visual_studio("14.43.34808", "14.44.35207")),
+          [] { return vcpkg_use(); },
+          [](const t::result& r, t::checker& c) {
+              const auto f = derived_triplet(r);
+              c.expect(!f.empty(), "a triplet x64-windows-mcpp-<hash> is derived");
+              c.expect(r.file(f).find("set(VCPKG_PLATFORM_TOOLSET_VERSION 14.43.34808)") != std::string::npos,
+                       "the derived triplet names the resolved toolset version");
+              c.expect(r.file(f).find("VCPKG_CHAINLOAD_TOOLCHAIN_FILE") == std::string::npos,
+                       "the instance's own loading stays in place");
+              c.expect(r.has_line("mcpp:action=", {"VCPKG_VISUAL_STUDIO_PATH="}),
+                       "the action still selects the instance");
+          } },
+
+        { "vcpkg: a managed toolset is named in a chain-loaded derived triplet",
+          with_vcpkg(t::row::windows_managed()),
+          [] { return vcpkg_use(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const auto f = derived_triplet(r);
+              const auto name = stem(f);
+              c.expect(name.starts_with("x64-windows-mcpp-"), "the derived triplet is x64-windows-mcpp-<hash>");
+              const auto text = r.file(f);
+              c.expect(text.find("set(VCPKG_LIBRARY_LINKAGE dynamic)") != std::string::npos,
+                       "the base triplet is inlined, not included");
+              c.expect(text.find("\"${CMAKE_CURRENT_LIST_DIR}/mcpp-chain-windows.cmake\"") != std::string::npos,
+                       "the chain-loaded toolchain is found beside the triplet");
+              c.expect(text.find("MCPP_VCPKG_CXX") != std::string::npos && text.find(" INCLUDE") != std::string::npos
+                       && text.find(" LIB") != std::string::npos,
+                       "the tools and their environment pass through untracked");
+              c.expect(text.find("# toolset: msvc 14.44.35207; sdk 10.0.26100.0 (chain)") != std::string::npos,
+                       "the triplet carries the toolset's identity");
+              c.expect(text.find("variable_watch(VCPKG_PLATFORM_TOOLSET") != std::string::npos,
+                       "an MSBuild port is refused by name");
+              c.expect(text.find(r.root.generic_string()) == std::string::npos, "the triplet holds no path");
+              const auto chain = r.file("out/deps-vcpkg/triplets/mcpp-chain-windows.cmake");
+              c.expect(chain.find("file(TO_CMAKE_PATH \"$ENV{MCPP_VCPKG_CXX}\"") != std::string::npos,
+                       "the toolchain reads each tool from the environment through TO_CMAKE_PATH");
+              c.expect(chain.find("/scripts/toolchains/windows.cmake\")") != std::string::npos,
+                       "the toolchain includes vcpkg's windows.cmake");
+              c.expect(chain.find(r.root.generic_string()) == std::string::npos, "the toolchain holds no path");
+              const auto a = r.line("mcpp:action=", {"deps-vcpkg:install:" + name});
+              c.expect(!a.empty(), "the installation uses the derived triplet");
+              c.expect(a.find("\"--host-triplet=" + name + "\"") != std::string::npos,
+                       "the host triplet is the derived one");
+              c.expect(a.find("\"VCPKG_KEEP_ENV_VARS=PATH\"") != std::string::npos,
+                       "vcpkg keeps the PATH the action sets");
+              c.expect(a.find("\"PATH=") != std::string::npos && a.find("Hostx64") != std::string::npos,
+                       "the toolset's directories are on that PATH");
+              c.expect(a.find("VCPKG_VISUAL_STUDIO_PATH") == std::string::npos, "no instance is selected");
+          } },
+
+        { "vcpkg: a self-contained program's ports link the C runtime statically",
+          with_vcpkg(t::row::windows_managed()
+                         .set("MCPP_CXX_RUNTIME", "self-contained").set("MCPP_MSVC_CRT_LINKAGE", "static")),
+          [] { return vcpkg_use(); },
+          [](const t::result& r, t::checker& c) {
+              const auto f = derived_triplet(r);
+              c.expect(stem(f).starts_with("x64-windows-static-mcpp-"), "the base triplet is x64-windows-static");
+              c.expect(r.file(f).find("set(VCPKG_CRT_LINKAGE static)") != std::string::npos,
+                       "the derived triplet states the static C runtime");
+          } },
+
+        { "vcpkg: a project triplet that contradicts the program's C runtime is refused",
+          with_vcpkg(t::row::windows_visual_studio()
+                         .set("MCPP_CXX_RUNTIME", "self-contained").set("MCPP_MSVC_CRT_LINKAGE", "static")),
+          [] { return vcpkg_use({.triplet = "x64-windows"}); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code != 0, "the member fails");
+              c.expect(r.errors.find("the triplet 'x64-windows' links the C runtime dynamic") != std::string::npos
+                       && r.errors.find("links it static (the program's C++ runtime contract, self-contained)")
+                              != std::string::npos,
+                       "the error names both statements");
+              c.expect(r.count("mcpp:action=") == 0, "nothing is installed");
+          } },
+
+        { "vcpkg: crt_linkage states the ports' linkage and wins over the contract",
+          with_vcpkg(t::row::windows_visual_studio()
+                         .set("MCPP_CXX_RUNTIME", "self-contained").set("MCPP_MSVC_CRT_LINKAGE", "static")),
+          [] { return vcpkg_use({.triplet = "x64-windows", .crt_linkage = "dynamic"}); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.has_line("mcpp:action=", {"deps-vcpkg:install:x64-windows\""}),
+                       "the project's triplet is used");
+          } },
+
+        { "vcpkg: detected leaves the toolset to vcpkg and says until when",
+          with_vcpkg(t::row::windows_visual_studio()),
+          [] { return vcpkg_use({.toolset = {.toolset = ts::source::detected}}); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("mcpp:action=", {"deps-vcpkg:install:x64-windows\""}),
+                       "the standard triplet is used");
+              c.expect(!r.has_line("mcpp:action=", {"VCPKG_VISUAL_STUDIO_PATH"}), "no instance is selected");
+              c.expect(r.has_line("mcpp:diagnostic=note", {"kept until 2027-03-28"}),
+                       "the compatibility note is printed");
+          } },
+
+        { "vcpkg: the Linux GCC row keeps vcpkg's detection, and says why",
+          with_vcpkg(t::row::linux_gcc()),
+          [] {
+              const auto r = ts::resolve();
+              std::printf("reason=%s\n", r ? r->reason.c_str() : "");
+              return vcpkg_use();
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("mcpp:action=", {"deps-vcpkg:install:x64-linux\""}),
+                       "the standard triplet x64-linux is used");
+              c.expect(!r.has_line("mcpp:action=", {"MCPP_VCPKG_CXX="}), "no compiler is named");
+              c.expect(r.has_line("reason=", {"GCC payload"}), "the resolution states why");
+          } },
+
+        { "vcpkg: the Linux libc++ row hands over mcpp's clang through linux.cmake",
+          with_vcpkg(t::row::linux_libcxx()),
+          [] { return vcpkg_use(); },
+          [](const t::result& r, t::checker& c) {
+              const auto name = stem(derived_triplet(r));
+              c.expect(name.starts_with("x64-linux-mcpp-"), "the derived triplet is x64-linux-mcpp-<hash>");
+              c.expect(r.file("out/deps-vcpkg/triplets/mcpp-chain-linux.cmake")
+                           .find("/scripts/toolchains/linux.cmake\")") != std::string::npos,
+                       "the toolchain includes vcpkg's linux.cmake");
+              const auto a = r.line("mcpp:action=", {"deps-vcpkg:install:" + name});
+              c.expect(a.find("MCPP_VCPKG_CXX=") != std::string::npos && a.find("llvm/bin/clang++") != std::string::npos,
+                       "clang++ is handed to vcpkg");
+              c.expect(a.find("--host-triplet") == std::string::npos, "host tools keep vcpkg's host triplet");
+              c.expect(a.find("\"PATH=") == std::string::npos, "PATH is left alone off the MSVC ABI");
+              first_linux_name = name;
+          } },
+
+        { "vcpkg: the derived triplet's name does not depend on where the tools are",
+          with_vcpkg(t::row::linux_libcxx()),
+          [] { return vcpkg_use(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(!first_linux_name.empty() && stem(derived_triplet(r)) == first_linux_name,
+                       "the same toolset under another root derives the same triplet");
+          } },
+
+        // ── deps-cmake ──────────────────────────────────────────────────────
+        { "cmake: a Visual Studio toolset keeps the Visual Studio generator on that instance",
+          with_subproject(t::row::windows_visual_studio("14.43.34808", "14.44.35207")),
+          [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              const auto script = r.file("out/deps-cmake/greet/greet.cmake");
+              c.expect(script.find("[==[-DCMAKE_GENERATOR_INSTANCE=") != std::string::npos,
+                       "CMAKE_GENERATOR_INSTANCE names the instance");
+              c.expect(script.find("[==[version=14.43.34808]==]") != std::string::npos,
+                       "-T version= names a toolset other than the instance's default");
+              c.expect(script.find("[==[Ninja]==]") == std::string::npos, "the generator stays CMake's default");
+              c.expect(script.find("MultiThreaded$<$<CONFIG:Debug>:Debug>DLL") != std::string::npos,
+                       "the C runtime follows the program's (dynamic)");
+          } },
+
+        { "cmake: a managed toolset is named, with Ninja and mcpp's ninja",
+          with_subproject(t::row::windows_managed()
+                              .set("MCPP_CXX_RUNTIME", "self-contained").set("MCPP_MSVC_CRT_LINKAGE", "static")),
+          [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              c.expect(script.find("[==[Ninja]==]") != std::string::npos, "the Ninja generator is used");
+              c.expect(script.find("-DCMAKE_MAKE_PROGRAM=") != std::string::npos
+                       && script.find("ninja/ninja.exe") != std::string::npos, "mcpp's ninja runs it");
+              c.expect(script.find("-DCMAKE_CXX_COMPILER=") != std::string::npos
+                       && script.find("cl.exe") != std::string::npos, "cl.exe is named");
+              c.expect(script.find("MultiThreaded$<$<CONFIG:Debug>:Debug>]==]") != std::string::npos,
+                       "the C runtime follows the program's (static)");
+              const auto a = r.line("mcpp:action=", {"deps-cmake:greet"});
+              c.expect(a.find("\"INCLUDE=") != std::string::npos && a.find("\"PATH=") != std::string::npos,
+                       "the tools run with the engine's environment");
+              c.expect(script.find("/greet/build-") != std::string::npos,
+                       "the build directory is keyed by the toolset");
+          } },
+
+        { "cmake: compilers in cache_args are the project's decision",
+          with_subproject(t::row::linux_gcc()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.cache_args = {"-DCMAKE_CXX_COMPILER=/opt/other/g++"};
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              const auto script = r.file("out/deps-cmake/greet/greet.cmake");
+              c.expect(script.find("[==[Ninja]==]") == std::string::npos, "no generator is imposed");
+              c.expect(script.find("gcc/bin/g++") == std::string::npos, "the row's compiler is not named");
+          } },
+
+        // ── compatibility ───────────────────────────────────────────────────
+        { "compat: program_compilers keeps its 0.16.0 answer and says until when",
+          t::row::linux_libcxx().file("llvm/bin/clang").file("llvm/bin/clang++"),
+          [] {
+              const auto cc = mcpp::deps::program_compilers();
+              std::printf("answer=%s\n", cc.cxx.c_str());
+              return cc ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("answer=", {"llvm/bin/clang++"}), "mcpp's clang++ on the libc++ row");
+              c.expect(r.has_line("mcpp:diagnostic=note", {"program_compilers is kept until 2027-03-28"}),
+                       "the compatibility note is printed");
+          } },
+    });
+}

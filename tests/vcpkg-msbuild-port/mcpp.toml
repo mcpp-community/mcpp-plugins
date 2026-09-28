@@ -1,0 +1,23 @@
+# Fixture: a port that vcpkg builds with MSBuild (libusb). Under the `chain`
+# mechanism -- a managed MSVC toolset, no Visual Studio instance -- no MSBuild
+# exists, and deps-vcpkg refuses the port by name instead of letting MSBuild
+# fail with `/p:PlatformToolset=external`. Built only on the Windows row whose
+# Visual Studio is masked, where the refusal is the criterion.
+[package]
+name        = "vcpkg-msbuild-port"
+version     = "0.1.0"
+description = "Fixture: an MSBuild port under a managed MSVC toolset"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-vcpkg"], host-module = true }
+
+[targets.vcpkg-msbuild-port]
+kind = "bin"
+main = "src/main.cpp"

@@ -1,0 +1,24 @@
+# Fixture: the logic of the deps members, tested with `mcpp.plugins.testing`
+# against stated build contexts -- a Visual Studio row, a managed MSVC row, a
+# Linux GCC row and a Linux libc++ row -- on every host, with no foreign tool
+# installed or run. The build program is the test: a failed case fails the
+# build and prints the report; `target/**/plugins-testing/results.txt` holds
+# one verdict per case.
+[package]
+name        = "plugin-logic"
+version     = "0.1.0"
+description = "Fixture: the deps members' toolset, triplet and runtime logic"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-vcpkg", "deps-cmake", "plugins-testing"], host-module = true }
+
+[targets.plugin-logic]
+kind = "bin"
+main = "src/main.cpp"
