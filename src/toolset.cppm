@@ -69,8 +69,8 @@ struct resolved_tools {
     // `chain` on the MSVC ABI: the environment the tools run with, without
     // PATH (INCLUDE, LIB, LIBPATH, ...).
     std::vector<std::pair<std::string, std::string>> env;
-    // `chain`: the directories that go first on PATH, in order, without
-    // duplicates: the tools' own directories, then the environment's PATH.
+    // `chain`: the tools' own directories, in order, without duplicates: the
+    // PATH a foreign system needs for them.
     std::vector<std::string> path_dirs;
     std::string identity;           // toolset_identity(): "msvc 14.44.35207; sdk 10.0.26100.0", "clang 22.1.8"
     std::string crt;                // msvc_crt_linkage(): "static", "dynamic", or empty off the MSVC ABI
@@ -175,22 +175,16 @@ inline std::expected<resolved_tools, std::string> chain(const choice& c, resolve
             c.cc == compiler::abi_native ? "ABI-native" : "row", std::string(mcpp::target())));
     if (r.cc.empty()) r.cc = r.cxx;
     if (r.msvc_abi) {
-        auto env = parse_env(mcpp::tool_env());
-        const std::string path = env_value(env, "PATH");
-        for (auto const& kv : env) if (!same_key(kv.first, "PATH")) r.env.push_back(kv);
+        // The environment WITHOUT its PATH. The engine's PATH is the cl.exe
+        // directory followed by the whole PATH of the process that ran mcpp --
+        // under Git Bash that holds Git's own msys tools and runtime, and a
+        // make-based port configured against them failed (`configure: error:
+        // invalid variable name: '0'`, icu, the plugins' CI). The tools'
+        // own directories are the PATH a foreign system needs: the toolset's
+        // bin (cl, link, lib) and the SDK's (rc, mt).
+        for (auto const& kv : parse_env(mcpp::tool_env()))
+            if (!same_key(kv.first, "PATH")) r.env.push_back(kv);
         for (auto const* t : { &r.cxx, &r.cc, &r.ld, &r.rc, &r.mt }) add_dir(r.path_dirs, *t);
-        // The environment's PATH carries the SDK's and the toolset's binary
-        // directories; its entries follow the tools' own, in its order.
-        std::string_view rest = path;
-        while (!rest.empty()) {
-            const auto semi = rest.find(';');
-            const std::string entry = forward(rest.substr(0, semi));
-            rest = semi == std::string_view::npos ? std::string_view{} : rest.substr(semi + 1);
-            if (entry.empty()) continue;
-            bool seen = false;
-            for (auto const& d : r.path_dirs) if (same_key(d, entry)) { seen = true; break; }
-            if (!seen) r.path_dirs.push_back(entry);
-        }
     } else {
         for (auto const* t : { &r.cxx, &r.cc }) add_dir(r.path_dirs, *t);
     }
