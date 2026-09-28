@@ -369,7 +369,10 @@ plugin_logic() {
     cd "$ROOT/tests/plugin-logic"
     rm -rf target
     mkdir -p target/ci
-    "$MCPP" build > target/ci/build.log 2>&1 || { cat target/ci/build.log; fail "a plugin-logic case failed"; }
+    # On the row without Visual Studio the build program itself needs the
+    # managed toolset, which that job names in MSVC_MANAGED.
+    "$MCPP" build ${MSVC_MANAGED:+--toolchain "$MSVC_MANAGED"} > target/ci/build.log 2>&1 ||
+        { cat target/ci/build.log; fail "a plugin-logic case failed"; }
     local results declared passed
     results=$(find target -path '*plugins-testing/results.txt' | head -1)
     [ -n "$results" ] || fail "the kit wrote no results.txt"
