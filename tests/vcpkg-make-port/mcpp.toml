@@ -1,0 +1,22 @@
+# Fixture: a port that vcpkg builds with make under msys (icu). Its configure
+# script finds `link.exe` on PATH, which vcpkg's clean environment drops; under
+# the `chain` mechanism deps-vcpkg puts the toolset's directories first on a
+# PATH that vcpkg keeps. Built on the Windows row whose Visual Studio is masked.
+[package]
+name        = "vcpkg-make-port"
+version     = "0.1.0"
+description = "Fixture: a make-based port under a managed MSVC toolset"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-vcpkg"], host-module = true }
+
+[targets.vcpkg-make-port]
+kind = "bin"
+main = "src/main.cpp"

@@ -29,7 +29,54 @@ mcpp is a general build engine with a framework for build plugins. Plugins come 
 9. **Every behaviour has a criterion.** Each documented behaviour has a CI check, run on every platform the plugin claims.
 10. **Documentation is concise.** A plugin's page opens with one summary paragraph, followed by use, options and behaviour, in plain declarative sentences. The README is an index.
 
-## 3. A new plugin
+## 3. Layers, names and the engine floor
+
+| layer | modules | provided by |
+|---|---|---|
+| L1 `mcpp.core` | `mcpp.core`, spelled `mcpp` as well (the two are permanently equivalent) | the engine |
+| L2 general library | `mcpp.plugins.declare`, `mcpp.plugins.toolset`, `mcpp.plugins.fs`; `mcpp.plugins.testing` | this package, feature `plugins-core` (`plugins-testing` for the kit) |
+| L3 plugins | `mcpp.deps.*`, `mcpp.rules.*`, `mcpp.dist.*`, `mcpp.tools.*` here; `mcpp.<namespace>.*` elsewhere | this package, by feature; any package |
+
+A layer depends only on the layers below it. L2 knows no foreign tool: it turns
+the engine's facts into what a plugin needs (`mcpp.plugins.toolset` decides how
+a resolved toolset reaches a foreign build system, `instance`, `chain` or
+`detected`), and the plugin writes the foreign system's own files.
+
+**Module names.** A third-party plugin names its modules `mcpp.<namespace>.*`,
+where `<namespace>` is its package's namespace (`mcpp.acme.protobuf`). The
+second segments `core`, `plugins`, `deps`, `rules`, `dist` and `tools` belong to
+namespace `mcpp`; the engine warns when another package uses them, and
+mcpp-index refuses such a package.
+
+**Using L2 from another package.**
+
+```toml
+[build-dependencies.mcpp]
+plugins = { version = "0.17.0", features = ["plugins-core"], host-module = true, reexport = true }
+```
+
+`reexport = true` is needed when the plugin's consumers import L2 modules in
+their own build programs.
+
+**The engine floor.** A plugin states the first mcpp release it needs in
+`[package] mcpp = ">=<release>"`; an older engine stops before any other work
+and names the upgrade. This package's floor is 2026.9.28.3, the release that
+states the build information L2 reads.
+
+**Testing a plugin.** `mcpp.plugins.testing` runs a plugin function in a child
+process against a stated build context (`row::windows_visual_studio()`,
+`row::windows_managed()`, `row::linux_gcc()`, `row::linux_libcxx()`, or a
+context built with `set` and `file`) and hands the lines it emitted and the
+files it wrote to a check. The test is a build program; a failed case fails the
+build and prints the report. `tests/plugin-logic` is this package's own use.
+
+**Compatibility units.** A behaviour kept after the release that replaced it
+lives in a `compat/` directory, one unit per behaviour, whose header states
+what it keeps, since when, its retirement date (six months later), its
+replacement and the note it prints once per build.
+`.github/scripts/check-compat-retirement.sh` fails once a date has passed.
+
+## 4. A new plugin
 
 A plugin in this package consists of:
 - a module file under `rules/`, `tools/`, `dist/` or `deps/`;

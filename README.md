@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.16.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.17.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -40,11 +40,16 @@ linked into the artifact (mcpp docs/05 §2.6.1).
 | deps | `mcpp.deps.<x>` | where a library comes from |
 | identity | `mcpp.plugins` | the lib root, compiled before every member; it states the collection's version |
 
-The `mcpp.` prefix is reserved for this package. The full account of the
-families, and of how the engine routes a file to a rule, is in
-[docs/engine-and-rules.md](docs/engine-and-rules.md).
+The second segments `core`, `plugins`, `deps`, `rules`, `dist` and `tools` of
+`mcpp.` belong to this package and the engine; a third-party plugin names its
+modules `mcpp.<its namespace>.*` ([docs/plugin-development.md](docs/plugin-development.md#3-layers-names-and-the-engine-floor)).
+The full account of the families, and of how the engine routes a file to a
+rule, is in [docs/engine-and-rules.md](docs/engine-and-rules.md).
 
 ## Members
+
+From 0.17.0 the package as a whole needs mcpp 2026.9.28.3 (`[package] mcpp`);
+the column states the release each member's behaviour first needed.
 
 | feature | module | mcpp floor | what it does | doc |
 |---|---|---|---|---|
@@ -64,13 +69,23 @@ families, and of how the engine routes a file to a rule, is in
 | `dist-apple` | `mcpp.dist.apple` | 2026.9.14.2 | Lays out a macOS or iOS application bundle, signs it and writes a disk image. | [dist-apple](docs/dist-apple.md) |
 | `dist-web` | `mcpp.dist.web` | 2026.9.13.1 | Copies a `wasm32-emscripten` program and its files into a web directory with an `index.html`. | [dist](docs/dist.md#dist-web) |
 | `dist-apk` | `mcpp.dist.apk` | 2026.9.14.2 | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [dist-apk](docs/dist-apk.md) |
-| `deps-vcpkg` | `mcpp.deps.vcpkg` | 2026.9.26.2 | Installs a `vcpkg.json` manifest as an action and maps the prefix into the build. | [deps](docs/deps.md#deps-vcpkg) |
-| `deps-cmake` | `mcpp.deps.cmake` | 2026.9.26.2 | Builds and installs a CMake subproject as an action and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
+| `deps-vcpkg` | `mcpp.deps.vcpkg` | 2026.9.28.3 | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [deps](docs/deps.md#deps-vcpkg) |
+| `deps-cmake` | `mcpp.deps.cmake` | 2026.9.28.3 | Builds and installs a CMake subproject as an action with the toolset mcpp resolved, and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
 | `deps-archive` | `mcpp.deps.archive` | 2026.9.26.2 | Extracts a zip archive the project keeps and places its tree beside the program. | [deps](docs/deps.md#deps-archive) |
 
 Some features add a sub-capability to a member: `dist-apk-kotlin` and
-`dist-apk-maven` (Kotlin sources, a Maven graph), and `surface` and `deps`,
-which the members imply. A feature states a mechanism and the tools that
+`dist-apk-maven` (Kotlin sources, a Maven graph), and `deps`, which the deps
+members imply.
+
+**The general library (0.17.0).** `plugins-core` gives a build program
+`mcpp.plugins.declare`, `mcpp.plugins.toolset` (the resolved toolchain,
+translated for a foreign build system) and `mcpp.plugins.fs` (deterministic file
+generation and placement). Every member implies it; a build program that uses
+only these modules, and a third-party plugin built on them, name it on the
+dependency edge. `plugins-testing` adds `mcpp.plugins.testing`, which runs a
+plugin function against a stated build context and compares what it declared.
+Both need mcpp 2026.9.28.3. `surface`, the name of `plugins-core` before
+0.17.0, is kept until 2027-03-28. A feature states a mechanism and the tools that
 mechanism runs; the libraries and SDKs a program links are the project's
 declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
 
@@ -80,6 +95,12 @@ declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
 mcpp.toml            the package: one feature per member
 src/plugins.cppm     export module mcpp.plugins;  the version, mcpp::plugins::surface
                      (the declarations a consumer names) and mcpp::plugins::xml
+src/declare.cppm,    the general library for build programs (`plugins-core`):
+src/toolset.cppm,    mcpp.plugins.declare, mcpp.plugins.toolset, mcpp.plugins.fs
+src/fs.cppm
+src/testing.cppm     mcpp.plugins.testing (`plugins-testing`)
+src/compat/, deps/compat/
+                     compatibility units, each retired on the date its header states
 rules/<x>.cppm       export module mcpp.rules.<x>;
 tools/<x>.cppm       export module mcpp.tools.<x>;
 dist/<x>.cppm        export module mcpp.dist.<x>;

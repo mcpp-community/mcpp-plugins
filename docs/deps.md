@@ -4,13 +4,13 @@ The `deps-*` members answer where a library comes from: a vcpkg manifest, a CMak
 
 ## `deps-vcpkg`
 
-Module `mcpp.deps.vcpkg`; engine floor: 2026.9.26.2 (mcpp#702).
+Module `mcpp.deps.vcpkg`; engine floor: 2026.9.28.3 (0.17.0, mcpp#734; 2026.9.26.2 before).
 
 **Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-cmake`
 
-Module `mcpp.deps.cmake`; engine floor: 2026.9.26.2 (mcpp#702).
+Module `mcpp.deps.cmake`; engine floor: 2026.9.28.3 (0.17.0, mcpp#734; 2026.9.26.2 before).
 
 **Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, and maps the prefix as `deps-vcpkg` does
 
@@ -24,7 +24,7 @@ Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.16.0", features = ["deps-vcpkg"], host-module = true }
+plugins = { version = "0.17.0", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
@@ -67,7 +67,9 @@ states every path it can, and the build is where the absence fails.
 
 | option | meaning |
 |---|---|
-| `triplet` | empty derives it from the target: `x64-windows`, `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`, `x64-osx`, `arm64-osx`; on Linux under a libc++ toolchain the generated `x64-linux-libcxx` or `arm64-linux-libcxx` (0.15.0); a custom triplet is found through the manifest's `overlay-triplets` |
+| `triplet` | the base triplet; empty derives it from the target: `x64-windows` (`x64-windows-static` when the program links the C runtime statically), `arm64-windows`, `x64-mingw-dynamic`, `x64-linux`, `arm64-linux`, `x64-osx`, `arm64-osx`. Under the `chain` mechanism the installation uses a triplet derived from it (below). A custom triplet is found through the manifest's `overlay-triplets` |
+| `toolset` | which toolset builds the ports: `{.toolset = resolved or detected, .cc = abi_native or row}`; the default is `resolved` with `abi_native` (0.17.0, see [the toolset](#the-toolset-instance-chain-detected)) |
+| `crt_linkage` | the ports' C runtime linkage on the MSVC ABI, `"static"` or `"dynamic"`; empty follows the program's C++ runtime contract (0.17.0) |
 | `libraries` | the link, in order; a name that matches no installed file fails the link, naming its path |
 | `manifest_root` | the directory holding `vcpkg.json` |
 | `install_root` | empty is vcpkg's default, `<manifest root>/vcpkg_installed`. Each triplet is its own vcpkg installation, `<install root>/<triplet>`, because vcpkg's manifest mode removes from an installation the packages of every other triplet (0.15.0; 0.14.0's prefix `<install root>/<triplet>` is no longer read) |
@@ -93,17 +95,75 @@ workspace members installing one root run one after the other; without it the
 second fails, "failed to take lock" (0.15.1). vcpkg fetches its
 own CMake, Ninja and 7-Zip, and on Windows a portable git; on Linux and macOS
 its documented host prerequisites (git, curl, zip, unzip, tar, a C compiler)
-are the host's. Ports are compiled with vcpkg's default toolchain for the
-triplet: the Visual Studio toolset on Windows, the host compiler elsewhere. The
-program links them, so its C++ standard library must be theirs. On Windows every
-compiler of the MSVC ABI, mcpp's clang included, uses Microsoft's, and on macOS
-every compiler uses libc++, so a port links as it stands. Linux has two
-libraries that do not link with each other: the host compiler uses libstdc++,
-and mcpp's clang uses libc++ (`std::__1::`). Under a libc++ toolchain the
-default triplet is therefore a generated one, `<arch>-linux-libcxx`, whose
-ports build with mcpp's clang through vcpkg's chain-loaded toolchain file; the
-clang's own configuration names libc++ and the C library mcpp links against.
-Under a gcc toolchain the default triplet is vcpkg's own (0.15.0).
+are the host's.
+
+### The toolset: `instance`, `chain`, `detected`
+
+The ports are linked into the program, so they are built with the toolset mcpp
+builds the program with (0.17.0). The member reads the toolset from the engine
+(mcpp 2026.9.28.3, `mcpp::abi_tool`, `mcpp::tool_env`, `mcpp::toolset_identity`,
+`mcpp::msvc_instance_dir`) through `mcpp.plugins.toolset`, and the way it reaches
+vcpkg follows where the toolset came from:
+
+| mechanism | when | what vcpkg receives | port kinds that build |
+|---|---|---|---|
+| `instance` | an MSVC toolset from a Visual Studio instance (`msvc@system`, the default on a machine with Visual Studio) | `VCPKG_VISUAL_STUDIO_PATH` naming that instance; the standard triplet, or a derived one with `VCPKG_PLATFORM_TOOLSET_VERSION` when the resolved toolset is not the instance's default | CMake, make and MSBuild |
+| `chain` | any other toolset: a managed MSVC toolset (`xim:msvc@<version>`), and the toolsets of the Linux and macOS rows | a derived triplet `<base>-mcpp-<hash>` that chain-loads a toolchain naming the tools, and the tools' environment | CMake and make; an MSBuild port is refused by name |
+| `detected` | `options.toolset.toolset = detected` | nothing: vcpkg finds its own toolset, as in 0.16.0 | as vcpkg's own detection allows |
+
+**The derived triplet.** The base triplet's text is copied into it, not
+included, because vcpkg hashes a triplet file's content and not the files it
+includes. The member appends the chain-loaded toolchain
+(`${CMAKE_CURRENT_LIST_DIR}/mcpp-chain-<system>.cmake`), the environment
+variables that pass through untracked (`MCPP_VCPKG_CC`, `MCPP_VCPKG_CXX`,
+`MCPP_VCPKG_RC`, `MCPP_VCPKG_MT`, `MCPP_VCPKG_ROOT`, and on the MSVC ABI
+`INCLUDE` and `LIB`), a comment with the toolset's identity, and on the MSVC ABI
+`VCPKG_CRT_LINKAGE`. The toolchain file reads each tool from the environment
+through `file(TO_CMAKE_PATH)` and then includes vcpkg's own
+`scripts/toolchains/<system>.cmake`, so ports keep vcpkg's standard flags.
+Neither file holds a path, so the triplet's name, and vcpkg's ABI hash, depend
+on the toolset's identity and its compilers and not on where they are
+installed: the same toolset on another machine restores the same binary
+packages. On the MSVC ABI the derived triplet is also the host triplet, and the
+installation runs with the toolset's directories first on a `PATH` that vcpkg
+keeps (`VCPKG_KEEP_ENV_VARS=PATH`), because a make-based port (icu) finds
+`link.exe` there.
+
+**An MSBuild port under `chain`.** vcpkg would run MSBuild with
+`/p:PlatformToolset=external` and fail without naming the cause. The derived
+triplet stops such a port with a message saying that it needs a Visual Studio
+instance, and that the toolchain `msvc@system` or `toolset = detected` builds
+it.
+
+**The C runtime (MSVC ABI).** The ports' C runtime is the program's: the
+default triplet is `x64-windows-static` for a program that links the C runtime
+statically (`cxx_runtime = "self-contained"` or `linkage = "static"`), and a
+triplet named in `triplet` whose `VCPKG_CRT_LINKAGE` contradicts the program's
+is refused naming both statements. A static library built against the other C
+runtime fails the link with `/failifmismatch`, and a DLL built against it puts
+a second C++ runtime into the process without a word. `crt_linkage` states the
+ports' linkage explicitly and wins.
+
+**Linux.** Linux has two C++ standard libraries that do not link with each
+other. The derived triplet names the program's compiler, so the ports use the
+program's library on every row: libc++ under mcpp's clang (`std::__1::`), and
+the GCC payload's libstdc++ under mcpp's GCC.
+
+**Upgrading from 0.16.0.** On Linux and macOS, and on Windows with a managed
+toolset, the installation moves to a derived triplet, so each port is built once
+more (or restored from a binary cache that already holds it); the prefixes of
+0.16.0 (`<arch>-linux-libcxx`, `x64-linux`) are left where they are. With
+Visual Studio and the dynamic C runtime nothing changes: the standard triplet
+and the instance vcpkg selects by itself give the same ABI hash. A program that
+links the C runtime statically moves to `x64-windows-static`.
+
+**`detected`** keeps the behaviour of 0.16.0 until 2027-03-28 (a compatibility
+unit, `src/compat/detected_toolset.cppm`) and prints a note once per build. On
+the Linux libc++ row it names mcpp's clang, as 0.16.0 did.
+
+**Binary caches.** vcpkg reads `VCPKG_BINARY_SOURCES` and
+`VCPKG_DEFAULT_BINARY_CACHE` from the environment, and the installation passes
+the environment on; whether to host a shared cache is the project's decision.
 
 Not supported: vcpkg's classic mode; the debug libraries under `debug/lib`.
 
@@ -129,10 +189,21 @@ directory; its inputs are the script and the subproject's files, so an edit to t
 maps its own. `layout` names install directories other than `include/`, `lib/`
 and `bin/`; `prefix_path` becomes `CMAKE_PREFIX_PATH` (`mcpp::rules::qt::root()`
 for a subproject that finds Qt); `cache_args` carries `-D…`, `-G …` and a
-toolchain file. The subproject is compiled with the toolchain CMake selects by
-default unless `cache_args` names a compiler or a toolchain file; on Linux under
-a libc++ toolchain the compilers are mcpp's clang, as `deps-vcpkg` builds its
-ports (0.15.0). `deploy` places files of the prefix
+toolchain file. The subproject is compiled with the toolset mcpp resolved
+(0.17.0), by the mechanisms `deps-vcpkg` uses: under `instance` CMake's default
+generator (Visual Studio) is kept and pointed at the instance
+(`CMAKE_GENERATOR_INSTANCE`) and the toolset version (`-T version=`, when it is
+not the instance's default); under `chain` the Ninja generator runs with mcpp's
+own ninja (`mcpp::ninja_program()`), the compilers are named by path, and the
+action runs with the tools' environment and their directories first on `PATH`.
+On the MSVC ABI `CMAKE_MSVC_RUNTIME_LIBRARY` follows the program's C runtime
+(policy CMP0091). Each toolset statement configures its own build directory,
+because CMake refuses a cache made with another generator or instance; the
+directory 0.16.0 configured stays `build/`. A compiler, a toolchain file or a
+generator in `cache_args` is the project's decision and wins. The options are
+`toolset` and `crt_linkage`, as `deps-vcpkg` takes them, and `generator`
+(`default`, or `ninja` for the Ninja generator under an instance as well).
+`deploy` places files of the prefix
 beside the program, as `deps-vcpkg` takes it.
 
 ## `deps-archive`: files a program reads at run time, from an archive

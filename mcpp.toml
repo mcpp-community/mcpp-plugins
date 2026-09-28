@@ -1,7 +1,10 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.16.0"
+version     = "0.17.0"
+# The first mcpp release that states the build information (protocol 14),
+# places files in one edge, and renders structured diagnostics (mcpp#734).
+mcpp        = ">=2026.9.28.3"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -17,21 +20,24 @@ import_std = true
 # the source set; mcpp compiles every interface unit among the resolved
 # sources as a host module under the name the unit declares (2026.9.5.3+).
 [build]
-# THE LIB ROOT ALONE, AND `src/declare.cppm` BEHIND A FEATURE.
+# THE LIB ROOT ALONE, AND THE GENERAL LIBRARY BEHIND A FEATURE.
 #
-# The two units divide by what they may import:
+# The units divide by what they may import:
 #
-#   src/plugins.cppm   `mcpp.plugins.surface`, importing only `std`, so the
-#                      same code compiles into `mcpp-embed` -- an ordinary
-#                      program, which is what lets the generation be an ACTION
-#                      and a payload be that action's declared input
-#   src/declare.cppm   the build-program half: `mcpp::action`, `mcpp::generated`
-#                      and the decision of how the generation reaches the graph
+#   src/plugins.cppm   `mcpp.plugins`, importing only `std`, so the same code
+#                      compiles into `mcpp-embed` -- an ordinary program, which
+#                      is what lets the generation be an ACTION and a payload
+#                      be that action's declared input
+#   src/declare.cppm,  L2, the official general library for build programs
+#   src/toolset.cppm,  (mcpp#734): `mcpp.plugins.declare`,
+#   src/fs.cppm        `mcpp.plugins.toolset`, `mcpp.plugins.fs`
+#   src/testing.cppm   `mcpp.plugins.testing`, the test kit for plugins
 #
-# The second one imports `mcpp`, which exists only inside a build program, so
-# listing it here would break the ORDINARY build of this package -- the build
-# that produces the tool. `[features.surface]` scopes it to the consumers that
-# have a build program, and every member implies it.
+# The L2 units import `mcpp.core` (spelled `mcpp`), which exists only inside a
+# build program, so listing them here would break the ORDINARY build of this
+# package -- the build that produces the tool. `[features.plugins-core]`
+# scopes them to the consumers that have a build program, and every family
+# member implies it.
 #
 # It also needs mcpp 2026.9.8.1: before that release a package's host modules
 # were ordered by PATH, so `rules/spirv.cppm` was compiled before
@@ -66,21 +72,45 @@ sources = ["src/plugins.cppm"]
 [features]
 default = []
 
-# The build-program half of the surface. Not a member a consumer names: every
-# member that embeds a payload implies it, and a consumer that activates none
-# of them compiles neither this nor anything that imports `mcpp`.
+# L2: THE OFFICIAL GENERAL LIBRARY FOR BUILD PROGRAMS (0.17.0, mcpp#734).
+# Every family member implies it, so a project that uses an official plugin
+# writes nothing more; a build program that uses only L2, and a third-party
+# plugin built on it, name `plugins-core` on the dependency edge. A consumer
+# that activates none of them compiles nothing that imports `mcpp`.
+#
+#   mcpp.plugins.declare   how a generated surface reaches the build graph
+#   mcpp.plugins.toolset   the resolved toolchain, translated for a foreign
+#                          build system (`instance`, `chain`, `detected`)
+#   mcpp.plugins.fs        deterministic file generation and placement
+[features.plugins-core]
+sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm",
+           "src/compat/detected_toolset.cppm"]
+
+# The test kit: a plugin function runs against a stated build context, and its
+# directives are compared. Separate from `plugins-core`, so that no build
+# program compiles it unless it asks.
+[features.plugins-testing]
+sources = ["src/testing.cppm"]
+implies = ["plugins-core"]
+
+# COMPATIBILITY UNIT
+#   keeps:       the feature name `surface`, the name of `plugins-core` until 0.16.0
+#   since:       0.17.0 (2026-09-28)
+#   retires:     2027-03-28
+#   replacement: `plugins-core`
+#   note:        none: a feature name is resolved before any build program runs
 [features.surface]
-sources = ["src/declare.cppm"]
+implies = ["plugins-core"]
 
 [features.rules-ascendc]
 sources           = ["rules/ascendc.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.ascendc"
 device_extensions = [".asc", ".cce"]
 
 [features.rules-cuda]
 sources           = ["rules/cuda.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.cuda"
 device_extensions = [".cu"]
 
@@ -90,7 +120,7 @@ device_extensions = [".cu"]
 # locates the toolchain and refuses naming the command that found nothing.
 [features.rules-metal]
 sources           = ["rules/metal.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.metal"
 device_extensions = [".metal"]
 
@@ -100,19 +130,19 @@ device_extensions = [".metal"]
 # `rules-metal` gives: the compiler ships with Xcode and the Command Line Tools.
 [features.rules-swift]
 sources           = ["rules/swift.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.swift"
 device_extensions = [".swift"]
 
 [features.rules-hip]
 sources           = ["rules/hip.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.hip"
 device_extensions = [".hip"]
 
 [features.rules-slang]
 sources           = ["rules/slang.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.slang"
 device_extensions = [".slang"]
 
@@ -121,7 +151,7 @@ device_extensions = [".slang"]
 # message than the engine's "no rule compiles it".
 [features.rules-spirv]
 sources           = ["rules/spirv.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.spirv"
 device_extensions = [".comp", ".vert", ".frag", ".geom", ".tesc", ".tese",
                      ".mesh", ".task", ".rgen", ".rint", ".rahit", ".rchit",
@@ -129,7 +159,7 @@ device_extensions = [".comp", ".vert", ".frag", ".geom", ".tesc", ".tese",
 
 [features.rules-sycl]
 sources           = ["rules/sycl.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.sycl"
 device_extensions = [".sycl"]
 
@@ -141,7 +171,7 @@ device_extensions = [".sycl"]
 # project's own `sources` names are routed.
 [features.rules-qt]
 sources           = ["rules/qt.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 rule_module       = "mcpp.rules.qt"
 device_extensions = [".ui", ".qrc", ".ts"]
 
@@ -191,23 +221,23 @@ device_extensions = [".ui", ".qrc", ".ts"]
 # something true -- this member is not a rule.
 [features.dist-appimage]
 sources = ["dist/appimage.cppm"]
-implies = ["surface"]
+implies = ["plugins-core"]
 
 [features.dist-wix]
 sources = ["dist/wix.cppm"]
-implies = ["surface"]
+implies = ["plugins-core"]
 
 [features.dist-apple]
 sources = ["dist/apple.cppm"]
-implies = ["surface"]
+implies = ["plugins-core"]
 
 [features.dist-web]
 sources = ["dist/web.cppm"]
-implies = ["surface"]
+implies = ["plugins-core"]
 
 [features.dist-apk]
 sources = ["dist/apk.cppm"]
-implies = ["surface"]
+implies = ["plugins-core"]
 
 # `dist-apk` WITH THE KOTLIN COMPILER, AND WITH THE MAVEN RESOLVER (0.11.0).
 # Features of their own rather than payloads of `dist-apk`, for the reason
@@ -241,11 +271,11 @@ implies = ["dist-apk"]
 # build by name, and its shared-library directory through
 # `mcpp::runtime_search_dir` -- both from the release that lands mcpp#702.
 #
-# `deps` is the unit both members import, as `surface` is for the rest; a
+# `deps` is the unit the members import, as `plugins-core` is for the rest; a
 # consumer never names it.
 [features.deps]
-sources = ["deps/deps.cppm"]
-implies = ["surface"]
+sources = ["deps/deps.cppm", "deps/compat/names.cppm"]
+implies = ["plugins-core"]
 
 [features.deps-vcpkg]
 sources = ["deps/vcpkg.cppm"]
@@ -265,11 +295,11 @@ implies = ["deps"]
 
 [features.tools-embed]
 sources = ["tools/embed.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 
 [features.tools-island]
 sources = ["tools/island.cppm"]
-implies           = ["surface"]
+implies           = ["plugins-core"]
 
 # ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
 #

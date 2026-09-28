@@ -70,6 +70,22 @@ vcpkg_consumer() {
         fail "share/fmt/copyright was not deployed beside the program"
     echo "ok: a file of the prefix is deployed beside the program"
 
+    # THE MECHANISM (0.17.0). On the Visual Studio row the instance mcpp
+    # resolved is selected and the standard triplet is used, so the ABI hash is
+    # the one vcpkg computes by itself; on the other rows a derived triplet
+    # names the resolved tools.
+    if is_windows; then
+        grep -rqs 'VCPKG_VISUAL_STUDIO_PATH=' target --include=build.ninja ||
+            fail "the installation does not select the Visual Studio instance mcpp resolved"
+        [ -d target/vcpkg_installed/x64-windows/x64-windows ] || fail "the instance mechanism did not use x64-windows"
+        echo "ok: the installation selects the Visual Studio instance and keeps the standard triplet"
+    else
+        ls -d target/vcpkg_installed/*-mcpp-*/*-mcpp-* > /dev/null 2>&1 ||
+            fail "no derived <base>-mcpp-<hash> prefix under target/vcpkg_installed"
+        grep -rqs 'MCPP_VCPKG_CXX=' target --include=build.ninja || fail "the installation does not hand vcpkg the resolved compiler"
+        echo "ok: the installation names the resolved compiler in a derived triplet"
+    fi
+
     if is_windows; then
         # The pack collects it from the runtime search directory.
         ls target/vcpkg_installed/x64-windows/x64-windows/bin/fmt.dll > /dev/null || fail "x64-windows built no fmt.dll"
@@ -84,22 +100,25 @@ vcpkg_consumer() {
 }
 
 # LINUX UNDER A libc++ TOOLCHAIN. The host compiler vcpkg and CMake find uses
-# libstdc++, whose `std::` symbols a libc++ program cannot link. The default
-# triplet is then the generated `x64-linux-libcxx`, whose ports build with
-# mcpp's clang; fmt's interface returns `std::string`, so the link itself is the
-# criterion. The prefix is then shown to survive the default toolchain's own
-# installation, which vcpkg would remove if the two triplets shared one.
+# libstdc++, whose `std::` symbols a libc++ program cannot link. The ports
+# build with mcpp's clang through a derived triplet `<arch>-linux-mcpp-<hash>`
+# (0.17.0; `<arch>-linux-libcxx` before); fmt's interface returns
+# `std::string`, so the link itself is the criterion. The prefix is then shown
+# to survive the default toolchain's own installation, which vcpkg would remove
+# if the two triplets shared one.
 vcpkg_libcxx() {
-    local llvm="${MCPP_LLVM:-llvm@22.1.8}" gen=x64-linux-libcxx
-    [ "$(uname -m)" = aarch64 ] && gen=arm64-linux-libcxx
+    local llvm="${MCPP_LLVM:-llvm@22.1.8}" gen
     cd "$ROOT/tests/vcpkg-consumer"
     rm -rf target vcpkg_installed
     mkdir -p target/ci
     "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
     "$MCPP" run --toolchain "$llvm" | tee target/ci/libcxx-run.log
     grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/libcxx-run.log || fail "the libc++ program did not print through fmt"
-    local lib; lib=$(find target/vcpkg_installed -path "*/$gen/$gen/lib/libfmt.a" | head -1)
-    [ -n "$lib" ] || fail "no $gen prefix with libfmt.a"
+    local lib; lib=$(find target/vcpkg_installed -path "*-mcpp-*/lib/libfmt.a" | head -1)
+    [ -n "$lib" ] || fail "no derived <arch>-linux-mcpp-<hash> prefix with libfmt.a"
+    gen=$(basename "$(dirname "$(dirname "$lib")")")
+    find target -path '*deps-vcpkg/triplets/*' -name "$gen.cmake" -exec grep -l 'clang' {} + | grep -q . ||
+        fail "the derived triplet $gen does not record the clang toolset"
     grep -q 'std::__1::' <(nm -C "$lib") || fail "$lib is not built against libc++"
     echo "ok: under $llvm the ports build with mcpp's clang and the program links them"
 
@@ -107,6 +126,8 @@ vcpkg_libcxx() {
     "$MCPP" run | tee target/ci/default-run.log
     grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/default-run.log || fail "the default toolchain's program did not print through fmt"
     [ -f "$lib" ] || fail "the default toolchain's installation removed the $gen prefix"
+    [ "$(ls -d target/vcpkg_installed/*-mcpp-* | wc -l)" -ge 2 ] ||
+        fail "the default toolchain did not derive a triplet of its own"
     local stamp; stamp=$(find target -path '*deps-vcpkg*' -name "$gen.stamp" | head -1)
     [ -n "$stamp" ] || fail "no $gen installation stamp"
     touch -r "$stamp" target/ci/before-switch-back
@@ -340,6 +361,116 @@ qt_import_only() {
     echo "ok: a package that enables rules-qt only for its module runs no build program and reports nothing"
 }
 
+# THE TEST KIT (0.17.0). The deps members' decisions -- which mechanism, which
+# triplet, which C runtime -- tested against stated build contexts on every
+# host, with nothing installed. The build program is the test; the verdicts
+# are counted against the cases the fixture declares.
+plugin_logic() {
+    cd "$ROOT/tests/plugin-logic"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build > target/ci/build.log 2>&1 || { cat target/ci/build.log; fail "a plugin-logic case failed"; }
+    local results declared passed
+    results=$(find target -path '*plugins-testing/results.txt' | head -1)
+    [ -n "$results" ] || fail "the kit wrote no results.txt"
+    declared=$(grep -cE '^        \{ "' build.mcpp)
+    passed=$(grep -c '^PASS ' "$results")
+    cat "$results"
+    [ "$declared" -gt 0 ] && [ "$passed" -eq "$declared" ] ||
+        fail "$passed of $declared declared cases passed"
+    echo "ok: $passed of $declared plugin-logic cases passed"
+}
+
+# WINDOWS, THE PROGRAM'S C RUNTIME (0.17.0). Run on the Visual Studio row. A
+# self-contained program links the C runtime statically, so its ports must be
+# built against the same one: the default triplet becomes x64-windows-static,
+# and a project triplet that says otherwise is refused naming both statements
+# (a static library of the other runtime fails the link with /failifmismatch;
+# a DLL of it puts a second C++ runtime into the process without a word).
+vcpkg_crt() {
+    is_windows || { echo "skip: the C runtime linkage is an MSVC-ABI question"; return 0; }
+    local d="$ROOT/tests/.ci-vcpkg-crt"
+    rm -rf "$d"
+    cp -r "$ROOT/tests/vcpkg-consumer" "$d"
+    trap 'rm -rf "$ROOT/tests/.ci-vcpkg-crt"' RETURN
+    cd "$d"
+    rm -rf target vcpkg_installed
+    printf '\n[build]\ncxx_runtime = "self-contained"\n' >> mcpp.toml
+    mkdir -p target/ci
+    "$MCPP" build 2>&1 | tee target/ci/static-build.log
+    "$MCPP" run | tee target/ci/static-run.log
+    grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/static-run.log || fail "the self-contained program did not run"
+    [ -d target/vcpkg_installed/x64-windows-static/x64-windows-static ] ||
+        fail "a self-contained program's ports were not installed with x64-windows-static"
+    ! find target -path '*/bin/*' -iname 'fmt.dll' | grep -q . || fail "a self-contained program received fmt.dll"
+    echo "ok: a self-contained program's ports link the C runtime statically, and the link agrees"
+
+    sed -i 's|^    o.libraries = { "fmt" };|    o.libraries = { "fmt" };\n    o.triplet = "x64-windows";|' build.mcpp
+    grep -q 'o.triplet = "x64-windows";' build.mcpp || fail "the fixture edit did not apply"
+    if "$MCPP" build > target/ci/contradiction.log 2>&1; then
+        cat target/ci/contradiction.log; fail "a triplet contradicting the program's C runtime was accepted"
+    fi
+    grep -q "the triplet 'x64-windows' links the C runtime dynamic" target/ci/contradiction.log ||
+        { cat target/ci/contradiction.log; fail "the refusal does not name the triplet's linkage"; }
+    echo "ok: a triplet that contradicts the program's C runtime is refused, naming both statements"
+}
+
+# WINDOWS WITHOUT VISUAL STUDIO (0.17.0). Run on the row whose Visual Studio is
+# masked, with the managed toolset `$MSVC_MANAGED` (xim:msvc@<version>). The
+# toolset is named in a derived triplet: a CMake port (fmt) builds, the program
+# links it, and a CMake subproject builds with Ninja and the toolset's cl.exe.
+vcpkg_managed() {
+    : "${MSVC_MANAGED:?MSVC_MANAGED names the managed toolset, e.g. xim:msvc@14.44.35207}"
+    cd "$ROOT/tests/vcpkg-consumer"
+    rm -rf target vcpkg_installed
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$MSVC_MANAGED" 2>&1 | tee target/ci/managed-build.log
+    "$MCPP" run --toolchain "$MSVC_MANAGED" | tee target/ci/managed-run.log
+    grep -qE '^vcpkg-consumer: fmt [0-9]+ says 42$' target/ci/managed-run.log || fail "the program did not print through fmt"
+    ls -d target/vcpkg_installed/x64-windows-mcpp-*/x64-windows-mcpp-*/bin/fmt.dll > /dev/null 2>&1 ||
+        fail "no derived x64-windows-mcpp-<hash> prefix with fmt.dll"
+    grep -rqs -- '--host-triplet=x64-windows-mcpp-' target --include=build.ninja || fail "the host triplet is not the derived one"
+    echo "ok: without Visual Studio, a CMake port builds with the managed toolset named in a derived triplet"
+
+    cd "$ROOT/tests/cmake-consumer"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$MSVC_MANAGED" 2>&1 | tee target/ci/managed-build.log
+    "$MCPP" run --toolchain "$MSVC_MANAGED" | grep -q '^cmake-consumer: greet says 42$' || fail "the cmake-consumer did not run"
+    grep -rqs 'CMAKE_GENERATOR:INTERNAL=Ninja' target --include=CMakeCache.txt || fail "the subproject was not configured with Ninja"
+    grep -rqsi 'CMAKE_CXX_COMPILER:[A-Z]*=.*xim-x-msvc.*cl.exe' target --include=CMakeCache.txt ||
+        fail "the subproject was not configured with the managed toolset's cl.exe"
+    echo "ok: without Visual Studio, a CMake subproject builds with Ninja and the managed toolset"
+}
+
+# The same row: a port that needs MSBuild is refused by name.
+vcpkg_msbuild_refused() {
+    : "${MSVC_MANAGED:?MSVC_MANAGED names the managed toolset}"
+    cd "$ROOT/tests/vcpkg-msbuild-port"
+    rm -rf target
+    mkdir -p target/ci
+    if "$MCPP" build --toolchain "$MSVC_MANAGED" > target/ci/build.log 2>&1; then
+        cat target/ci/build.log; fail "an MSBuild port built without Visual Studio"
+    fi
+    grep -q "builds with MSBuild, which needs a Visual Studio instance" target/ci/build.log ||
+        { tail -60 target/ci/build.log; fail "the MSBuild port failed without the plugin's reason"; }
+    echo "ok: an MSBuild port is refused by name without Visual Studio"
+}
+
+# The same row: a port that configures with make under msys (icu) finds
+# link.exe on the PATH vcpkg keeps.
+vcpkg_make_port() {
+    : "${MSVC_MANAGED:?MSVC_MANAGED names the managed toolset}"
+    cd "$ROOT/tests/vcpkg-make-port"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build --toolchain "$MSVC_MANAGED" > target/ci/build.log 2>&1 ||
+        { tail -80 target/ci/build.log; fail "the make-based port did not build with the managed toolset"; }
+    "$MCPP" run --toolchain "$MSVC_MANAGED" | tee target/ci/run.log
+    grep -qE '^vcpkg-make-port: icu [0-9]' target/ci/run.log || fail "the program did not read icu's version"
+    echo "ok: a make-based port builds with the managed toolset first on the kept PATH"
+}
+
 case "${1:-}" in
     vcpkg-consumer)      vcpkg_consumer ;;
     vcpkg-libcxx)        vcpkg_libcxx ;;
@@ -350,5 +481,10 @@ case "${1:-}" in
     qt-widgets-consumer) qt_widgets_consumer ;;
     qt-sdk-consumer)     qt_sdk_consumer ;;
     qt-import-only)      qt_import_only ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only"; exit 2 ;;
+    plugin-logic)        plugin_logic ;;
+    vcpkg-crt)           vcpkg_crt ;;
+    vcpkg-managed)       vcpkg_managed ;;
+    vcpkg-msbuild-refused) vcpkg_msbuild_refused ;;
+    vcpkg-make-port)     vcpkg_make_port ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
 esac

@@ -34,6 +34,9 @@ export module mcpp.deps;
 import std;
 import mcpp;
 import mcpp.plugins;
+// The 0.16.0 names of the helpers that moved to `mcpp.plugins.fs` and
+// `mcpp.plugins.toolset` (a compatibility unit, until 2027-03-28).
+export import mcpp.deps.compat;
 
 export namespace mcpp::deps {
 
@@ -202,110 +205,6 @@ inline std::string short_name(std::string_view text) {
         h *= 1099511628211ull;
     }
     return std::format("{:08x}", std::uint32_t(h ^ (h >> 32)));
-}
-
-// ── The compiler a subproject builds with ──────────────────────────────────
-//
-// A prefix's C++ libraries are linked into the program, so their C++ standard
-// library must be the program's. On Windows every compiler of the MSVC ABI
-// uses Microsoft's, and on macOS every compiler uses libc++; on Linux two
-// incompatible libraries exist, the host compiler that vcpkg and CMake choose
-// uses libstdc++, and mcpp's clang uses libc++ (`std::__1::`). So when the
-// program's library is libc++ on Linux, a subproject builds with mcpp's own
-// clang, whose configuration file names libc++ and the C library mcpp links
-// against; otherwise the installer's own choice already agrees and nothing is
-// stated.
-struct compilers {
-    std::string c, cxx;
-    explicit operator bool() const { return !cxx.empty(); }
-};
-
-inline compilers program_compilers() {
-    namespace fs = std::filesystem;
-    if (std::string_view(mcpp::target_os()) != "linux"
-        || std::string_view(mcpp::cxx_stdlib()) != "libc++"
-        || std::string_view(mcpp::compiler()) != "clang"
-        || std::string_view(mcpp::host()) != std::string_view(mcpp::target())) return {};
-    const fs::path bin = fs::path(mcpp::toolchain_dir()) / "bin";
-    std::error_code ec;
-    if (!fs::is_regular_file(bin / "clang++", ec) || !fs::is_regular_file(bin / "clang", ec)) return {};
-    return { generic(bin / "clang"), generic(bin / "clang++") };
-}
-
-// Writes `content` to `file` unless the file already holds it, so a file the
-// build program generates keeps its time stamp from one plan to the next and
-// the action that reads it does not run again.
-inline void write_if_changed(const std::filesystem::path& file, const std::string& content) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    if (fs::is_regular_file(file, ec)) {
-        std::ifstream in(file, std::ios::binary);
-        const std::string old{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-        if (old == content) return;
-    }
-    fs::create_directories(file.parent_path(), ec);
-    std::ofstream(file, std::ios::binary | std::ios::trunc) << content;
-}
-
-// ── Files beside the program ───────────────────────────────────────────────
-//
-// Data a program reads at run time from beside itself -- a dictionary, a
-// configuration, an embedded interpreter -- is DEPLOYED (`mcpp::deploy`): the
-// engine places it beside the program after the build, `mcpp run` finds it
-// there, and `mcpp pack` carries it. A deployed file must be one the build
-// graph knows how to produce, and a file that a `prepare` action installs is
-// not: its name is unknown to the graph until the action has run. So the file
-// is first copied by an action that NAMES it as an output (SPEC-007 R3.2), and
-// the copy is deployed. Everything here is declared before anything exists, so
-// `mcpp emit build-database` plans it on a machine that never built.
-
-// One file of a prefix to place beside the program: `file` relative to the
-// prefix root (`share/opencc/t2s.json`), `to` the directory beside the program
-// it is placed in (`BaseConfig/opencc`; empty or `.` is the program's own
-// directory).
-struct deploy_entry {
-    std::string file;
-    std::string to;
-};
-
-// A file this package deploys: `path`, the copy the build produces (a node of
-// the build graph, which a project's own actions may take as an input), and
-// `to`, its path beside the program.
-struct deployed_file {
-    std::string path;
-    std::string to;
-};
-
-// Copies each entry's file out of `root` once the action that writes `stamp`
-// has run, and deploys the copy. `who` names the member in action ids.
-inline std::vector<deployed_file> deploy_after(std::string_view who, const std::string& stamp,
-                                               const std::filesystem::path& root,
-                                               std::span<const deploy_entry> entries) {
-    namespace fs = std::filesystem;
-    std::vector<deployed_file> out;
-    const fs::path base = fs::path(mcpp::out_dir()) / "deps-deploy" / std::string(who);
-    for (auto const& e : entries) {
-        const fs::path rel = fs::path(e.file).lexically_normal();
-        const std::string src  = generic(root / rel);
-        const std::string copy = generic(base / rel);
-        // Index loops over a string: GCC 16 fails to inline a string iterator
-        // inside a module's interface.
-        std::string key = rel.generic_string();
-        for (std::size_t i = 0; i < key.size(); ++i) if (key[i] == '/') key[i] = '.';
-        const std::string id   = std::format("{}:deploy:{}", who, key);
-        const std::string desc = std::format("DEPLOY {}", rel.generic_string());
-        mcpp::action a;
-        a.id          = id.c_str();
-        a.role        = mcpp::roles::artifact;
-        a.description = desc.c_str();
-        a.arg("${mcpp.self}").arg("stage").arg("--output").arg(copy.c_str()).arg(src.c_str())
-         .input(stamp.c_str()).output(copy.c_str()).submit();
-        const std::string dir = e.to.empty() ? std::string(".") : e.to;
-        mcpp::deploy(copy.c_str(), dir.c_str());
-        const std::string to = generic(fs::path(dir) / rel.filename());
-        out.push_back({copy, to});
-    }
-    return out;
 }
 
 } // namespace mcpp::deps

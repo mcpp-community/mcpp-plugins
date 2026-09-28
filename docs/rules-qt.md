@@ -6,7 +6,7 @@
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.16.0", features = ["rules-qt"], host-module = true }
+plugins = { version = "0.17.0", features = ["rules-qt"], host-module = true }
 
 # The SDK and its version are the project's declaration.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]

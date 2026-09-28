@@ -32,6 +32,7 @@ import std;
 import mcpp;
 import mcpp.plugins;
 import mcpp.deps;
+import mcpp.plugins.fs;
 
 export namespace mcpp::deps::archive {
 
@@ -51,7 +52,7 @@ struct options {
 struct result {
     // One entry per file of the archive: the extracted copy and its path
     // beside the program.
-    std::vector<mcpp::deps::deployed_file> files;
+    std::vector<mcpp::plugins::fs::deployed_file> files;
     bool ok = false;
     explicit operator bool() const { return ok; }
 };
@@ -191,7 +192,7 @@ inline result unpack(const options& opt) {
     const std::string arc    = mcpp::deps::generic(archive);
     const std::string dst    = mcpp::deps::generic(into);
     const fs::path    script = fs::path(mcpp::out_dir()) / "deps-archive" / (name + ".cmake");
-    mcpp::deps::write_if_changed(script,
+    mcpp::plugins::fs::write_if_changed(script,
         "# Written by mcpp.deps.archive: extract " + archive.filename().string() + ".\n"
         "file(REMOVE_RECURSE " + bracket(dst) + ")\n"
         "file(MAKE_DIRECTORY " + bracket(dst) + ")\n"
