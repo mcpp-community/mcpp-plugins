@@ -1,10 +1,10 @@
 # 通用构建插件设计：`deps-vcpkg`、`rules-qt`、`deps-cmake` 及其 xlings 依赖
 
 状态：第 4 版（实现版；§0.1 的更正块取代正文中与之冲突的内容），实施中 · 2026-09-26 · 实施计划见 `2026-09-26-deps-vcpkg-rules-qt-plan.md` ·
-基于 mcpp 2026.9.25.1、mcpp-plugins 0.12.0（`origin/main` dea1f09）、xim-pkgindex `origin/main`、GalTranslPP 上游
-`main` 2c7d6bf（2026-09-25）· 起因：在 GalTranslPP（mcpp 工作区 + vcpkg + Qt 6，Windows/MSVC）上调查
+基于 mcpp 2026.9.25.1、mcpp-plugins 0.12.0（`origin/main` dea1f09）、xim-pkgindex `origin/main`、验证工程上游
+`main` 2c7d6bf（2026-09-25）· 起因：在验证工程（mcpp 工作区 + vcpkg + Qt 6，Windows/MSVC）上调查
 mcpp-language-server issue 23 时，整理出一批**与该项目无关、任何 mcpp 项目都能复用**的构建能力。§1–§6、§8 只设计这批
-通用能力；§7 用 GalTranslPP 做真实案例，核算"插件都做完以后，一个真实项目迁移要花多少、能省多少"。
+通用能力；§7 用验证工程做真实案例，核算"插件都做完以后，一个真实项目迁移要花多少、能省多少"。
 
 标注约定：**【已核实】** 有出处（文档章节、索引文件、发布资产、CI 实测、源码计数）；**【待验证】** 是设计依赖但尚未
 实测的假设，全部列入 §9 Phase 0。
@@ -35,7 +35,7 @@ mcpp-language-server issue 23 时，整理出一批**与该项目无关、任何
 | D6 | 2 | 附加模块能否做成一个包 | **能，建议做成一个包 `xim:qt-addons`**（依据与代价见 §6.2；待确认，§10-1） |
 | D7 | 2 | registry 共享克隆放哪 | vcpkg 的每用户目录（§3.6）；第 4 版起不再有托管克隆，见 §0.1 |
 | D6′ | 3 | D6 确认 | `xim:qt-addons` 为一个包，**自有前缀**（xim 载荷私有），`rules-qt` 同时加入两个前缀 |
-| D8 | 3 | 生态通用能力先行 | 通用缺口由 mcpp 以通用机制补上（SPEC-007，mcpp#702）；插件按 SPEC-007 实现并等待该发布（§0.1-5）；GalTranslPP 的 D 阶段在 fork 上初步验证 |
+| D8 | 3 | 生态通用能力先行 | 通用缺口由 mcpp 以通用机制补上（SPEC-007，mcpp#702）；插件按 SPEC-007 实现并等待该发布（§0.1-5）；验证工程的 D 阶段在 fork 上初步验证 |
 | D9 | 3 | 免装 VS | 不是目标；删除 `toolchain::msvc_xim`，`xim:msvc` 由 mcpp 自动匹配 |
 
 ### 0.1 第 4 版更正（实现时的决定，取代正文中冲突的部分）
@@ -43,7 +43,7 @@ mcpp-language-server issue 23 时，整理出一批**与该项目无关、任何
 1. **registry 不再由插件管理**（取代 §3.6 的托管克隆、按工具检出与文件锁）。vcpkg-tool 每个发布附带
    `vcpkg-standalone-bundle.tar.gz`（3.4 MB），其 `vcpkg-bundle.json` 为 `{"deployment":"OneLiner","usegitregistry":true}`，
    脚本与该工具版本严格对应。`xim:vcpkg` = 工具 + 该 bundle，安装目录即 `VCPKG_ROOT`。【已核实】本机以此为根，对
-   GalTranslPP 的 baseline 执行 `vcpkg install --dry-run`，输出 "Fetching registry information from
+  验证工程的 baseline 执行 `vcpkg install --dry-run`，输出 "Fetching registry information from
    https://github.com/microsoft/vcpkg"，解析出 `fmt 12.2.0`，registry 缓存 137 MB。继承的 `VCPKG_ROOT` 不使用，
    `options::vcpkg_root` 可显式指定。
 2. **启动器合为一个 `mcpp-deps`**（取代 `mcpp-vcpkg`、`mcpp-cmake`），子命令 `vcpkg`、`cmake`；消费者写
@@ -92,7 +92,7 @@ mcpp-language-server issue 23 时，整理出一批**与该项目无关、任何
    （`docs/30` "Current limitations"）；`mcpp::action` 是 ninja 边，只在 `mcpp build` 时执行，不受该上限约束
    （`docs/30` "Declaring work instead of doing it"）。
 4. **缺环境不失败**。构建程序遇到缺失的前缀/工具时输出确定的路径并 `mcpp::warning`，真正的失败留给 action 边——
-   这样 IDE（mcppls 通过 emit 取模型）在一台尚未安装依赖的机器上也能拿到可信模型。反例是 GalTranslPP 现状：构建
+   这样 IDE（mcppls 通过 emit 取模型）在一台尚未安装依赖的机器上也能拿到可信模型。反例是验证工程现状：构建
    程序缺 Qt 或缺一个 vcpkg `.lib` 就 `return 1`，emit 整体失败（CI 实测 `MCPP_BUILD_DATABASE_PLAN_FAILED`）。
 5. **不写别人的东西**。插件只写 `out_dir`、自己管理的目录（§3.6 的托管克隆）和用户显式要求写的位置；用户已有的
    vcpkg 克隆、项目源码树默认只读（lupdate 见 §4.3）。
@@ -155,7 +155,7 @@ makes the package's compile edges wait for it"）。
   管理（§3.6），只是不再承担环境设置。
 - 目录隔离：`--x-buildtrees-root`、`--x-packages-root` 指向项目自己的 `out_dir`，`downloads/` 共享。共享克隆的默认
   buildtrees/packages 在克隆内，两个项目同时编同一个 port 会互相覆盖；按项目隔离后与 vcpkg 自身的锁语义无关，
-  一定安全。（GalTranslPP 的 CI 已经这样用 `--x-buildtrees-root`。）
+  一定安全。（验证工程的 CI 已经这样用 `--x-buildtrees-root`。）
 - 输入：`vcpkg.json`、`vcpkg-configuration.json`、overlay ports/triplets 目录（`input()` + `rerun_if_changed_glob`）。
   输出：stamp。只在这些输入变化时重跑；emit 永不执行；不受 600 s 限制。
 - 二进制缓存：**不覆盖，用 vcpkg 的默认位置**（【已核实】vcpkg 文档 "Default binary cache"：Windows
@@ -168,7 +168,7 @@ makes the package's compile edges wait for it"）。
   （vcpkg 的默认值，已有项目的目录布局不变）。
 - 链接：以 `options.libraries` 为准，**一律用确定的完整路径** `mcpp::link_flag(<prefix>/lib/<name>.lib)`（ELF/Mach-O 上
   `lib<name>.a/.so/.dylib`）。链接边排在编译边之后、编译边又等待安装边，所以链接时文件必然已存在，不必在规划期判断
-  存在与否。用完整路径的理由 GalTranslPP 的 `vcpkg_link.hpp` 写过："An exact file path cannot resolve to a same-named
+  存在与否。用完整路径的理由验证工程的 `vcpkg_link.hpp` 写过："An exact file path cannot resolve to a same-named
   system library"。之所以要显式列表：首次构建时构建程序先于安装边运行，vcpkg 的 `info/*.list` 尚不存在。
 - 校验：`info/*.list` 存在时，比对列表与实际产物，不一致给 `mcpp::warning`；`rerun_if_changed(stamp)` 让安装完成后
   下一次构建程序按实际结果重新校验。
@@ -194,12 +194,12 @@ makes the package's compile edges wait for it"）。
 - 后两项由插件在 `out_dir` 生成 overlay triplet 与 chainload 工具链文件。【已核实】vcpkg 在 Windows 上用干净环境编
   port，`INCLUDE`/`LIB` 要经 `VCPKG_ENV_PASSTHROUGH` 传入（文档同页）；或者工具链文件直接写 `/I`、`/LIBPATH`。
   哪种可行【待验证】。
-- **项目自带自定义 triplet 时**（GalTranslPP 的 `gpp-x64-windows-release` 就是）：生成的 triplet 先 `include()` 项目
+- **项目自带自定义 triplet 时**（验证工程的 `gpp-x64-windows-release` 就是）：生成的 triplet 先 `include()` 项目
   triplet，再追加 chainload 设置，不替换它；triplet 名随之变为 `<原名>-mcpp-<选项>`，安装目录、映射一律按新名。
 - 同时检查 triplet 的 `VCPKG_CRT_LINKAGE` 与项目运行库（如 `-fms-runtime-lib=dll`）是否一致，不一致则 warning。
 
 **(5) 工作区**：`blocking` 的顺序是"per package"（【已核实】`docs/30`），被依赖成员的安装边管不到不依赖它的成员
-（GalTranslPP 的 `Updater` 不依赖 core，却要链接 `bit7z`，§7.1）。默认做法：**每个调用 `use()` 的成员各声明一条
+（验证工程的 `Updater` 不依赖 core，却要链接 `bit7z`，§7.1）。默认做法：**每个调用 `use()` 的成员各声明一条
 安装边**，命令相同、stamp 各在自己的 `out_dir`。第一条真正安装，其余的 `vcpkg install` 发现已安装、几秒内结束；
 并发时由 vcpkg 对安装目录加的锁串行化【待验证：manifest 模式对 `vcpkg_installed` 的锁】。锁不成立时退回"同一个
 stamp 由每个成员声明为 `input()`、只由一个成员声明为 `output()`"；根本方案是 §8 需求 3。
@@ -250,7 +250,7 @@ manifest 写法处理：
 | 项目写法 | vcpkg 的要求 | 本设计的做法 |
 |---|---|---|
 | `vcpkg-configuration.json` 的 `default-registry` 为 `git` 类型（带 `baseline`） | 工具自己把 registry 取到它的每用户 registries 缓存，所有项目共享 | 什么都不用做（`X_VCPKG_REGISTRIES_CACHE` 可覆盖）【待验证：各平台默认路径】 |
-| `vcpkg.json` 的 `builtin-baseline`（GalTranslPP 就是这种） | `VCPKG_ROOT` 必须是含该 baseline 提交的 microsoft/vcpkg 克隆 | 见下 |
+| `vcpkg.json` 的 `builtin-baseline`（验证工程就是这种） | `VCPKG_ROOT` 必须是含该 baseline 提交的 microsoft/vcpkg 克隆 | 见下 |
 
 `builtin-baseline` 的 `VCPKG_ROOT` 按顺序选：
 
@@ -275,7 +275,7 @@ manifest 写法处理：
 它要求的工具、已装工具三个版本，提示升级 `xim:vcpkg`；否则 baseline 一定在这个检出之前，两条都满足。这样**工具版本
 决定脚本版本、baseline 决定 port 版本**，不会因为上游 registry 前进而让所有项目一起失败（第 2 版的问题，见 §11）。
 
-不按发布标签检出：【已核实】GalTranslPP 的 baseline `ea1a7396`（2026-08-08）比最新标签 `2026.07.29` 晚 129 个提交，
+不按发布标签检出：【已核实】验证工程的 baseline `ea1a7396`（2026-08-08）比最新标签 `2026.07.29` 晚 129 个提交，
 但要求的工具同样是 2026-07-27。按标签检出会把一个完全兼容的项目判为"baseline 太新"。项目在两个标签之间选 baseline
 很常见。
 
@@ -351,7 +351,7 @@ int main() {
 - **uic / rcc**：`role = "source"`；rcc 的依赖用 `rcc --list` 在规划期取得资源清单作为 `input()`，或 depfile【待验证】。
 - **lrelease**：`.ts` → `.qm`，`role = "source"`（产物不参与编译），再 `mcpp::deploy` 到 `translations/`。
 - **lupdate**：会**改写源码树里的 `.ts`**，默认关闭；`o.translations.update_sources = true` 时作为 `role = "check"`、
-  `blocking = true` 的 action，lrelease 依赖它的 stamp（GalTranslPP 现行做法，§7.2）。与 emit "never writes into the
+  `blocking = true` 的 action，lrelease 依赖它的 stamp（验证工程现行做法，§7.2）。与 emit "never writes into the
   project tree"（specs R2.1）的精神一致：只在显式要求的 build 中写。
 - **链接**：`include_dir(<root>/include/Qt<Module>)`、`link_search(<root>/lib)`、`link_lib("Qt6<Module>")`、
   `QT_<MODULE>_LIB` 等定义；编译器族为 msvc/clang-cl 时加 `/Zc:__cplusplus`（Qt 6 对 MSVC 的要求；clang 驱动不需要）；
@@ -361,7 +361,7 @@ int main() {
   `platforms/` 等子目录（【已核实】构建程序的 `mcpp::deploy` 见 `docs/30` "Deploying what the program generated"，
   pack 将其放在 `bin/<to>/`，README `dist-apple` 行；清单侧 `[runtime] deploy` 的 `to` 语义见 `docs/04` §2.11）。
   `d3dcompiler_47.dll`、`opengl32sw.dll` 按 windeployqt 的默认行为可选部署（`o.deploy_software_gl`）。
-- **库成员的翻译**：库成员（如 GalTranslPP core）生成的 `.qm` 要进可执行成员的 `translations/`。【待验证】依赖方
+- **库成员的翻译**：库成员（如验证工程core）生成的 `.qm` 要进可执行成员的 `translations/`。【待验证】依赖方
   构建程序的 `mcpp::deploy` 是否随依赖进入可执行文件的 run/pack 布局；不成立时由可执行成员的 `translations` 选项
   直接列出库的 `.ts`。
 
@@ -374,7 +374,7 @@ int main() {
 
 ## 5. `deps-cmake`（第二批）
 
-项目里常见"带一个 CMake 子项目"（submodule/vendored），今天只能靠外部脚本先编好（GalTranslPP 的 ElaWidgetTools
+项目里常见"带一个 CMake 子项目"（submodule/vendored），今天只能靠外部脚本先编好（验证工程的 ElaWidgetTools
 就是：一个 Python 脚本调 CMake，Qt 路径写死在脚本里，§7.1）。插件把 configure / build / install 作为三条 action
 （`role = "check"` 链，最后一条 blocking），安装到 `out_dir` 下的前缀，再按 §3.3(2) 的方式映射。
 
@@ -442,7 +442,7 @@ libraries are available under commercial licenses from The Qt Company, or under 
 由于规则只链接显式列出的模块，项目不会误用。包说明里写明这一点，并列出 LGPL 与 GPL-only 模块。
 
 - 调试符号包（`debug_information`、`debug_info`）不收（基础包的调试符号解压 4.05 GB）。
-- **首个版本 6.11.1**（GalTranslPP 的要求），平台先做 win64_msvc2022_64，再补 linux、macos、arm64。
+- **首个版本 6.11.1**（验证工程的要求），平台先做 win64_msvc2022_64，再补 linux、macos、arm64。
 - 【已核实】下载方式：6.11 起在线仓库按架构分目录（`qt6_6111/qt6_6111_msvc2022_64/Updates.xml`），aqtinstall 3.3.0 不认；
   每个归档以安装前缀为根（`bin/`、`include/`、`lib/`）。本设计的验证 CI 已按此方式装成功。
 - 许可：xim 只是从 Qt 官方仓库下载；包说明注明 Qt 的 LGPL 义务（动态链接、允许替换）。
@@ -460,14 +460,14 @@ libraries are available under commercial licenses from The Qt Company, or under 
 - 许可：`7z.dll` 为 LGPL，RAR 解压部分带 unRAR 限制；包说明里注明。
 - `xim:7zip` 要做的只有一件事：在包说明里写明 Windows 安装目录中 `7z.dll` 的位置是约定（不是偶然），这样项目可以依赖它。
 
-## 7. 真实案例：GalTranslPP 迁移的成本与收益
+## 7. 真实案例：验证工程迁移的成本与收益
 
-本节回答："§3–§6 都做完以后，一个真实项目要花多少才能用上，能省下什么。"数据全部来自 GalTranslPP 上游 `main`
-2c7d6bf 的源码计数、它的 `how-to-build.md`、子模块源码和本设计的验证 CI（Sunrisepeak/GalTranslPP PR #1）。
+本节回答："§3–§6 都做完以后，一个真实项目要花多少才能用上，能省下什么。"数据全部来自验证工程上游 `main`
+2c7d6bf 的源码计数、它的 `how-to-build.md`、子模块源码和本设计的验证 CI（验证工程 PR #1）。
 
 ### 7.1 现状（【已核实】源码计数）
 
-工作区 5 个成员：`GalTranslPP`（core，库）、`GPPVersion`（库）、`GPPCLI`、`GPPGUI`、`Updater`（可执行）。依赖关系：
+工作区 5 个成员：`验证工程`（core，库）、`GPPVersion`（库）、`cli`、`gui`、`Updater`（可执行）。依赖关系：
 CLI、GUI 依赖 core；**Updater 不依赖 core，但自己链接 `bit7z`**。
 
 | 部分 | 规模 | 做什么 |
@@ -482,7 +482,7 @@ CLI、GUI 依赖 core；**Updater 不依赖 core，但自己链接 `bit7z`**。
 | 子模块 ElaWidgetTools | CMake 项目 | 用自带的 `build.py` 编；Qt 路径 `D:/Qt/6.11.1/msvc2022_64` **写死在脚本里**；需要 `WidgetsPrivate` |
 | 子模块 pybind11（fork） | 附带 Python 头文件与 `python312.lib` | 与仓库内 `Python-3.12.10-embed-amd64.zip` 配套；代码里写死 `BaseConfig/Python-3.12.10-embed-amd64` |
 | vcpkg | 22 个 port，自定义 triplet `gpp-x64-windows-release`，2 个 overlay port（mecab、proxy） | `builtin-baseline` 写法 |
-| Qt 用量 | 45 个含 `Q_OBJECT` 的头文件（全在 GPPGUI）、1 个 `.qrc`、4 个 `.ts`、0 个 `.ui` | 模块：Core、Gui、Widgets、Network；无附加模块 |
+| Qt 用量 | 45 个含 `Q_OBJECT` 的头文件（全在 gui）、1 个 `.qrc`、4 个 `.ts`、0 个 `.ui` | 模块：Core、Gui、Widgets、Network；无附加模块 |
 
 新开发者的准备工作（`how-to-build.md`，111 行）：
 
@@ -512,10 +512,10 @@ CI（验证 workflow）：Qt 靠一段 25 行的内联 Python 从 Qt 仓库下�
 | vcpkg 克隆 + bootstrap | `xim:vcpkg` + 托管克隆（§3.6） | 无 |
 | VS Build Tools | mcpp 侧 `sysroot = "xim:msvc@…"`；vcpkg 侧**只有** `toolchain::msvc_xim` 能免装 VS | §3.3(4)【待验证】chainload 细节 |
 | CMake、Python（开发者手装） | CMake 由插件声明；Python 只剩 embed 包解压（可改成一条用 `xim:7zip` 的 action） | 无 |
-| **不替代**：`runtime-stage` + 发布布局代码 | 保留。`Release/GPPCLI`、`GPPGUI`、`GUICORE`、私有镜像目录是这个项目的发布约定，不是通用能力 | 只有改为从 `mcpp pack` 产物派生布局，或引擎提供 §8 需求 2，`runtime-stage` 才能删 |
+| **不替代**：`runtime-stage` + 发布布局代码 | 保留。`Release/cli`、`gui`、`GUICORE`、私有镜像目录是这个项目的发布约定，不是通用能力 | 只有改为从 `mcpp pack` 产物派生布局，或引擎提供 §8 需求 2，`runtime-stage` 才能删 |
 | **不替代**：pybind11 fork 附带的 Python | 保留。换成 `xim:python` 会让头文件（3.12.13）与运行时 embed 包（3.12.10）的补丁版本不一致，而版本号写死在代码里 | 若要换，先把 embed 包也改由 xim 提供，属项目自己的决定 |
 
-### 7.3 迁移成本（插件发布之后，GalTranslPP 一侧，一人）
+### 7.3 迁移成本（插件发布之后，验证工程一侧，一人）
 
 | 阶段 | 内容 | 人日 | 前提 |
 |---|---|---|---|
@@ -525,7 +525,7 @@ CI（验证 workflow）：Qt 靠一段 25 行的内联 Python 从 Qt 仓库下�
 | D（可选） | 发布改为从 `mcpp pack` 派生，删 `runtime-stage`；vcpkg 改 `toolchain::msvc_xim` 实现免装 VS | 1–2 | §8 需求 2 或 pack 方案；§3.3(4) 验证通过 |
 | **合计** | A–C 必做 | **3.5–4.5** | D 另计 1–2 |
 
-对比：通用插件本身 27–37 人日（§9），GalTranslPP 只占其中 3.5–4.5。第二个及以后的项目不再分摊插件开发，只付
+对比：通用插件本身 27–37 人日（§9），验证工程只占其中 3.5–4.5。第二个及以后的项目不再分摊插件开发，只付
 自己的 A–C。
 
 ### 7.4 收益（A–C 完成后）
@@ -557,12 +557,12 @@ CI（验证 workflow）：Qt 靠一段 25 行的内联 Python 从 Qt 仓库下�
 | # | 需求 | 为什么 | 没有它时的退路 |
 |---|---|---|---|
 | 1 | 构建程序可感知"规划模式"（或 emit 时构建程序失败只降级） | 原则 3/4 目前靠插件自律；任何项目的构建程序出错都会让 IDE 退回兜底模型 | 插件自律：缺失只 warning |
-| 2 | 构建程序声明运行时搜索目录（run 的 PATH、pack 的 PE 闭包），且项目能在 build 时取得闭包结果 | vcpkg/Qt 的 DLL 在各自 `bin/`；GalTranslPP 的 `runtime-stage` 就是在自己补这一块 | 逐个 `mcpp::deploy`；项目保留自己的闭包工具 |
+| 2 | 构建程序声明运行时搜索目录（run 的 PATH、pack 的 PE 闭包），且项目能在 build 时取得闭包结果 | vcpkg/Qt 的 DLL 在各自 `bin/`；验证工程的 `runtime-stage` 就是在自己补这一块 | 逐个 `mcpp::deploy`；项目保留自己的闭包工具 |
 | 3 | blocking action 对依赖方也生效，或工作区级 setup action | 多成员工作区共用一次安装 | 每个成员各一条安装边（§3.3(5)） |
 | 4 | `mcpp::action` 设置环境变量 | 外部工具普遍靠环境变量配置 | 插件自带启动器（本设计采用） |
 
 另：`[workspace.profile.*]` 继承与本插件无关，但同一消费者会遇到（【已核实】`docs/07` §4.1、specs §9 只允许三类继承；
-GalTranslPP 5 个成员重复写了同样的 `[profile.release]`/`[profile.fast-release]`）。
+验证工程5 个成员重复写了同样的 `[profile.release]`/`[profile.fast-release]`）。
 
 ## 9. 计划与工作量（一人估算，含 fixtures 与 CI，Windows 优先）
 
@@ -572,10 +572,10 @@ GalTranslPP 5 个成员重复写了同样的 `[profile.release]`/`[profile.fast-
 | Phase 1 | `xim:vcpkg`、`xim:qt`（Windows）、`deps-vcpkg` + `mcpp-vcpkg`（registry 选择、按工具检出、锁、目录隔离、三种工具链）+ fixtures | 9–12 |
 | Phase 2 | `rules-qt` + fixtures；`xim:qt-addons`；`xim:qt*` Linux/macOS | 8–10 |
 | Phase 3 | `deps-cmake` + `mcpp-cmake` + fixtures | 3.5–5.5 |
-| 消费者验证 | GalTranslPP 迁移 A–C（§7.3，fork 分支 + 其 CI） | 3.5–4.5 |
+| 消费者验证 |验证工程迁移 A–C（§7.3，fork 分支 + 其 CI） | 3.5–4.5 |
 | **合计** | | **27–37**（第 2 版 24–33；增加的部分见 §11） |
 
-**验证场已就绪**：Sunrisepeak/GalTranslPP PR #1 的 workflow 已在 windows-2025 上搭好 xlings、mcpp 2026.9.25.1、
+**验证场已就绪**：验证工程 PR #1 的 workflow 已在 windows-2025 上搭好 xlings、mcpp 2026.9.25.1、
 LLVM 22.1.8、Qt 6.11.1（直接读 Qt 仓库）、vcpkg（`gpp-x64-windows-release`，22 个 port）；【已核实】vcpkg 冷安装
 51.6 分钟，结果已缓存。
 
@@ -595,7 +595,7 @@ LLVM 22.1.8、Qt 6.11.1（直接读 Qt 仓库）、vcpkg（`gpp-x64-windows-rele
 
 1. **托管克隆的检出版本**（§3.6）：第 2 版让克隆跟随上游最新、再比较工具版本。上游 registry 一旦要求比 `xim:vcpkg`
    更新的工具，**所有项目会同时失败**，直到 xim 跟进。改为检出"主干上与已装工具匹配的最后一个提交"。本版起草时
-   曾写成"与工具匹配的最新发布标签"，用 GalTranslPP 的 baseline 实测（比最新标签晚 129 个提交、工具要求相同）后改掉。
+   曾写成"与工具匹配的最新发布标签"，用验证工程的 baseline 实测（比最新标签晚 129 个提交、工具要求相同）后改掉。
 2. **用户已有的 `VCPKG_ROOT` 改为只读**（§3.6、原则 5）：第 2 版会对它 `git fetch`，等于改写用户的仓库。
 3. **按项目隔离 buildtrees/packages**（§3.3(1)）：第 2 版没提，共享克隆时两个项目同时编同一个 port 会互相覆盖。
 4. **二进制缓存改用 vcpkg 默认位置**（§3.3(1)）：第 2 版放在 mcpp 缓存目录，与 D7 的"复用用户已有的 vcpkg"矛盾。
@@ -603,9 +603,9 @@ LLVM 22.1.8、Qt 6.11.1（直接读 Qt 仓库）、vcpkg（`gpp-x64-windows-rele
    目录位置带来的实际好处是与默认二进制缓存同级。
 5. **"免装 VS"的真实条件**（§3.3(4)）：第 2 版把"工具链一致"当作纯可选项，并在 §6.1 暗示 `xim:msvc` 就能免装 VS。
    已核实 vcpkg 默认路线必须找到 VS 实例，只有 chainload 能绕开；新增 `toolchain::msvc_xim`。
-6. **工作区默认做法**（§3.3(5)）：由"共享 stamp 技巧"改为"每个成员各一条安装边"，更简单，且 GalTranslPP 的
+6. **工作区默认做法**（§3.3(5)）：由"共享 stamp 技巧"改为"每个成员各一条安装边"，更简单，且验证工程的
    Updater 正好需要。
-7. **§7 重写**：第 2 版的 GalTranslPP 样例写了 `xim:python = 3.12.13`（与 embed 包 3.12.10 不一致）、称可删除约 600 行
+7. **§7 重写**：第 2 版的验证工程样例写了 `xim:python = 3.12.13`（与 embed 包 3.12.10 不一致）、称可删除约 600 行
    （`runtime-stage` 和发布布局其实删不掉）、完全没提 ElaWidgetTools（`deps-cmake` 对这个项目不是可有可无）。
 8. 附加模块合为一个包（D6），§0、§4.2、§4.3、§6.1、§6.2 同步；新增 `rules-qt-xim-addons`。
 9. 小项：自定义 triplet 包装；`use()` 返回前缀；`private_modules`；库成员翻译；rcc 依赖；fixtures 增加 4 个。

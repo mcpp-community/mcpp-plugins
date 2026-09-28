@@ -506,7 +506,7 @@ inline prefix use(const options& opt = {}) {
         // installation root itself (`<root>/vcpkg/vcpkg-running.lock`), and
         // `--x-wait-for-lock` makes a second installation of the same root --
         // two workspace members, run concurrently -- wait for the first
-        // instead of failing (measured on GalTranslPP under 0.15.0); its build
+        // instead of failing (measured on the validation project under 0.15.0); its build
         // and package trees go to a short directory under vcpkg's per-user
         // directory, because a port's build nests deep and Windows tools still
         // enforce MAX_PATH.

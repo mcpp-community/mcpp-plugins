@@ -1,6 +1,6 @@
-# 版本号、资源命名、locale 与 GalTranslPP 构建体验评估
+# 版本号、资源命名、locale 与验证工程构建体验评估
 
-日期：2026-09-27。范围：0.15.x 交付遗留的三个问题的最佳形态，以及 GalTranslPP PR2 相对 VS 与早期 mcpp 构建的对比。
+日期：2026-09-27。范围：0.15.x 交付遗留的三个问题的最佳形态，以及验证工程PR2 相对 VS 与早期 mcpp 构建的对比。
 所有结论均经本地实验或源码核对；证据列于各节末尾。
 
 ## 1. Qt 版本号 6.11.1.1
@@ -18,7 +18,7 @@
 ### 1.2 结论（2026-09-27 修订）
 
 6.11.1 与 6.11.1.1 均于 2026-09-26 发布，项目 CI 之外没有消费者。持有修正前 6.11.1 载荷的只有三处：
-plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订号的价值在于保护已有用户，此处不存在该前提。
+plugins CI 缓存、验证工程CI 缓存与本机沙箱，均可清除。修订号的价值在于保护已有用户，此处不存在该前提。
 
 - **最佳形态：只保留一个键 `6.11.1`，内容为修正后的配方；删除 `6.11.1.1`。** 消费方写上游版本 `6.11.1`，xlings 与 mcpp 都按字面解析，两侧一致。
 - 清理：两处 CI 的缓存 key 升级，本机沙箱删除旧载荷。
@@ -59,7 +59,7 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 
 ### 3.2 影响
 
-- GalTranslPP：无影响（仅 Windows）。
+-验证工程：无影响（仅 Windows）。
 - Linux 上的 Qt 程序：Qt 6 在 Unix 上的 local8Bit 固定为 UTF-8，Qt 自身文本处理不受影响；受影响的是程序直接调用的 C 库多字节与宽字符函数（`mbstowcs`、`std::locale("")` 等）。
 
 ### 3.3 最佳形态
@@ -71,7 +71,7 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 
 两项完成后无需 `LOCPATH`，`mcpp run` 与 `mcpp pack` 产物行为一致。不采用 `LOCPATH` 注入方案：它对打包后由用户直接启动的程序无效。
 
-## 4. GalTranslPP：VS → mcpp → 优化后的 mcpp
+## 4.验证工程：VS → mcpp → 优化后的 mcpp
 
 ### 4.1 首次构建所需操作（Windows）
 
@@ -80,7 +80,7 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 | 手动安装 | VS 2026 IDE（指定 MSVC v14.50）、CMake、git、vcpkg（克隆、bootstrap、integrate）、Qt 在线安装器（需账户）、Qt VS Tools 插件 | xlings、mcpp、VS Build Tools、CMake、Python、git、vcpkg（克隆、bootstrap、PATH）、Qt 在线安装器 | git、xlings、VS Build Tools |
 | Qt 路径配置 | 3 处：Qt VS Tools 导入、ElaWidgetTools `CMakeLists.txt`、vcxproj `QtInstall` | 2 处：`build.py`、`qt-root.txt` | 0 处 |
 | 依赖构建 | 手动运行 `build.bat` 编译 ElaWidgetTools，并检查 3 个产物 | 手动运行 `build.py` 与 `vcpkg install --triplet …` | 由构建完成（`deps-cmake`、`deps-vcpkg`） |
-| 构建命令 | IDE 中切换 Release 并逐项目生成 | `mcpp build -p GPPCLI/GPPGUI` | 同左 |
+| 构建命令 | IDE 中切换 Release 并逐项目生成 | `mcpp build -p cli/gui` | 同左 |
 | 运行时部署 | `Release.bat` | 解压 Python、`Release.py`、`windeployqt` ×2 | 由构建完成：Qt 库、插件与翻译、Ela、vcpkg DLL、7z.dll、Python、OpenCC、BaseConfig、VC++ 运行时 |
 | 分发 | 手动整理 | 手动整理 | `mcpp pack --format dir` |
 | 手动步骤合计 | 约 12 | 约 13 | 4（安装 xlings、安装 mcpp、克隆、`mcpp build`） |
@@ -91,18 +91,18 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 |---|---|---|---|
 | vcpkg 二进制缓存 | 未命中，独立安装 51 分钟 | 命中 678 MB，缺失部分在 emit 中源码编译（保存后增至 999 MB） | 命中 999 MB，完整 |
 | `mcpp emit`（全新 checkout） | 0.4 分钟（依赖已预装） | 53 分钟 | 4.8 分钟 |
-| GPPCLI（fast-release） | — | 6.5 分钟 | 6.3 分钟 |
-| GPPGUI（fast-release） | — | 18.0 分钟 | 19.7 分钟 |
+| cli（fast-release） | — | 6.5 分钟 | 6.3 分钟 |
+| gui（fast-release） | — | 18.0 分钟 | 19.7 分钟 |
 | 无改动的第二次构建 | — | 0.8 分钟，无安装 | 0.8 分钟，无安装 |
 
 更正：53 → 4.8 分钟的主要原因是 vcpkg 二进制缓存从部分命中变为完整命中，而非移除 mcpp-deps。
 
 全新 checkout 上 emit 的 4.8 分钟包含：
 
-1. **宿主工具构建**：GPPGUI 以 `tools = ["Updater"]` 取得 Updater.exe，emit 为此以宿主身份完整构建 Updater（Qt 与 vcpkg 程序），runtime_stage 同理。
+1. **宿主工具构建**：gui 以 `tools = ["Updater"]` 取得 Updater.exe，emit 为此以宿主身份完整构建 Updater（Qt 与 vcpkg 程序），runtime_stage 同理。
 2. **第二套 LLVM**：宿主工具构建不继承工作区的 `[toolchain] windows = "llvm@22.1.8"`，日志显示 "no toolchain configured — installing llvm@20.1.7"，因此额外下载一套 LLVM 并编译其 std 模块。
 3. **vcpkg 安装**：Updater 的构建会执行 vcpkg install，此时从二进制缓存恢复约 22 个库。
-4. **构建程序**：5 个成员的 build.mcpp 及其 host 模块（mcpp.plugins、gpp.build）各编译一次。
+4. **构建程序**：5 个成员的 build.mcpp 及其 host 模块（mcpp.plugins、build）各编译一次。
 
 已构建过一次后，宿主工具按"包源码 + 宿主工具链"缓存，vcpkg 前缀已存在，构建程序显示 "up to date (cached)"，因此 emit 预计为秒级。
 同条件下的"第二次构建"为 0.8 分钟，可作旁证；emit 本身未单独测量。
@@ -130,7 +130,7 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 | G4 | 仍需手动安装 VS Build Tools（vcpkg 的 MSVC triplet 与 ElaWidgetTools） | 长期项：vcpkg chainload mcpp 的 clang；现阶段保留为文档前提 |
 | G5 | 成员清单中 7z 的注释位于 Qt 条目之上 | 随 G1 修正 |
 | G6 | PR2 为验证分支（`ci(temporary)` 提交） | 向上游提交时压缩为一次迁移提交，CI 工作流按上游需要保留或删除 |
-| G7 | emit 的首次开销来自宿主工具与第二套 LLVM（§4.2） | mcpp：宿主工具继承工作区工具链；提供目标产物依赖。在此之前，GalTranslPP 可先在 CI 中固定默认工具链 |
+| G7 | emit 的首次开销来自宿主工具与第二套 LLVM（§4.2） | mcpp：宿主工具继承工作区工具链；提供目标产物依赖。在此之前，验证工程可先在 CI 中固定默认工具链 |
 
 ### 4.5 结论
 
@@ -156,7 +156,7 @@ plugins CI 缓存、GalTranslPP CI 缓存与本机沙箱，均可清除。修订
 | §2 brotli | 两端均为规范名，内容一致；GitHub 的 `-r1` 已删除 |
 | §3 locale | 已提交 openxlings/xlings#621 |
 | G1、G5 | 已完成：`how-to-build.md` 用 `> 注:` 列出 Qt、vcpkg、vcpkg 缓存、工具链与插件版本的配置方式 |
-| G2 | 部分成立：成员以 `.workspace = true` 继承插件版本；`gpp.build` 不是成员，无法继承（mcpp#714）；`xim:qt-base` 仍逐成员声明（mcpp#713） |
+| G2 | 部分成立：成员以 `.workspace = true` 继承插件版本；`build` 不是成员，无法继承（mcpp#714）；`xim:qt-base` 仍逐成员声明（mcpp#713） |
 | G3 | 属预期行为：不使用 xim 提供的 Qt 时，注释掉声明，再设置 `QT_ROOT_DIR` 或 `gpp::qt_root` |
 | G4 | 不变：仍需 VS Build Tools |
 | G7 | 已提交 mcpp#710（宿主工具不使用工作区工具链）、#711（缺少目标产物依赖） |

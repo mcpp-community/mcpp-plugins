@@ -171,7 +171,7 @@ vcpkg_workspace() {
     echo "ok: two members that share no dependency both installed and linked one prefix"
     # The two installations may run at once; vcpkg's own lock on the root makes
     # the second wait only when asked to, and fails it otherwise ("failed to
-    # take lock", measured on GalTranslPP under 0.15.0).
+    # take lock", measured on the validation project under 0.15.0).
     [ "$(grep -rl -- '--x-wait-for-lock' --include=build.ninja . | wc -l)" -ge 2 ] ||
         fail "a member's installation does not wait for the root's lock"
     echo "ok: each member's installation waits for another one of the same root"

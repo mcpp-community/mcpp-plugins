@@ -1,6 +1,6 @@
 # Fixture: a package that enables `rules-qt` only to import `mcpp.rules.qt`,
 # the shape of a library of build logic that other packages' build programs
-# import (GalTranslPP's `gpp.build`). It writes no `build.mcpp`, has no `.ui`,
+# import (a project's own build module). It writes no `build.mcpp`, has no `.ui`,
 # `.qrc` or `.ts`, and declares no Qt, so mcpp synthesises no build program
 # for it and nothing reports a missing SDK (mcpp 2026.9.27.1; mcpp#715).
 [package]
