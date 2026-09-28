@@ -56,7 +56,11 @@ env:
   # applies the host's own `[target.<triple>]` row (mcpp#704), where the Qt
   # fixtures state their Linux C++ runtime, and a package with no Qt source
   # gets no synthesised build program (mcpp#715), which qt-import-only asserts.
-  MCPP_VERSION: 2026.9.27.1
+  #
+  # 2026.9.28.3 IS WHAT 0.17.0 NEEDS, and the package floor states it: the
+  # build information `mcpp.plugins.toolset` reads, `mcpp::report`, and one
+  # placement edge for many files (mcpp#734).
+  MCPP_VERSION: 2026.9.28.3
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
