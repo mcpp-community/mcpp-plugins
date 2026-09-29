@@ -361,7 +361,11 @@ qt_import_only() {
     rm -rf target
     mkdir -p target/ci
     "$MCPP" build 2>&1 | tee target/ci/build.log
-    ! grep -q 'build.mcpp running' target/ci/build.log ||
+    # A build program that ran was compiled first, into the package's
+    # target/: the program file is the evidence. The line mcpp prints for it
+    # is not (mcpp 2026.9.29.5 replaced `build.mcpp running <package>` with one
+    # line per program, and a search for the old words would pass either way).
+    ! find target -name 'build.mcpp.bin' -o -name 'build.mcpp.exe' | grep -q . ||
         fail "mcpp synthesised a build program for a package with no Qt source (mcpp#715)"
     ! grep -q 'no Qt SDK' target/ci/build.log ||
         fail "a package with no Qt source reported a missing SDK"
