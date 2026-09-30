@@ -1,0 +1,21 @@
+# Fixture: a CMake subproject whose installation names its own prefix -- a
+# package configuration file written with the absolute install path -- so it
+# cannot be copied elsewhere, and deps-cmake builds it but does not keep it.
+[package]
+name        = "cmake-not-relocatable"
+version     = "0.1.0"
+description = "Fixture: an installation that names its own prefix is built, not kept"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-cmake"], host-module = true }
+
+[targets.cmake-not-relocatable]
+kind = "bin"
+main = "src/main.cpp"

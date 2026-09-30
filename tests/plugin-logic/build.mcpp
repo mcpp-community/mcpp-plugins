@@ -216,9 +216,30 @@ int main(int argc, char** argv) {
           } },
 
         // ── deps-cmake ──────────────────────────────────────────────────────
-        { "cmake: a Visual Studio toolset keeps the Visual Studio generator on that instance",
+        { "cmake: a Visual Studio toolset is named, with Ninja, by default",
           with_subproject(t::row::windows_visual_studio("14.43.34808", "14.44.35207")),
           [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              c.expect(script.find("[==[Ninja]==]") != std::string::npos, "the Ninja generator is used");
+              c.expect(script.find("-DCMAKE_CXX_COMPILER=") != std::string::npos
+                       && script.find("cl.exe") != std::string::npos, "cl.exe is named");
+              c.expect(script.find("CMAKE_GENERATOR_INSTANCE") == std::string::npos,
+                       "no Visual Studio generator is pointed at the instance");
+              c.expect(r.line("mcpp:action=", {"deps-cmake:greet"}).find("\"INCLUDE=") != std::string::npos,
+                       "the tools run with the engine's environment");
+          } },
+
+        { "cmake: generator visual_studio keeps the Visual Studio generator on that instance",
+          with_subproject(t::row::windows_visual_studio("14.43.34808", "14.44.35207")),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.generator = mcpp::deps::cmake::options::generator_kind::visual_studio;
+              return cmake_use(o);
+          },
           [](const t::result& r, t::checker& c) {
               const auto script = r.file("out/deps-cmake/greet/greet.cmake");
               c.expect(script.find("[==[-DCMAKE_GENERATOR_INSTANCE=") != std::string::npos,
@@ -228,6 +249,8 @@ int main(int argc, char** argv) {
               c.expect(script.find("[==[Ninja]==]") == std::string::npos, "the generator stays CMake's default");
               c.expect(script.find("MultiThreaded$<$<CONFIG:Debug>:Debug>DLL") != std::string::npos,
                        "the C runtime follows the program's (dynamic)");
+              c.expect(script.find("-DCMAKE_GENERATOR_INSTANCE=<instance>") != std::string::npos,
+                       "the key states the instance by the toolset it provides");
           } },
 
         { "cmake: a managed toolset is named, with Ninja and mcpp's ninja",
@@ -263,6 +286,96 @@ int main(int argc, char** argv) {
               const auto script = r.file("out/deps-cmake/greet/greet.cmake");
               c.expect(script.find("[==[Ninja]==]") == std::string::npos, "no generator is imposed");
               c.expect(script.find("gcc/bin/g++") == std::string::npos, "the row's compiler is not named");
+          } },
+
+        { "cmake: the compiler and the generator are chosen by the argument's name",
+          t::row::linux_gcc(),
+          [] {
+              namespace c = mcpp::deps::cmake;
+              auto say = [](const char* what, bool v) { std::printf("%s=%d\n", what, v ? 1 : 0); };
+              using args = std::vector<std::string>;
+              say("launcher", c::chooses_compiler(args{"-DCMAKE_CXX_COMPILER_LAUNCHER=sccache"}));
+              say("target", c::chooses_compiler(args{"-DCMAKE_C_COMPILER_TARGET=x86_64-linux-gnu"}));
+              say("compiler", c::chooses_compiler(args{"-DCMAKE_CXX_COMPILER=/opt/cxx"}));
+              say("typed", c::chooses_compiler(args{"-DCMAKE_CXX_COMPILER:FILEPATH=/opt/cxx"}));
+              say("spaced", c::chooses_compiler(args{"-D", "CMAKE_C_COMPILER=/opt/cc"}));
+              say("toolchain_file", c::chooses_compiler(args{"-DCMAKE_TOOLCHAIN_FILE=t.cmake"}));
+              say("toolchain", c::chooses_compiler(args{"--toolchain", "t.cmake"}));
+              say("toolchain_eq", c::chooses_compiler(args{"--toolchain=t.cmake"}));
+              say("platform", c::chooses_generator(args{"-DCMAKE_GENERATOR_PLATFORM=x64"}));
+              say("gen_toolset", c::chooses_generator(args{"-DCMAKE_GENERATOR_TOOLSET=v143"}));
+              say("dash_g", c::chooses_generator(args{"-G", "Ninja"}));
+              say("generator", c::chooses_generator(args{"-DCMAKE_GENERATOR=Ninja"}));
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              for (auto const* no : {"launcher=0", "target=0", "platform=0", "gen_toolset=0"})
+                  c.expect(r.has_line(no), std::string(no) + ": the argument refines, it does not choose");
+              for (auto const* yes : {"compiler=1", "typed=1", "spaced=1", "toolchain_file=1", "toolchain=1",
+                                      "toolchain_eq=1", "dash_g=1", "generator=1"})
+                  c.expect(r.has_line(yes), std::string(yes) + ": the argument chooses");
+          } },
+
+        { "cmake: a launcher in cache_args keeps the named toolset and Ninja",
+          with_subproject(t::row::windows_managed()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.cache_args = {"-DCMAKE_CXX_COMPILER_LAUNCHER=sccache"};
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              c.expect(script.find("[==[Ninja]==]") != std::string::npos, "the Ninja generator is used");
+              c.expect(script.find("cl.exe") != std::string::npos, "cl.exe is named");
+              c.expect(script.find("[==[-DCMAKE_CXX_COMPILER_LAUNCHER=sccache]==]") != std::string::npos,
+                       "the launcher reaches CMake");
+          } },
+
+        { "cmake: a named toolset's installation is keyed without a path of the machine",
+          with_subproject(t::row::windows_managed()),
+          [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              c.expect(script.find("AN INSTALLATION IS BUILT ONCE") != std::string::npos, "the script consults the cache");
+              const auto from = script.find("set(recipe [==[");
+              const auto to   = script.find("]==])", from);
+              const auto recipe = from == std::string::npos ? std::string() : script.substr(from, to - from);
+              c.expect(recipe.find("toolset msvc 14.44.35207; sdk 10.0.26100.0 (chain)") != std::string::npos,
+                       "the key states the toolset's identity");
+              c.expect(recipe.find("-DCMAKE_CXX_COMPILER=<cl.exe>") != std::string::npos,
+                       "the key names the compiler by its file name");
+              c.expect(recipe.find("arg <source>") != std::string::npos && recipe.find("-DCMAKE_INSTALL_PREFIX=<prefix>") != std::string::npos,
+                       "the subproject's directories are placeholders");
+              c.expect(recipe.find(r.root.generic_string()) == std::string::npos, "the key holds no path");
+              c.expect(script.find("set(listed [==[\nCMakeLists.txt\n") != std::string::npos,
+                       "the subproject's files are listed relative to it");
+          } },
+
+        { "cmake: a toolset CMake finds itself is not keyed",
+          with_subproject(t::row::linux_gcc()),
+          [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.file("out/deps-cmake/greet/greet.cmake").find("AN INSTALLATION IS BUILT ONCE")
+                       == std::string::npos, "the GCC row, where CMake finds its own compiler, is not keyed");
+          } },
+
+        { "cmake: cache off writes the uncached script",
+          with_subproject(t::row::windows_managed()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.cache = "off";
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              c.expect(!script.empty() && script.find("AN INSTALLATION IS BUILT ONCE") == std::string::npos,
+                       "the script does not consult the cache");
           } },
 
         // ── compatibility ───────────────────────────────────────────────────
