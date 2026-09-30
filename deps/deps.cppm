@@ -99,8 +99,9 @@ inline std::filesystem::path find_upward(std::filesystem::path start, std::strin
 }
 
 // Every regular file under `dir`, for an action's inputs. Version-control and
-// build-output directories are skipped: they change on every build and are no
-// part of what the installer reads.
+// build-output directories are skipped, and so is the output directory of any
+// other build system (`mcpp::plugins::tree`, 0.18.1): they change on every
+// build and are no part of what the installer reads.
 inline std::vector<std::string> files_under(const std::filesystem::path& dir) {
     std::vector<std::string> out;
     std::error_code ec;
@@ -112,7 +113,8 @@ inline std::vector<std::string> files_under(const std::filesystem::path& dir) {
         const auto name = it->path().filename().string();
         if (it->is_directory(ec)) {
             if (name == ".git" || name == "target" || name == "out" || name == "build" ||
-                name == "Install" || name == "vcpkg_installed")
+                name == "Install" || name == "vcpkg_installed" ||
+                mcpp::plugins::tree::build_output(it->path()))
                 it.disable_recursion_pending();
             continue;
         }
