@@ -1,4 +1,5 @@
-// The deps members' decisions, one case per decision (mcpp#734, design §6).
+// The deps members' decisions, and the files rules-qt reads by default, one
+// case per decision (mcpp#734, design §6).
 // Each case states a build context, runs the member, and reads the action it
 // declared and the files it wrote. Nothing is installed or run.
 import std;
@@ -8,6 +9,7 @@ import mcpp.plugins.toolset;
 import mcpp.deps;          // the 0.16.0 names, for the compatibility case
 import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
+import mcpp.rules.qt;
 
 namespace t  = mcpp::plugins::testing;
 namespace ts = mcpp::plugins::toolset;
@@ -33,6 +35,28 @@ t::context with_subproject(t::context c) {
     return c.xpkg("xim", "cmake", "{root}/cmake")
         .file("cmake/bin/cmake").file("cmake/bin/cmake.exe")
         .file("pkg/greet/CMakeLists.txt", "project(greet C)\n");
+}
+
+// Output directories of other build systems inside a tree `at`: an MSBuild
+// intermediate directory, a CMake build directory, a tagged cache directory and
+// one whose tag lacks the signature. `x64/` itself is a directory of sources.
+t::context with_foreign_output(t::context c, const std::string& at, const std::string& ext) {
+    return c.file(at + "/x64/simd" + ext, "class Simd { Q_OBJECT };\n")
+        .file(at + "/x64/Release/app.tlog/app.lastbuildstate")
+        .file(at + "/x64/Release/qt/uic/ui_form" + ext, "class Ui { Q_OBJECT };\n")
+        .file(at + "/cmake-build-debug/CMakeCache.txt")
+        .file(at + "/cmake-build-debug/gen/stale" + ext, "class Stale { Q_OBJECT };\n")
+        .file(at + "/cache/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n")
+        .file(at + "/cache/blob" + ext)
+        .file(at + "/notag/CACHEDIR.TAG", "not a tag\n")
+        .file(at + "/notag/kept" + ext);
+}
+
+// A stand-in Qt SDK: the tools rules-qt looks for, never run.
+t::context with_qt(t::context c) {
+    for (auto const* tool : { "moc", "lupdate", "lrelease" })
+        c = c.file(std::string("qt/bin/") + tool).file(std::string("qt/bin/") + tool + ".exe");
+    return c.file("pkg/widget.h", "class Widget { Q_OBJECT };\n").file("pkg/app.ts");
 }
 
 int vcpkg_use(mcpp::deps::vcpkg::options o = {}) {
@@ -376,6 +400,50 @@ int main(int argc, char** argv) {
                   if (f.ends_with("greet.cmake")) script = r.file(f);
               c.expect(!script.empty() && script.find("AN INSTALLATION IS BUILT ONCE") == std::string::npos,
                        "the script does not consult the cache");
+          } },
+
+        { "cmake: another build system's output directory in a subproject is not part of the key",
+          with_foreign_output(with_subproject(t::row::windows_managed()), "pkg/greet", ".c"),
+          [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              const auto from = script.find("set(listed [==[");
+              const auto listed = from == std::string::npos ? std::string()
+                                                            : script.substr(from, script.find("]==])", from) - from);
+              c.expect(listed.find("\nx64/simd.c\n") != std::string::npos, "a directory named x64 is listed");
+              c.expect(listed.find("\nnotag/kept.c\n") != std::string::npos,
+                       "a CACHEDIR.TAG without the signature marks nothing");
+              c.expect(listed.find("x64/Release") == std::string::npos, "an MSBuild intermediate directory is not");
+              c.expect(listed.find("cmake-build-debug") == std::string::npos, "a CMake build directory is not");
+              c.expect(listed.find("cache/") == std::string::npos, "a tagged cache directory is not");
+          } },
+
+        // ── rules-qt ────────────────────────────────────────────────────────
+        { "qt: moc and lupdate read the package's files, not another build system's output",
+          with_foreign_output(with_qt(t::row::linux_gcc()), "pkg", ".h"),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.i18n.ts = {"app.ts"};
+              o.i18n.update_sources = true;
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const auto u = r.line("mcpp:action=", {"qt:lupdate:app"});
+              c.expect(u.find("pkg/widget.h") != std::string::npos && u.find("pkg/x64/simd.h") != std::string::npos
+                       && u.find("pkg/notag/kept.h") != std::string::npos,
+                       "lupdate reads the package's sources, a directory named x64 among them");
+              c.expect(u.find("x64/Release") == std::string::npos && u.find("cmake-build-debug") == std::string::npos
+                       && u.find("pkg/cache/") == std::string::npos,
+                       "lupdate reads nothing another build system wrote");
+              c.expect(r.has_line("mcpp:action=", {"qt:moc:", "widget"}) && r.has_line("mcpp:action=", {"qt:moc:", "simd"}),
+                       "moc reads the package's headers");
+              c.expect(!r.has_line("mcpp:action=", {"qt:moc:", "ui_form"}) && !r.has_line("mcpp:action=", {"qt:moc:", "stale"}),
+                       "moc reads no header another build system wrote");
           } },
 
         // ── compatibility ───────────────────────────────────────────────────

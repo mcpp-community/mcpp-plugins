@@ -24,7 +24,7 @@ Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.18.0", features = ["deps-vcpkg"], host-module = true }
+plugins = { version = "0.18.1", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
@@ -197,7 +197,13 @@ One `prepare` action, `cmake -P` over a script the member writes
 (`<out dir>/deps-cmake/<name>.cmake`), configures, builds and installs the
 subproject into `<out dir>/deps-cmake/<name>/install`, its declared output
 directory; its inputs are the script and the subproject's files, so an edit to
-the subproject rebuilds it. The prefix is mapped as `deps-vcpkg` maps its own.
+the subproject rebuilds it. The subproject's files leave out `.git`, `target`,
+`out`, `build`, `Install`, `vcpkg_installed`, and from 0.18.1 the output
+directory of another build system inside it: one holding `CMakeCache.txt` (an
+IDE's `cmake-build-debug`), `.qmake.stash`, a `CACHEDIR.TAG` with the standard
+signature, or a `<name>.tlog` directory (MSBuild). A build made there by hand
+changes neither the inputs nor the key. The prefix is mapped as `deps-vcpkg`
+maps its own.
 `layout` names install directories other than `include/`, `lib/` and `bin/`;
 `prefix_path` becomes `CMAKE_PREFIX_PATH` (`mcpp::rules::qt::root()` for a
 subproject that finds Qt); `cache_args` carries `-D…`, `-G …` and a toolchain

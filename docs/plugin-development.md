@@ -52,7 +52,7 @@ mcpp-index refuses such a package.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.18.0", features = ["plugins-core"], host-module = true, reexport = true }
+plugins = { version = "0.18.1", features = ["plugins-core"], host-module = true, reexport = true }
 ```
 
 `reexport = true` is needed when the plugin's consumers import L2 modules in

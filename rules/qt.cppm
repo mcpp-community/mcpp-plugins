@@ -187,7 +187,9 @@ inline std::string tool(std::span<const std::filesystem::path> roots, const char
 }
 
 // Files under the package root with one of `exts`, skipping build output and
-// version control. Sorted, so the plan does not depend on directory order.
+// version control, and the output directories of another build system
+// (`mcpp::plugins::tree`, 0.18.1). Sorted, so the plan does not depend on
+// directory order.
 inline std::vector<std::filesystem::path> project_files(std::initializer_list<std::string_view> exts) {
     std::vector<std::filesystem::path> out;
     const std::filesystem::path root = mcpp::manifest_dir();
@@ -199,7 +201,8 @@ inline std::vector<std::filesystem::path> project_files(std::initializer_list<st
         const auto name = it->path().filename().string();
         if (it->is_directory(ec)) {
             if (name == "target" || name == ".git" || name == "mcpp-generated" ||
-                name == "vcpkg_installed" || name == "node_modules")
+                name == "vcpkg_installed" || name == "node_modules" ||
+                mcpp::plugins::tree::build_output(it->path()))
                 it.disable_recursion_pending();
             continue;
         }

@@ -6,7 +6,7 @@
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.18.0", features = ["rules-qt"], host-module = true }
+plugins = { version = "0.18.1", features = ["rules-qt"], host-module = true }
 
 # The SDK and its version are the project's declaration.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
@@ -69,7 +69,7 @@ A package that enables `rules-qt` only to import `mcpp.rules.qt`, and has no `bu
 | `private_modules` | modules whose private headers are included |
 | `moc`, `moc_headers` | `moc_scan::project_headers` (default) scans the package's headers by content; `moc_scan::listed` takes `moc_headers` only |
 | `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
-| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as an action whose output is the `.ts` it rewrites; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir` (default `<out dir>/qt/translations`); `qt_languages`: the linked modules' catalogs combined by `lconvert` into `qt_<language>.qm`, the file windeployqt writes |
+| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as an action whose output is the `.ts` it rewrites, reading `sources`, or when that is empty the package's C++ sources and headers, found by the walk that finds moc's headers; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir` (default `<out dir>/qt/translations`); `qt_languages`: the linked modules' catalogs combined by `lconvert` into `qt_<language>.qm`, the file windeployqt writes |
 | `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
 | `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
 | `root`, `extra_roots` | level 1 of the SDK lookup |
@@ -79,6 +79,7 @@ A package that enables `rules-qt` only to import `mcpp.rules.qt`, and has no `bu
 ## Behaviour
 
 - `moc` runs for every header under the package root that declares `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE`, and for a source that includes its own `<stem>.moc`; `uic` for `.ui`, `rcc` for `.qrc`, `lrelease` for `.ts`. Each is a `role = "source"` action with declared inputs; the outputs are under `<out dir>/qt/`.
+- The walk of the package root that finds those headers, and `lupdate`'s sources, leaves out `target`, `.git`, `mcpp-generated`, `vcpkg_installed`, `node_modules`, and from 0.18.1 the output directory of another build system, known by what it leaves there: `CMakeCache.txt` (a CMake build directory), `.qmake.stash` (qmake), a `CACHEDIR.TAG` with the standard signature, or a `<name>.tlog` directory (an MSBuild intermediate directory such as `x64/Release`, where a Visual Studio project writes its moc and uic output). Such a directory is known by what it holds, never by its name, so an `x64/` of sources is read.
 - The SDK's `bin/` (Windows) or `lib/` is a runtime search directory: the program's run path, `mcpp run`'s load path, `mcpp pack`'s closure, and on Windows the Qt DLLs placed beside the program. The plugin directories `deploy_plugins` names are deployed beside the program.
 - Under an MSVC compiler the rule adds `/Zc:__cplusplus` and `/permissive-`; on Linux, `-fPIC`. On macOS the modules are frameworks under `lib/`, compiled with `-F<root>/lib` and linked by their binaries' full paths. A resource compiled into a static library is registered with `Q_INIT_RESOURCE(<stem>)`.
 - A missing SDK, module or tool is a warning: the plan states what it can, and the build is where the absence fails.
