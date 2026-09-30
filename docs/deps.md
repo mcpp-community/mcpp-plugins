@@ -12,7 +12,7 @@ Module `mcpp.deps.vcpkg`; engine floor: 2026.9.28.3 (0.17.0, mcpp#734; 2026.9.26
 
 Module `mcpp.deps.cmake`; engine floor: 2026.9.28.3 (0.17.0, mcpp#734; 2026.9.26.2 before).
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, and maps the prefix as `deps-vcpkg` does
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, with the Ninja generator and the toolset mcpp resolved, and maps the prefix as `deps-vcpkg` does; an installation is kept outside the package and taken by any later build with the same key (0.18.0)
 
 ## `deps-archive`
 
@@ -24,7 +24,7 @@ Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.17.0", features = ["deps-vcpkg"], host-module = true }
+plugins = { version = "0.18.0", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
@@ -196,26 +196,106 @@ int main() {
 One `prepare` action, `cmake -P` over a script the member writes
 (`<out dir>/deps-cmake/<name>.cmake`), configures, builds and installs the
 subproject into `<out dir>/deps-cmake/<name>/install`, its declared output
-directory; its inputs are the script and the subproject's files, so an edit to the subproject rebuilds it. The prefix is mapped as `deps-vcpkg`
-maps its own. `layout` names install directories other than `include/`, `lib/`
-and `bin/`; `prefix_path` becomes `CMAKE_PREFIX_PATH` (`mcpp::rules::qt::root()`
-for a subproject that finds Qt); `cache_args` carries `-D…`, `-G …` and a
-toolchain file. The subproject is compiled with the toolset mcpp resolved
-(0.17.0), by the mechanisms `deps-vcpkg` uses: under `instance` CMake's default
-generator (Visual Studio) is kept and pointed at the instance
-(`CMAKE_GENERATOR_INSTANCE`) and the toolset version (`-T version=`, when it is
-not the instance's default); under `chain` the Ninja generator runs with mcpp's
-own ninja (`mcpp::ninja_program()`), the compilers are named by path, and the
-action runs with the tools' environment and their directories first on `PATH`.
-On the MSVC ABI `CMAKE_MSVC_RUNTIME_LIBRARY` follows the program's C runtime
-(policy CMP0091). Each toolset statement configures its own build directory,
-because CMake refuses a cache made with another generator or instance; the
-directory 0.16.0 configured stays `build/`. A compiler, a toolchain file or a
-generator in `cache_args` is the project's decision and wins. The options are
-`toolset` and `crt_linkage`, as `deps-vcpkg` takes them, and `generator`
-(`default`, or `ninja` for the Ninja generator under an instance as well).
-`deploy` places files of the prefix
-beside the program, as `deps-vcpkg` takes it.
+directory; its inputs are the script and the subproject's files, so an edit to
+the subproject rebuilds it. The prefix is mapped as `deps-vcpkg` maps its own.
+`layout` names install directories other than `include/`, `lib/` and `bin/`;
+`prefix_path` becomes `CMAKE_PREFIX_PATH` (`mcpp::rules::qt::root()` for a
+subproject that finds Qt); `cache_args` carries `-D…`, `-G …` and a toolchain
+file. `deploy` places files of the prefix beside the program, as `deps-vcpkg`
+takes it.
+
+| option | meaning |
+|---|---|
+| `toolset`, `crt_linkage` | as `deps-vcpkg` takes them (0.17.0) |
+| `generator` | `default` (and `ninja`, its 0.17.0 spelling): the Ninja generator with the toolset named, wherever the toolset is resolved; `visual_studio`: CMake's Visual Studio generator on the instance mcpp resolved, for a subproject that needs MSBuild (0.18.0) |
+| `cache` | where installations are kept: a directory, `"off"`, or empty for `MCPP_DEPS_CMAKE_CACHE` and then the user's cache directory (0.18.0) |
+
+### The toolset and the generator
+
+The subproject is compiled with the toolset mcpp resolved (0.17.0), named by
+path: the Ninja generator runs with mcpp's own ninja
+(`mcpp::ninja_program()`), the compilers are named, and the action runs with the
+tools' environment and their directories first on `PATH`. On the MSVC ABI
+`CMAKE_MSVC_RUNTIME_LIBRARY` follows the program's C runtime (policy CMP0091).
+
+**Under a Visual Studio instance (0.18.0).** The instance's `cl.exe` is named
+with the environment the engine runs it with, as under `chain`, and Ninja runs
+the build, as vcpkg builds its CMake ports. 0.17.0 kept CMake's Visual Studio
+generator there, pointed at the instance (`CMAKE_GENERATOR_INSTANCE`) and the
+toolset version (`-T version=`); MSBuild compiles the files of one project one
+at a time unless the project asks for `/MP`, and a subproject of a few hundred
+files took several times longer than under Ninja. `generator = visual_studio`
+keeps that generator for a subproject that needs MSBuild; without an instance
+it is the default.
+
+**The project's own choice.** Compilers or a toolchain file in `cache_args`
+(`CMAKE_C_COMPILER`, `CMAKE_CXX_COMPILER`, `CMAKE_TOOLCHAIN_FILE`,
+`--toolchain`) are the project's decision, and CMake finds the rest; so is a
+generator (`-G`, `CMAKE_GENERATOR`). From 0.18.0 each is recognised by the
+variable's name, so `CMAKE_CXX_COMPILER_LAUNCHER`, `CMAKE_C_COMPILER_TARGET`
+and `CMAKE_GENERATOR_PLATFORM` choose nothing and reach CMake beside the
+resolved toolset. A compiler launcher (`ccache`, `sccache`) is CMake's
+`CMAKE_<LANG>_COMPILER_LAUNCHER`, in `cache_args` or in the environment.
+
+Each toolset statement configures its own build directory, because CMake
+refuses a cache made with another generator or instance; the directory 0.16.0
+configured stays `build/`.
+
+### An installation is built once (0.18.0)
+
+The action keeps what it installed in a cache outside the package, and a later
+action with the same key copies it into the prefix instead of configuring and
+compiling: after `mcpp clean`, in another checkout or worktree, in another
+package that carries the same subproject, on a CI runner that restores the
+cache directory.
+
+**The key** holds everything the installation is made from and no path of the
+machine, so it is the same wherever the subproject is:
+
+| part | value |
+|---|---|
+| the plugins' version | `mcpp.plugins` `version`: an upgrade builds every subproject once more |
+| the recipe | the configure arguments and `config`, with the subproject's source, build and install directories as placeholders, each tool by its file name, and a Visual Studio instance by the toolset it provides |
+| the toolset | `mcpp::toolset_identity()`, e.g. `msvc 14.44.35207; sdk 10.0.26100.0`, `clang 22.1.8` |
+| CMake | the running CMake's version |
+| the environment | `CC`, `CXX`, `CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `RC`, `RCFLAGS`, `CMAKE_TOOLCHAIN_FILE`, `CMAKE_GENERATOR`, `CMAKE_GENERATOR_PLATFORM`, `CMAKE_GENERATOR_TOOLSET`: what CMake reads its compilers, flags and toolchain from |
+| the sources | the SHA-256 of every file of the subproject (the action's inputs), with its path relative to the subproject |
+
+A dependency a `cache_args` value or `prefix_path` names by an absolute path
+(a Qt SDK, `-DFOO_ROOT=…`) is keyed by that path, as the action is re-run by
+it: on another machine it is another key.
+
+**Only compilers the identity states are keyed:** `chain` and `instance`,
+and on the MSVC ABI the ABI's own compilers, since the identity there is the
+MSVC toolset's and a row compiler (`.cc = row`, clang-cl) is not in it. Under
+`detected`, and where the project names its own compilers, CMake finds the
+compiler while it configures. Those installations are built as in 0.17.0.
+
+**Only an installation that can move is kept.** The installation starts from an
+empty prefix, and before it is kept its text files (`.cmake`, `.pc`, `.la`,
+`.prl`, `.pri`, `.json`, `.txt` and headers) are searched for the source, build
+and install directories, in either slash; one that names them would not hold
+where the entry is copied to, so the action says so and keeps nothing. CMake's
+own package files (`install(EXPORT)`, `configure_package_config_file`) compute
+their prefix from their own location and move.
+
+**Taking an entry.** The entry's files are copied into the prefix and take the
+build's time, so what compiled against another installation compiles again. An
+entry that lost a file, a copy that fails and a cache directory that cannot be
+written leave the work to CMake: the plan is the same with or without the
+cache, so a cache that is gone, broken or turned off leaves the 0.17.0
+behaviour.
+
+**Where.** `options::cache`, then `MCPP_DEPS_CMAKE_CACHE`, then the user's cache
+directory -- `%LOCALAPPDATA%\mcpp-plugins\deps-cmake` on Windows,
+`$XDG_CACHE_HOME/mcpp-plugins/deps-cmake` or `~/.cache/mcpp-plugins/deps-cmake`
+elsewhere, as vcpkg places its binary cache -- each read when the action runs;
+`off` builds and keeps nothing. An entry is `<cache>/<name>/<key>/` with the
+installation (`install/`), its file list (`files.txt`) and the key's text
+(`entry.txt`). An entry appears by one rename, so a build never takes a partial
+one, and of two builds that keep one key the second discards its copy. Nothing
+is removed automatically; removing the directory is safe. A CI job caches the
+directory as it caches vcpkg's binary cache.
 
 ## `deps-archive`: files a program reads at run time, from an archive
 

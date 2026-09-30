@@ -1690,6 +1690,13 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
+      # 0.18.0: an installation is kept under a key with no path of the
+      # machine, and taken by a build without target/, by a checkout at another
+      # path; an edit, other CFLAGS and an installation that names its own
+      # prefix are not taken.
+      - name: deps-cmake keeps an installation and takes it for the same key
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-cache
+
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
@@ -2381,6 +2388,13 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
+      # 0.18.0: an installation is kept under a key with no path of the
+      # machine, and taken by a build without target/, by a checkout at another
+      # path; an edit, other CFLAGS and an installation that names its own
+      # prefix are not taken.
+      - name: deps-cmake keeps an installation and takes it for the same key
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-cache
+
       # The C runtime linkage follows the program's contract (0.17.0): a
       # self-contained program's ports are x64-windows-static, and a project
       # triplet that contradicts it is refused. Windows only; the function
@@ -2538,6 +2552,9 @@ jobs:
 
       - name: a CMake port and a CMake subproject build with the managed toolset named
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-managed
+
+      - name: deps-cmake keeps an installation built with the managed toolset
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-cache
 
       - name: an MSBuild port is refused by name
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-msbuild-refused

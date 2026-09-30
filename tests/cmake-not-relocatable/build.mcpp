@@ -1,0 +1,9 @@
+import std;
+import mcpp;
+import mcpp.deps.cmake;
+
+int main() {
+    mcpp::deps::cmake::options o;
+    o.source = "pinned";
+    return mcpp::deps::cmake::use(o) ? 0 : 1;
+}

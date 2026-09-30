@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.17.0"
+version     = "0.18.0"
 # The first mcpp release that states the build information (protocol 14),
 # places files in one edge, and renders structured diagnostics (mcpp#734).
 mcpp        = ">=2026.9.28.3"

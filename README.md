@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.17.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.18.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -70,7 +70,7 @@ the column states the release each member's behaviour first needed.
 | `dist-web` | `mcpp.dist.web` | 2026.9.13.1 | Copies a `wasm32-emscripten` program and its files into a web directory with an `index.html`. | [dist](docs/dist.md#dist-web) |
 | `dist-apk` | `mcpp.dist.apk` | 2026.9.14.2 | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [dist-apk](docs/dist-apk.md) |
 | `deps-vcpkg` | `mcpp.deps.vcpkg` | 2026.9.28.3 | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [deps](docs/deps.md#deps-vcpkg) |
-| `deps-cmake` | `mcpp.deps.cmake` | 2026.9.28.3 | Builds and installs a CMake subproject as an action with the toolset mcpp resolved, and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
+| `deps-cmake` | `mcpp.deps.cmake` | 2026.9.28.3 | Builds and installs a CMake subproject as an action with Ninja and the toolset mcpp resolved, keeps the installation for any build with the same key, and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
 | `deps-archive` | `mcpp.deps.archive` | 2026.9.26.2 | Extracts a zip archive the project keeps and places its tree beside the program. | [deps](docs/deps.md#deps-archive) |
 
 Some features add a sub-capability to a member: `dist-apk-kotlin` and

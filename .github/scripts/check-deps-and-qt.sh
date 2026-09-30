@@ -145,11 +145,12 @@ vcpkg_libcxx() {
         fail "switching back to $llvm re-ran its installation"
     echo "ok: the two toolchains' prefixes coexist, and switching back installs nothing"
 
-    # deps-cmake takes the same compilers.
+    # deps-cmake takes the same compilers. The criterion reads CMake's own
+    # cache, so the installation is built, not taken from deps-cmake's.
     cd "$ROOT/tests/cmake-consumer"
     rm -rf target
     mkdir -p target/ci
-    "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
+    MCPP_DEPS_CMAKE_CACHE=off "$MCPP" build --toolchain "$llvm" 2>&1 | tee target/ci/libcxx-build.log
     "$MCPP" run --toolchain "$llvm" | grep -q '^cmake-consumer: greet says 42$' || fail "the libc++ cmake-consumer did not run"
     grep -rqs 'CMAKE_CXX_COMPILER:[A-Z]*=.*xim-x-llvm.*/clang++' target --include=CMakeCache.txt ||
         fail "deps-cmake configured the subproject without mcpp's clang"
@@ -207,6 +208,86 @@ cmake_consumer() {
     [ -n "$(find "$(stamp_of deps-cmake)" -newer target/ci/before-added-file)" ] ||
         fail "a file added to the subproject did not re-run its installation"
     echo "ok: a file added to the subproject re-ran its installation"
+}
+
+# AN INSTALLATION IS BUILT ONCE (0.18.0). deps-cmake keeps what a subproject
+# installed under a key that holds no path of the machine, and copies it into
+# the prefix of any later build with the same key. Only a toolset the engine
+# identifies is keyed; on Linux the default GCC row lets CMake find its own
+# compiler, so the criteria run under mcpp's clang there.
+cmake_cache() {
+    local tc=()
+    if [ -n "${MSVC_MANAGED:-}" ]; then tc=(--toolchain "$MSVC_MANAGED")
+    elif ! is_windows && ! is_macos; then tc=(--toolchain "${MCPP_LLVM:-llvm@22.1.8}"); fi
+    local cache="$ROOT/target/deps-cmake-cache" root="$ROOT"
+    rm -rf "$cache"
+    mkdir -p "$cache"
+    # cmake is a native program on Windows: it reads the host's path syntax.
+    if command -v cygpath > /dev/null; then cache=$(cygpath -m "$cache"); root=$(cygpath -m "$ROOT"); fi
+    export MCPP_DEPS_CMAKE_CACHE="$cache"
+    entries() { find "$MCPP_DEPS_CMAKE_CACHE" -mindepth 2 -maxdepth 2 -type d | wc -l | tr -d ' '; }
+    configured() { find target -name CMakeCache.txt | grep -q .; }
+    build() {
+        "$MCPP" build "${tc[@]}" > "target/ci/$1.log" 2>&1 || { cat "target/ci/$1.log"; fail "the build '$1' failed"; }
+    }
+    fresh() { rm -rf target; mkdir -p target/ci; }
+
+    cd "$ROOT/tests/cmake-consumer"
+    fresh
+    build first
+    [ "$(entries)" = 1 ] || fail "the first build kept $(entries) installations, not 1"
+    configured || fail "the first build did not configure the subproject"
+    echo "ok: the first build configured the subproject and kept its installation"
+
+    fresh
+    build taken
+    configured && fail "a kept installation was configured again"
+    "$MCPP" run "${tc[@]}" | grep -q '^cmake-consumer: greet says 42$' || fail "the program did not run on a kept installation"
+    [ "$(entries)" = 1 ] || fail "taking an installation kept another one"
+    echo "ok: a build without target/ took the kept installation and did not configure"
+
+    # Another checkout of the same subproject, at another path, has the same key.
+    local moved="$ROOT/target/moved/cmake-consumer"
+    rm -rf "$ROOT/target/moved"
+    mkdir -p "$moved"
+    cp -r build.mcpp greet src "$moved/"
+    sed "s|path = \"../..\"|path = \"$root\"|" mcpp.toml > "$moved/mcpp.toml"
+    (cd "$moved" && fresh && build moved && ! configured) || fail "a checkout at another path did not take the kept installation"
+    [ "$(entries)" = 1 ] || fail "a checkout at another path kept another installation"
+    echo "ok: a checkout at another path took the kept installation"
+
+    # An edited source is another installation.
+    cp greet/greet.c "$ROOT/target/greet.c.orig"
+    trap 'cp "$ROOT/target/greet.c.orig" "$ROOT/tests/cmake-consumer/greet/greet.c"' RETURN
+    echo '/* edited */' >> greet/greet.c
+    build edited
+    configured || fail "an edited subproject was not configured"
+    [ "$(entries)" = 2 ] || fail "an edited subproject did not keep a second installation"
+    cp "$ROOT/target/greet.c.orig" greet/greet.c
+    trap - RETURN
+    echo "ok: an edited source built and kept a second installation"
+
+    # So is one CMake compiles with other flags from the environment.
+    fresh
+    CFLAGS=-DMCPP_DEPS_CMAKE_KEY_CASE build flags
+    configured || fail "other CFLAGS did not configure the subproject"
+    [ "$(entries)" = 3 ] || fail "other CFLAGS did not keep a third installation"
+    echo "ok: the environment CMake reads its flags from is part of the key"
+
+    fresh
+    MCPP_DEPS_CMAKE_CACHE=off build off
+    configured || fail "with the cache off the subproject was not configured"
+    [ "$(entries)" = 3 ] || fail "with the cache off an installation was kept"
+    echo "ok: MCPP_DEPS_CMAKE_CACHE=off builds and keeps nothing"
+
+    cd "$ROOT/tests/cmake-not-relocatable"
+    fresh
+    build pinned
+    "$MCPP" run "${tc[@]}" | grep -q '^cmake-not-relocatable: pinned says 7$' || fail "the not-relocatable program did not run"
+    [ -z "$(find "$MCPP_DEPS_CMAKE_CACHE" -maxdepth 1 -name pinned -type d)" ] ||
+        [ -z "$(find "$MCPP_DEPS_CMAKE_CACHE/pinned" -mindepth 1)" ] ||
+        fail "an installation whose files name its own prefix was kept"
+    echo "ok: an installation that names its own prefix was built and not kept"
 }
 
 archive_consumer() {
@@ -446,10 +527,12 @@ vcpkg_managed() {
     grep -rqs -- '--host-triplet=x64-windows-mcpp-' target --include=build.ninja || fail "the host triplet is not the derived one"
     echo "ok: without Visual Studio, a CMake port builds with the managed toolset named in a derived triplet"
 
+    # The criterion reads CMake's own cache: the installation is built, not
+    # taken from deps-cmake's.
     cd "$ROOT/tests/cmake-consumer"
     rm -rf target
     mkdir -p target/ci
-    "$MCPP" build --toolchain "$MSVC_MANAGED" 2>&1 | tee target/ci/managed-build.log
+    MCPP_DEPS_CMAKE_CACHE=off "$MCPP" build --toolchain "$MSVC_MANAGED" 2>&1 | tee target/ci/managed-build.log
     "$MCPP" run --toolchain "$MSVC_MANAGED" | grep -q '^cmake-consumer: greet says 42$' || fail "the cmake-consumer did not run"
     grep -rqs 'CMAKE_GENERATOR:INTERNAL=Ninja' target --include=CMakeCache.txt || fail "the subproject was not configured with Ninja"
     grep -rqsi 'CMAKE_CXX_COMPILER:[A-Z]*=.*xim-x-msvc.*cl.exe' target --include=CMakeCache.txt ||
@@ -498,6 +581,7 @@ case "${1:-}" in
     archive-consumer)    archive_consumer ;;
     vcpkg-workspace)     vcpkg_workspace ;;
     cmake-consumer)      cmake_consumer ;;
+    cmake-cache)         cmake_cache ;;
     qt-consumer)         qt_consumer ;;
     qt-widgets-consumer) qt_widgets_consumer ;;
     qt-sdk-consumer)     qt_sdk_consumer ;;
@@ -507,5 +591,5 @@ case "${1:-}" in
     vcpkg-managed)       vcpkg_managed ;;
     vcpkg-msbuild-refused) vcpkg_msbuild_refused ;;
     vcpkg-make-port)     vcpkg_make_port ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
 esac
