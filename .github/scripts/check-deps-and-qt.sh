@@ -216,6 +216,7 @@ cmake_consumer() {
 # identifies is keyed; on Linux the default GCC row lets CMake find its own
 # compiler, so the criteria run under mcpp's clang there.
 cmake_cache() {
+    # `${tc[@]+…}`: bash 3.2 (macOS) calls an empty array unbound under `set -u`.
     local tc=()
     if [ -n "${MSVC_MANAGED:-}" ]; then tc=(--toolchain "$MSVC_MANAGED")
     elif ! is_windows && ! is_macos; then tc=(--toolchain "${MCPP_LLVM:-llvm@22.1.8}"); fi
@@ -228,7 +229,7 @@ cmake_cache() {
     entries() { find "$MCPP_DEPS_CMAKE_CACHE" -mindepth 2 -maxdepth 2 -type d | wc -l | tr -d ' '; }
     configured() { find target -name CMakeCache.txt | grep -q .; }
     build() {
-        "$MCPP" build "${tc[@]}" > "target/ci/$1.log" 2>&1 || { cat "target/ci/$1.log"; fail "the build '$1' failed"; }
+        "$MCPP" build ${tc[@]+"${tc[@]}"} > "target/ci/$1.log" 2>&1 || { cat "target/ci/$1.log"; fail "the build '$1' failed"; }
     }
     fresh() { rm -rf target; mkdir -p target/ci; }
 
@@ -242,7 +243,7 @@ cmake_cache() {
     fresh
     build taken
     configured && fail "a kept installation was configured again"
-    "$MCPP" run "${tc[@]}" | grep -q '^cmake-consumer: greet says 42$' || fail "the program did not run on a kept installation"
+    "$MCPP" run ${tc[@]+"${tc[@]}"} | grep -q '^cmake-consumer: greet says 42$' || fail "the program did not run on a kept installation"
     [ "$(entries)" = 1 ] || fail "taking an installation kept another one"
     echo "ok: a build without target/ took the kept installation and did not configure"
 
@@ -283,7 +284,7 @@ cmake_cache() {
     cd "$ROOT/tests/cmake-not-relocatable"
     fresh
     build pinned
-    "$MCPP" run "${tc[@]}" | grep -q '^cmake-not-relocatable: pinned says 7$' || fail "the not-relocatable program did not run"
+    "$MCPP" run ${tc[@]+"${tc[@]}"} | grep -q '^cmake-not-relocatable: pinned says 7$' || fail "the not-relocatable program did not run"
     [ -z "$(find "$MCPP_DEPS_CMAKE_CACHE" -maxdepth 1 -name pinned -type d)" ] ||
         [ -z "$(find "$MCPP_DEPS_CMAKE_CACHE/pinned" -mindepth 1)" ] ||
         fail "an installation whose files name its own prefix was kept"
