@@ -160,6 +160,16 @@ consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
 **一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
 不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
 
+**mcpp-toolchain-lab 已完结**:PR #1 已合入,`main` 在 `3d33c26a`。八个用例(path-llvm、
+env-path、launcher-and-ld、fast-path、toolchain-phase、phase-refuses-a-flag、managed-only、
+lock-local)在 linux 与 macos-15 全部通过;xcode-27 除已知红的 `toolchain-phase`(#669)外通过。
+它给出了第 9 处发现的前后读数:同一个 `launcher-and-ld` 用例,在 `77b632fd` 上
+「the linker wrapper ran during the link: no」,在 `cb918615` 与 `136eb2a7` 上为 yes,
+`build.ninja` 的 ldflags 末尾出现
+`--ld-path=/Users/runner/work/_temp/lab-work/launcher-and-ld/ld-wrapper`,链接出的程序运行并打印
+`toolchain-lab: sum=6 count=3 greeting=hello 42`。`lock-local` 按引擎的实际行为改写:lock 里有
+解析出的依赖、没有工具链。
+
 **mcpp-framework-lab 已完结**:PR #1 squash 合入 `90c630f1`,10 个用例 × 3 平台 = 29 通过、
 1 跳过(`override-bare-name` 在 Windows 跳过:shell 内建是 POSIX 的概念,而引擎在 Windows 用
 `where`,它只报告程序——引擎自己的用例同理跳过)。用例:control、choice-build-mcpp、
