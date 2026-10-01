@@ -160,6 +160,26 @@ consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
 **一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
 不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
 
+**mcpp-framework-lab 已完结**:PR #1 squash 合入 `90c630f1`,10 个用例 × 3 平台 = 29 通过、
+1 跳过(`override-bare-name` 在 Windows 跳过:shell 内建是 POSIX 的概念,而引擎在 Windows 用
+`where`,它只报告程序——引擎自己的用例同理跳过)。用例:control、choice-build-mcpp、
+override-env、override-manifest、override-from-dependency、override-bare-name、managed-only、
+why、timing、default。除判据外还加了一条:从 `CMakeCache.txt` 读 `CMAKE_COMMAND`,确认真正
+运行的 cmake 就是被陈述的那一个。
+
+**「下载耗时减少多少」的读数**(run 36888453587,全部冷测:`xim:cmake` 事先未安装,control
+自己的日志里有 `Downloading xim:cmake`):
+
+| 平台 | control(秒) | 点名宿主 cmake(秒) | 差 | xim:cmake 载荷 |
+|---|---|---|---|---|
+| ubuntu-24.04 | 29.5 | 6.4 / 6.3 | 23.2 | 61.9 MB 下载 3.5 s,安装后 207 MB |
+| macos-15 | 19.6 | 5.4 / 4.3 | 14.8 | 85.9 MB 下载 9.4 s,安装后 265 MB |
+| windows-2022 | 20.0 | 5.8 / 5.7 | 14.2 | 51.9 MB 下载 10.0 s,安装后 152 MB |
+
+**省下的是什么**:第四次构建(control,但载荷已安装)为 6.4 / 5.0 / 5.7 秒,与点名宿主 cmake
+基本相同。所以省下的是把载荷供给进一个 `MCPP_HOME` 的一次性成本,不是每次构建的成本——这正是
+`provision = "on-request"` 要省的那一项,也说明它对已有缓存的 CI 不会再省第二次。
+
 **llvm-macos27-lab 已完结**：PR #1 已 squash 合入(`3f2cceaf2cac`),主干运行 36878561820 六个
 作业全绿,工具链资产已发布并校验:tag `toolchain-21ef2ddb8060`、
 `llvm-23.1.2-x1-macos-arm64.tar.xz`、77,959,884 字节、
