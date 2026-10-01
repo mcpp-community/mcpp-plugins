@@ -157,6 +157,14 @@ consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
     `options::cmake = "C:/Program Files/CMake/bin/cmake" (not found)`,随后因为子工程没有配置
     而编译失败)。L2 与引擎的覆盖路径现在用同一条规则,各补一个用例。
 
+11. gcc 16.1.0 拒绝在 `warn@mcpp.rules.qt` 里内联 `std` 模块带来的
+    `__gnu_cxx::__normal_iterator::operator*` 与 `operator++`——两者是 `always_inline`,
+    而这个文件多 import 了一个模块之后就报 `inlining failed in call to 'always_inline'`,
+    点名的却是 `bits/stl_iterator.h`。集合里其他 range-for 都正常。改为按下标遍历(不碰迭代器,
+    因此不依赖 BMI 跨模块边界带了什么)。本机以 `MCPP_TOOLCHAIN=gcc@16.1.0` 两次测量:修前 2 个
+    错误,修后 0 个,qt 消费方构建通过。与引擎记下的 clang 20.1.7 崩溃同属一类:报错点名的文件
+    与改动无关。
+
 **一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
 不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
 
