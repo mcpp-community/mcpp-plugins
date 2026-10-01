@@ -92,9 +92,6 @@ default = []
 sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm",
            "src/compat/detected_toolset.cppm"]
 
-# The test kit: a plugin function runs against a stated build context, and its
-# directives are compared. Separate from `plugins-core`, so that no build
-# program compiles it unless it asks.
 # `mcpp.plugins.toolchain` -- the builders a root build program states its
 # build toolchain with, in the toolchain phase of a project whose `[toolchain]`
 # says `configure = "build.mcpp"` (mcpp#755). Its own feature rather than part
@@ -103,6 +100,9 @@ sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm
 sources = ["src/toolchain.cppm"]
 implies = ["plugins-core"]
 
+# The test kit: a plugin function runs against a stated build context, and its
+# directives are compared. Separate from `plugins-core`, so that no build
+# program compiles it unless it asks.
 [features.plugins-testing]
 sources = ["src/testing.cppm"]
 implies = ["plugins-core"]
