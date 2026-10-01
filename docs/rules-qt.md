@@ -47,7 +47,14 @@ The first of three levels that names an SDK decides, and the rule records which 
 
 Each payload carries its runtime closure: the loader and the libraries Qt loads on Linux, and the VC++ runtime on Windows x64. 0.15.0 removed the features `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`, which declared a payload at a fixed version. A feature states a mechanism; the SDK a program links is the project's choice. A project that used one of those features declares the payload instead, as above.
 
-A project that does not use a payload comments out its declaration, because `mcpp build` provisions every declared payload whether or not a higher level names another SDK. It then names its SDK with `QT_ROOT_DIR` or with `options::root` in `build.mcpp`:
+A project that names its SDK at a higher level states where the payload comes from, and it is then not provisioned (mcpp 2026.10.1.3):
+
+```toml
+[xlings.overrides]
+"xim:qt-base" = { root = "/opt/Qt/6.11.1/gcc_64" }
+```
+
+The declaration stays, so a machine without that directory still gets the ecosystem's SDK, and the build reports which one it used. Before that release a declared payload was provisioned whether or not a higher level named another SDK, and the only way out was to comment the declaration out:
 
 ```toml
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]
