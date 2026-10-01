@@ -29,7 +29,8 @@
 // and the engine reads both in one place, so a toolchain stated here and one
 // named in the manifest behave alike. What this module adds are the builders
 // a manifest cannot express: a value read from the environment, a tree found
-// by looking, a vendor SDK's environment script, a toolchain composed of parts.
+// by looking, a vendor SDK's environment script, and a tree refined part by part
+// (a launcher, a sysroot, a tool named by role).
 
 export module mcpp.plugins.toolchain;
 

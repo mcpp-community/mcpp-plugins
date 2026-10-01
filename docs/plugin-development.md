@@ -101,9 +101,9 @@ build reports.
 **Stating the build toolchain.** `mcpp.plugins.toolchain` (feature
 `plugins-toolchain`) builds the statement a root build program makes in its
 toolchain phase, for a project whose `[toolchain]` says
-`configure = "build.mcpp"`: `layout`, `prefixed`, `compose`,
-`from_env_script`, `with_launcher`, `with_sysroot`, `with_tool`, `managed`,
-`env`, and `configure(fn)` / `use(d)`.
+`configure = "build.mcpp"`: `layout`, `prefixed`, `managed`, `from_env_script`,
+`newest_under`, `env`, the `with_launcher` / `with_sysroot` / `with_family` /
+`with_tool` refinements, and `configure(fn)` / `use(d)`.
 
 **Testing a plugin.** `mcpp.plugins.testing` runs a plugin function in a child
 process against a stated build context (`row::windows_visual_studio()`,
