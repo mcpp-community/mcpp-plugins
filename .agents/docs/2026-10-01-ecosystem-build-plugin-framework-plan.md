@@ -231,6 +231,13 @@ sha256 `40b9fa16be5628a5d277824f961faa33dadbf84d9520cff9fe2aeb9b0b217ebf`(下载
 
 全部论断都对清单与源码核对过;删掉了一处无来源的「80% 用户」数字,改为陈述事实。
 
+**§3.2 的四种写法是编译过的。** 第一版只用一行注释提了 `tool::on_path()` 与 `tool::root()`,
+不成介绍;补成完整示例后把它当成真的构建程序编译,立刻暴露一处文档缺陷:**特性让模块可用,
+不等于可见**——写 `tool::root(...)` 必须 `import mcpp.plugins.tool;`,否则编译器报
+`declaration of 'root' must be imported from module 'mcpp.plugins.tool' before it is required`;
+而赋一个字符串或写 `vcpkg_root` 不需要。页面现在把这条规则写出来了。页面里引的那段拒绝文案
+也是实测抄下来的:`consulted: options::vcpkg = root("/opt/vcpkg") (no vcpkg there)`。
+
 ## 5. 生态级 review
 
 按「这条机制在生态的每个接缝处是否闭合」来看,而不是按仓库看。

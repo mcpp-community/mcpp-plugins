@@ -81,11 +81,90 @@ or because `--format` took another branch — downloads nothing for it.
 
 ### 3.2 Name the tool the machine already has
 
+Four spellings, all in `build.mcpp`, none of which downloads the payload. The
+example is `deps-vcpkg`, whose option is `options::vcpkg`; every member that
+drives a tool has the same shape, with its own option name (section 6).
+
 ```cpp
 // build.mcpp
-mcpp::deps::cmake::options o;
-o.cmake = "/usr/bin/cmake";          // or tool::on_path(), or tool::root("/opt/cmake")
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+import mcpp.plugins.tool;     // for `tool::root` and `tool::on_path` below
+
+int main() {
+    mcpp::deps::vcpkg::options o;
+    o.libraries = { "fmt", "spdlog" };
+
+    // 1. the program itself -- a string assigns, so code written before 0.19.0
+    //    keeps compiling
+    o.vcpkg = "/opt/vcpkg/vcpkg";
+
+    // 2. a tree. Each member states where it looks under a root: `deps-vcpkg`
+    //    expects `vcpkg` directly there, `deps-cmake` looks in `bin` and in
+    //    `CMake.app/Contents/bin`
+    o.vcpkg = mcpp::plugins::tool::root("/opt/vcpkg");
+
+    // 3. the first one on PATH. A fallback is a choice, stated here, rather
+    //    than something a member does quietly
+    o.vcpkg = mcpp::plugins::tool::on_path();
+
+    // 4. the spelling `deps-vcpkg` has had since 0.18.1, still read: the same
+    //    statement as `tool::root(...)`
+    o.vcpkg_root = "/opt/vcpkg";
+
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
+}
 ```
+
+A relative path is relative to the package root, which is where a project keeps
+a vendored copy:
+
+```cpp
+o.vcpkg = mcpp::plugins::tool::root("third_party/vcpkg");
+```
+
+`mcpp.plugins.tool` needs no extra feature: `deps-vcpkg` implies `deps`, which
+implies `plugins-core`. It does need the `import` above, though -- a feature makes
+a module available, not visible. Assigning a plain string (form 1) and
+`vcpkg_root` (form 4) need no import; naming `tool::root` or `tool::on_path` does,
+and without it the compiler says `declaration of 'root' must be imported from
+module 'mcpp.plugins.tool' before it is required`.
+
+**Deciding in the build program, from whatever the machine says.** The choice is
+a value, so the decision is ordinary code. Register the variable, and the build
+re-plans when it changes:
+
+```cpp
+if (const char* r = std::getenv("VCPKG_ROOT"); r && *r) {
+    mcpp::rerun_if_env_changed("VCPKG_ROOT");
+    o.vcpkg = mcpp::plugins::tool::root(r);     // use it where CI provides one
+}
+// left default: the ecosystem's xim:vcpkg
+```
+
+`mcpp::plugins::toolchain::env("VCPKG_ROOT")` is the same two lines, for a
+project that already enables `plugins-toolchain`.
+
+**A stated choice that fails is not replaced by another source.** The member
+refuses and names what it consulted, rather than falling back to the payload:
+
+```
+warning: my-app: mcpp.deps.vcpkg: no vcpkg.
+  consulted: options::vcpkg = root("/opt/vcpkg") (no vcpkg there)
+  …
+  So this plan installs nothing.
+```
+
+That is deliberate. Replacing a decision that was made explicitly, and failed,
+with a different source would make "was the one I named actually used" impossible
+to answer from the output.
+
+**What makes this avoid the download** is that `deps-vcpkg` declares its payload
+`provision = "on-request"`, so the choice is read before anything is provisioned.
+For a member whose payload is eager -- `rules-cuda`'s toolkit, which the plan
+reads a version out of -- naming the tool in `build.mcpp` does not prevent the
+download, and `[xlings.overrides]` is the way out. Section 4.2 is the table.
 
 ```
        Using cmake (mcpp.deps.cmake) ← /usr/bin/cmake  [program · build.mcpp:9]
