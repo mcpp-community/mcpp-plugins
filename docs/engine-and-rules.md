@@ -41,7 +41,7 @@ A project names the rule and nothing else:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.8.0", features = ["rules-cuda"], host-module = true }
+plugins = { version = "0.19.0", features = ["rules-cuda"], host-module = true }
 ```
 
 The payloads each rule drives are declared **here**, under the feature that

@@ -27,13 +27,17 @@ Both features imply `dist-apk`, so a project names them in its place:
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.11.0", features = ["dist-apk-kotlin", "dist-apk-maven"], host-module = true }
+plugins = { version = "0.19.0", features = ["dist-apk-kotlin", "dist-apk-maven"], host-module = true }
 ```
 
-They are features and not payloads of `dist-apk` because provisioning runs
-before the build program says what it compiles. A payload of `dist-apk` would be
-installed for every Android consumer, and the Kotlin compiler is 90 MB. Kotlin
-sources without the feature are refused, naming it.
+They are features and not payloads of `dist-apk` because a feature is what a
+project selects, and selecting is the statement: a payload of `dist-apk` would
+belong to every Android consumer, and the Kotlin compiler is 90 MB. A project
+that selects `dist-apk-kotlin` compiles Kotlin, so `xim:kotlin` is installed with
+the feature; `xim:bundletool`, which only `--format aab` uses, is asked for while
+that bundle is planned (`provision = "on-request"`, 0.19.0), so an ordinary
+`--format apk` build installs nothing for it. Kotlin sources without the feature
+are refused, naming it.
 
 **An ordinary build does not reach the network.** A Maven graph is resolved and
 downloaded only when the developer asks:
