@@ -129,11 +129,26 @@ inline std::filesystem::path absolute_from_root(const std::string& p) {
     return path.lexically_normal();
 }
 
+// INDEXED, NOT A RANGE-FOR, FOR A COMPILER REASON (gcc 16.1.0, 0.19.0). The
+// range-for walked a `std::string` through `__gnu_cxx::__normal_iterator`, whose
+// `operator*` and `operator++` are `always_inline` and reach this module from
+// the `std` module. Once this file imported one module more, gcc refused both:
+//
+//     error: inlining failed in call to 'always_inline'
+//       'constexpr __gnu_cxx::__normal_iterator<...>::operator*() const'
+//     note: called from here      for (char c : message)
+//
+// in `warn@mcpp.rules.qt` alone, while every other range-for in the collection
+// compiled. An index touches no iterator, so it does not depend on what a BMI
+// carries across a module boundary. The same hazard class is on record in the
+// engine (a clang 20.1.7 crash from an exported `std::pair` specialization): the
+// error names a file the change never touched.
 inline void warn(const std::string& message) {
     std::cerr << message << '\n';
     std::string folded;
     bool space = false;
-    for (char c : message) {
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        const char c = message[i];
         if (c == '\n') { space = true; continue; }
         if (space) { if (c == ' ') continue; folded += ' '; space = false; }
         folded += c;
