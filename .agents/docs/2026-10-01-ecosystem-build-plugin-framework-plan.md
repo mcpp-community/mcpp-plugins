@@ -76,4 +76,42 @@ T17 issue 评论与关闭；设计记录追加状态行
 
 ## 4. 执行记录
 
-（随执行追加：PR、run、发布与验证结果。）
+### 2026-10-01
+
+**issue**：mcpp#755（引擎）、plugins#41（0.19.0）。
+
+**mcpp 侧**（分支 `feat/build-sources`，PR mcpp#758，版本 2026.10.1.3）：
+- 清单层：`[xlings.overrides]`（根清单、`[target.'cfg(..)']`、环境变量、config.toml）、
+  条目的 `provision` 键、`[toolchain]` 的表形式与 `bootstrap`；
+- 协议 15：`xpkg_source`、`xpkg_program`、`xpkg_request`、`xpkg_pending`、`phase`、
+  `decision`、`toolchain`;
+- prepare：`sources.cpp`(决策记录、覆盖、按需供给、`--managed-only`)与
+  `local_toolchain.cpp`(按路径命名的工具链、工具链阶段、两遍 prepare);
+- 输出:`ui::source` 的 `Using` 行、`Finished` 的汇总、`resolution.json` 的 `sources`、
+  `mcpp why sources|tool|payload` 与 `mcpp.why.sources`;
+- 测试:`tests/unit/test_sources.cpp`(15 例)与 e2e 873-877。
+
+**plugins 侧**（分支 `feat/0.19.0-tool-sources`，0.19.0）：`mcpp.plugins.tool`、
+`mcpp.plugins.toolchain`、13 个成员迁移、5 个按需条目、`plugin-logic` 新增 5 例、
+CI 新增 `tool-sources` 判据。
+
+**两处发现，都由 CI 的其他平台给出**：
+1. `std::to_string` 在 libc++ 上对文件系统时钟的 rep 与 `uintmax_t` 同时有重载，macOS
+   编译失败;三处改为 `std::format` 加显式类型。
+2. 从 `mcpp.toolchain.model` 导出
+   `std::vector<std::pair<std::string, std::filesystem::path>>` 使 clang 20.1.7 在
+   Windows 上为**另一个模块**的 `mcpp::pack::interface_set_digest` 生成代码时崩溃——
+   该函数实例化同一个特化并按指向 `first` 的成员指针排序。改为具名结构
+   `ToolOverride`。这与 `modules/manifest/src/types.cppm` 记下的 GCC 16 截断 BMI 是
+   同一类危害:报错点名的文件与改动无关。
+
+**本机验证**：单测 144 通过;e2e 873-877 通过;按关键词选出的既有 e2e 62 个通过
+(219 在已发布的 2026.10.1.2 上同样失败,658 需要连接 Android 设备);plugins 的 11 个
+consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
+`MCPP_NO_AUTO_INSTALL=1` 下由 `build.mcpp` 点名 cmake 即可构建。
+
+**llvm-macos27-lab**（speak-agent，公开）：`release/23.x` 的 `21ef2ddb8060`（含
+`ee66426152f9`）构建的 lld 在 `xcode-27`(macOS 27.0、Xcode 27.0、SDK 27.0)上链接并
+运行 C、C++23(含 `std::format`)与 `import std;`;反例以 23.1.2 原装 lld 失败并点出
+`arm64e.x1`,`macos-15` 对照两者皆成功。官方 23.1.2 的 macOS 包确实带 libc++ 头文件、
+库与 `std` 模块源码(与 §12 R20a 的疑问相反)。
