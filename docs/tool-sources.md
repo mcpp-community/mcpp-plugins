@@ -61,29 +61,17 @@ the engine's e2e cases and the framework lab assert it.
 test is whether a version was stated, not whether the path looks like a system
 directory, which would be a guess.
 
-## 3. For whoever uses a plugin
+## 3. Replacing the default tool from `build.mcpp`
 
-### 3.1 Write nothing
+This is the chapter for a project that wants its own tool rather than the one the
+plugin declares, stated in the build program and nowhere else -- no
+`[xlings.overrides]`, no environment variable. Chapter 4 covers those.
 
-```toml
-[build-dependencies.mcpp]
-plugins = { version = "0.19.0", features = ["deps-cmake"], host-module = true }
-```
-
-The member resolves nothing stated, reaches the fourth level, finds `xim:cmake`
-declared on request and not installed, asks for it, and the engine installs it and
-runs the program again. The output is byte-for-byte what it was before this
-mechanism existed.
-
-One difference from 0.18.1: **a payload declared and not used is not installed.**
-A build that never reaches the member — because it compiles only its own modules,
-or because `--format` took another branch — downloads nothing for it.
-
-### 3.2 Name the tool the machine already has
+### 3.1 The four spellings
 
 Four spellings, all in `build.mcpp`, none of which downloads the payload. The
 example is `deps-vcpkg`, whose option is `options::vcpkg`; every member that
-drives a tool has the same shape, with its own option name (section 6).
+drives a tool has the same shape, with its own option name (section 3.6).
 
 ```cpp
 // build.mcpp
@@ -117,13 +105,6 @@ int main() {
 }
 ```
 
-A relative path is relative to the package root, which is where a project keeps
-a vendored copy:
-
-```cpp
-o.vcpkg = mcpp::plugins::tool::root("third_party/vcpkg");
-```
-
 `mcpp.plugins.tool` needs no extra feature: `deps-vcpkg` implies `deps`, which
 implies `plugins-core`. It does need the `import` above, though -- a feature makes
 a module available, not visible. Assigning a plain string (form 1) and
@@ -131,9 +112,19 @@ a module available, not visible. Assigning a plain string (form 1) and
 and without it the compiler says `declaration of 'root' must be imported from
 module 'mcpp.plugins.tool' before it is required`.
 
-**Deciding in the build program, from whatever the machine says.** The choice is
-a value, so the decision is ordinary code. Register the variable, and the build
-re-plans when it changes:
+### 3.2 Where a relative path points
+
+A relative path is relative to the package root, which is where a project keeps
+a vendored copy:
+
+```cpp
+o.vcpkg = mcpp::plugins::tool::root("third_party/vcpkg");
+```
+
+### 3.3 Deciding inside the build program
+
+**The choice is a value, so the decision is ordinary code.** Register the variable
+that informs it, and the build re-plans when it changes:
 
 ```cpp
 if (const char* r = std::getenv("VCPKG_ROOT"); r && *r) {
@@ -146,7 +137,9 @@ if (const char* r = std::getenv("VCPKG_ROOT"); r && *r) {
 `mcpp::plugins::toolchain::env("VCPKG_ROOT")` is the same two lines, for a
 project that already enables `plugins-toolchain`.
 
-**A stated choice that fails is not replaced by another source.** The member
+### 3.4 A stated choice that fails is not replaced
+
+The member
 refuses and names what it consulted, rather than falling back to the payload:
 
 ```
@@ -160,11 +153,13 @@ That is deliberate. Replacing a decision that was made explicitly, and failed,
 with a different source would make "was the one I named actually used" impossible
 to answer from the output.
 
-**What makes this avoid the download** is that `deps-vcpkg` declares its payload
+### 3.5 What makes this avoid the download
+
+`deps-vcpkg` declares its payload
 `provision = "on-request"`, so the choice is read before anything is provisioned.
 For a member whose payload is eager -- `rules-cuda`'s toolkit, which the plan
 reads a version out of -- naming the tool in `build.mcpp` does not prevent the
-download, and `[xlings.overrides]` is the way out. Section 4.2 is the table.
+download, and `[xlings.overrides]` is the way out. Section 5.2 is the table.
 
 ```
        Using cmake (mcpp.deps.cmake) ← /usr/bin/cmake  [program · build.mcpp:9]
@@ -185,7 +180,68 @@ per-build cost.** A fourth build — the control with the payload already instal
 — took 6.4, 5.0 and 5.7 s, which is what naming the host's cmake costs. A CI with
 a warm payload cache does not save this twice.
 
-### 3.3 State it in the manifest instead of the build program
+
+### 3.6 Which option, and what it looks for
+
+Each member names its tool through one option, and states where it looks under a
+root. A path assigned as a string is taken as the program itself in every case.
+
+| member | option | program names | under a root it looks in | variable it still reads |
+|---|---|---|---|---|
+| `deps-vcpkg` | `options::vcpkg` (and `options::vcpkg_root`) | `vcpkg` | the root itself | -- |
+| `deps-cmake`, `deps-archive` | `options::cmake` | `cmake` | `bin`, `CMake.app/Contents/bin` | -- |
+| `rules-spirv` | `options::compiler` | `glslangValidator`, `glslang`; or `glslc` | `bin`, the root | `MCPP_GLSLANG`, `MCPP_GLSLC` |
+| `rules-slang` | `options::compiler` | `slangc` | `bin`, the root | `MCPP_SLANGC` |
+| `rules-sycl` | `options::compiler` | `clang++` | `bin`, the root | -- |
+| `rules-cuda` | `options::toolkit` | `nvcc` | `bin`, the root | -- |
+| `rules-hip` | `options::toolkit` | `hipcc`, `clang++` | `bin`, the root | -- |
+| `rules-ascendc` | `options::toolkit` | a root, no program | -- | -- |
+| `rules-qt` | `options::root`, `options::extra_roots` | a root, no program | -- | `QT_ROOT_DIR` |
+| `dist-appimage` | `options::tool` | `appimagetool` | the root, `bin` | -- |
+| `dist-wix` | `options::tool` | `wix` | `tool/tools/net6.0/any` | -- |
+| `dist-apk` | `options::build_tools`, `options::platform`, `options::jdk`, `options::bundletool_dir`, `options::kotlin`, `options::coursier` | roots, no program | -- | -- |
+
+A member whose option names a **root rather than a program** -- `rules-qt`,
+`rules-ascendc`, `dist-apk` -- takes `tool::root(...)` or a plain directory path,
+because what it needs is the tree, not one executable.
+
+### 3.7 Confirming nothing was downloaded
+
+```bash
+MCPP_NO_AUTO_INSTALL=1 mcpp build     # success means no payload was asked for
+mcpp why payload xim:vcpkg
+```
+
+```
+sources:
+  payload:xim:vcpkg  /opt/vcpkg/vcpkg
+      program · build.mcpp:9  for my-app
+      considered: options::vcpkg = root("/opt/vcpkg"); payload xim:vcpkg (not requested by this build)
+```
+
+`not requested by this build` is the written proof. On a machine that already
+holds the payload this is the only reliable check, because the build would have
+succeeded either way.
+
+## 4. For whoever uses a plugin: the other ways
+
+### 4.1 Write nothing
+
+```toml
+[build-dependencies.mcpp]
+plugins = { version = "0.19.0", features = ["deps-cmake"], host-module = true }
+```
+
+The member resolves nothing stated, reaches the fourth level, finds `xim:cmake`
+declared on request and not installed, asks for it, and the engine installs it and
+runs the program again. The output is byte-for-byte what it was before this
+mechanism existed.
+
+One difference from 0.18.1: **a payload declared and not used is not installed.**
+A build that never reaches the member — because it compiles only its own modules,
+or because `--format` took another branch — downloads nothing for it.
+
+### 4.2 State it in the manifest instead of the build program
 
 ```toml
 [xlings.overrides]
@@ -206,14 +262,14 @@ nothing can be compared, and the build records a note naming the requirement tha
 went unchecked. The engine never runs a program to ask its version: every tool
 spells `--version` differently, and that is the plugin's knowledge.
 
-### 3.4 Replace a tool for one CI job
+### 4.3 Replace a tool for one CI job
 
 ```bash
 MCPP_XLINGS_OVERRIDE_XIM_VCPKG=/opt/vcpkg/vcpkg mcpp build
 MCPP_XLINGS_OVERRIDE_XIM_CMAKE=path:cmake mcpp build     # looked up on PATH: the host class
 ```
 
-### 3.5 Share one tool between every project on a machine
+### 4.4 Share one tool between every project on a machine
 
 ```toml
 # ~/.mcpp/config.toml — a fact about this machine, not in the repository
@@ -221,7 +277,7 @@ MCPP_XLINGS_OVERRIDE_XIM_CMAKE=path:cmake mcpp build     # looked up on PATH: th
 "xim:vcpkg" = { root = "/opt/vcpkg" }
 ```
 
-### 3.6 Build without the network, and audit what a build used
+### 4.5 Build without the network, and audit what a build used
 
 ```bash
 MCPP_NO_AUTO_INSTALL=1 mcpp build     # refused, naming what it would have installed
@@ -239,7 +295,7 @@ sources:
       considered: options::cmake = "/usr/bin/cmake"; payload xim:cmake (not requested by this build)
 ```
 
-### 3.7 Bring a whole toolchain
+### 4.6 Bring a whole toolchain
 
 A toolchain is the same question one layer down, and it is answered in the
 manifest or by the root build program, never by a plugin:
@@ -258,9 +314,9 @@ bootstrap = "llvm@22.1.8"                       # the one that compiles build pr
 `with_sysroot` / `with_family` / `with_tool` refinements, and `configure(fn)` /
 `use(d)`.
 
-## 4. For whoever writes a plugin
+## 5. For whoever writes a plugin
 
-### 4.1 A member that runs a program
+### 5.1 A member that runs a program
 
 Three pieces, written once per tool:
 
@@ -292,7 +348,7 @@ compiles, and the line that wrote it reaches the build's output and
 `describe_missing` is the one refusal text, and it lists every way to name the
 tool. A member does not write its own.
 
-### 4.2 The pair that makes "named here, not downloaded" true
+### 5.2 The pair that makes "named here, not downloaded" true
 
 A `tool::choice` alone is not enough. Provisioning of an eagerly declared payload
 happens in prepare, **before any build program runs**, so a payload declared
@@ -318,7 +374,7 @@ So the author's decision is one question:
 the second way, and that is timing, not an oversight: moving provisioning after
 the build program would make them fail to plan.
 
-### 4.3 Ask for a payload only on the branch that uses it
+### 5.3 Ask for a payload only on the branch that uses it
 
 `dist-apk` declares five payloads for every Android build and one more only for
 `--format aab`:
@@ -334,7 +390,7 @@ discarded before its directives are applied, so there is no half-applied state.
 Three rounds at most, and a program that asks for something new in the third is
 refused by name.
 
-### 4.4 A tool that is a tree, not a program
+### 5.4 A tool that is a tree, not a program
 
 ```cpp
 auto f = mcpp::plugins::tool::resolve(nvcc_spec(), opt.toolkit);
@@ -347,7 +403,7 @@ in `rules-sycl` while it took the payload directory and appended
 the SYCL consumer failed with `ld.lld: error: unable to find library -lsycl`. The
 whole collection was audited for that swap.
 
-### 4.5 Keep the variable a member already read
+### 5.5 Keep the variable a member already read
 
 ```cpp
 .legacy_env = "MCPP_SLANGC"
@@ -357,14 +413,14 @@ It answers at the second level, before the engine's override. `rules-slang` also
 keeps its historical silent PATH fallback, with a warning that names the correct
 spelling (`options::compiler = tool::on_path()`) and the date it is removed.
 
-### 4.6 A member that only looks
+### 5.6 A member that only looks
 
 A member that reports what a machine has, rather than running it, passes
 `.request = false`, so looking never pulls a payload down. `rules-qt` does this
 when it resolves an SDK root: it reports which of the three levels named one,
 and a report is not a reason to download anything.
 
-### 4.7 Prove it, without installing anything
+### 5.7 Prove it, without installing anything
 
 `mcpp.plugins.testing` runs a member against a stated context and compares the
 directives it emitted:
@@ -394,7 +450,7 @@ already has the payload:
 payload:xim:cmake   not requested by this build
 ```
 
-## 5. For whoever designs a plugin
+## 6. For whoever designs a plugin
 
 **The project names a mechanism; the plugin declares that mechanism's payloads.**
 A project writes `features = ["deps-cmake"]`, not `xim:cmake`. A feature states a
@@ -429,7 +485,7 @@ tree that states it is refused where the declaration is read, because gcc select
 a linker by the name `ld` inside a `-B` directory and a stated tool that takes no
 part in the build is what this mechanism exists to prevent.
 
-## 6. Every official member that drives a tool, and how it declares it
+## 7. Every official member that drives a tool, and how it declares it
 
 | member | tool | declaration | reason |
 |---|---|---|---|
