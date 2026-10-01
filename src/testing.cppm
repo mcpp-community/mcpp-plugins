@@ -39,8 +39,15 @@
 
 module;
 #include <stdlib.h>
-#if !defined(_WIN32)
-#include <unistd.h>     // environ -- the kit clears the real build's MCPP_XPKG_*
+// The environment as an array, so the kit can clear the real build's
+// MCPP_XPKG_*. Darwin does not export `environ` to anything but a main program,
+// and offers `_NSGetEnviron()` instead; elsewhere the symbol is declared here
+// rather than taken from <unistd.h>, whose declaration a module purview does not
+// see.
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#elif !defined(_WIN32)
+extern "C" char** environ;
 #endif
 
 export module mcpp.plugins.testing;
@@ -93,6 +100,8 @@ inline constexpr std::string_view kKeys[] = {
 inline std::vector<std::string> inherited_payload_keys() {
 #if defined(_WIN32)
     char** env = _environ;
+#elif defined(__APPLE__)
+    char** env = *_NSGetEnviron();
 #else
     char** env = environ;
 #endif

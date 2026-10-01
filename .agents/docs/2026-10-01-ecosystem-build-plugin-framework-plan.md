@@ -110,6 +110,32 @@ CI 新增 `tool-sources` 判据。
 consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
 `MCPP_NO_AUTO_INSTALL=1` 下由 `build.mcpp` 点名 cmake 即可构建。
 
+**另外四处发现,三处由 CI 的其他平台给出,一处由手工验证给出**:
+3. 一个导入很多宿主模块的构建程序,其编译命令每个模块带一条
+   `-fmodule-file=<name>=<path>`(绝对路径)。`all-rules-compile` 导入十五个,在集合多出
+   一个模块的那一刻越过 Windows 上 `capture_exec` 所经 shell 的 8191 字节,只报
+   `The command line is too long.`——既不点名长度也不点名原因,正是
+   `mcpp.build.cmdlimits` 要让人认出来的那一类。改为超过该模块所述预算时走 `@file`,
+   引号规则由导出的 `response_file_body` 与每种语法一个单测覆盖(命令本身无法在不越限的宿主上
+   复现)。第二遍才对:响应文件不是一种格式——clang 与 GCC 按 GNU 方式 tokenize,反斜杠是转义,
+   于是照原样写入的 Windows 路径被吃掉分隔符
+   (`no such file or directory: 'D:amcpp-plugins...'`);这两个驱动改为每个参数套单引号,
+   cl 与 clang-cl 保持 Windows 引号规则。
+4. `mcpp.plugins.testing` 把真实构建的 `MCPP_XPKG_*` 留在环境里。这些用例运行在一个构建
+   程序内部,而引擎为该程序声明的每个载荷设置 `_DIR`、`_PROGRAM`、`_SOURCE`——包括
+   `provision = "on-request"` 且无人请求时的 `pending`。于是 8 个 vcpkg 用例在载荷未安装的
+   机器上请求 `xim:vcpkg` 并什么都不规划,在已安装的机器上照常通过:macOS arm64 与 Windows
+   各 19/27,本机 27/27。键由包名派生,所以按前缀枚举而不是列表。同一个二进制、同一个继承值
+   两次测量:修前 19/27,修后 27/27。
+5. spirv fixture 的 CI 步骤断言一条状态行,却只捕获 stdout。mcpp 自 2026.10.1.1 起把叙述写到
+   标准错误,所以日志为空,步骤报告「规则没有运行」而它运行了。
+6. `platform::fs::which()` 对一个同时是 shell 内建命令的名字返回空:`command -v true` 打印
+   `true` 而不是路径,因为 shell 回答的是它自己会运行的东西。于是一个按裸名写的载荷覆盖在
+   带 /usr/bin/true 的机器上被拒为「not found on PATH」。改为对 shell 返回的裸词走一遍 PATH。
+
+**一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
+不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
+
 **llvm-macos27-lab**（speak-agent，公开）：`release/23.x` 的 `21ef2ddb8060`（含
 `ee66426152f9`）构建的 lld 在 `xcode-27`(macOS 27.0、Xcode 27.0、SDK 27.0)上链接并
 运行 C、C++23(含 `std::format`)与 `import std;`;反例以 23.1.2 原装 lld 失败并点出
