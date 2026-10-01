@@ -352,7 +352,13 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     const auto dpcppTool = mcpp::plugins::tool::resolve(dpcppSpec, opt.compiler);
     // Asked for: the engine installs `xim:dpcpp` and runs this program again.
     if (dpcppTool.pending()) return out;
-    const std::string dpcpp = dpcppTool.program;
+    // TWO VALUES, NOT ONE: the compiler to run, and the root its libraries sit
+    // under. They were one string while this rule took the payload directory and
+    // appended `/bin/clang++`; a resolver answers the program, and `-L` still
+    // needs the root (a build of the SYCL consumer failed with
+    // `unable to find library -lsycl` when the root was the program's path).
+    const std::string dpcpp     = dpcppTool.program;
+    const std::string dpcppRoot = dpcppTool.root;
     const std::string gcc   = payload("gcc");
     const std::string cuda  = tg.cuda_archs.empty() ? std::string{} : payload("cuda-nvcc");
     // THE C LIBRARY IS THE SAME QUESTION AS THE C++ ONE, ONE LAYER DOWN.
@@ -466,7 +472,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
 
     // The link line gets its directories from here, not from the manifest: the
     // rule resolved the payload, so the rule names where its libraries are.
-    mcpp::link_search((dpcpp + "/lib").c_str());
+    mcpp::link_search((dpcppRoot + "/lib").c_str());
     mcpp::link_lib("sycl");
     // See the file header for why this is not `-lstdc++`. The reason is a
     // Linux one: two C++ runtimes cannot share a process, and on Windows there
