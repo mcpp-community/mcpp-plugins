@@ -133,6 +133,18 @@ consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
    `true` 而不是路径,因为 shell 回答的是它自己会运行的东西。于是一个按裸名写的载荷覆盖在
    带 /usr/bin/true 的机器上被拒为「not found on PATH」。改为对 shell 返回的裸词走一遍 PATH。
 
+7. `rules-sycl` 的迁移把「载荷目录」与「要运行的程序」当成了一个字符串。此前
+   `dpcpp = payload("dpcpp")` 是目录,代码在两处分别接上 `/bin/clang++` 与 `/lib`;解析器
+   回答的是程序,于是 `-L` 指向 `<root>/bin/clang++/lib`,SYCL 消费方在 `compat.opencl`
+   处以 `ld.lld: error: unable to find library -lsycl` 失败。改为两个值,并按同一类错误
+   审计了全部迁移成员(toolkit 类取 `.root`,工具类取 `.program`,没有第二处把目录接在
+   程序路径后)。**本机没装 dpcpp(208 MB),所以本机的 fixture 轮次跳过了这个用例——
+   这正是它只能由 CI 发现的原因。**修后本机复现通过:`tests/sycl-consumer` 构建成功,
+   `compat.opencl` 正常编译。
+8. GNU 响应文件要双写反斜杠,而不是套单引号。LLVM 的 GNU tokenizer 在引号**内**也把反斜杠
+   当转义(与 POSIX shell 不同),所以第一版修法无效。clang 22.1.8 实测:响应文件写
+   `'-DX=a\b'` 得到 `X=ab`,写 `-DX=a\\b` 得到 `X=a\b`。
+
 **一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
 不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
 
