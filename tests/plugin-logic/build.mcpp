@@ -10,6 +10,7 @@ import mcpp.deps;          // the 0.16.0 names, for the compatibility case
 import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
 import mcpp.rules.qt;
+import mcpp.plugins.tool;
 
 namespace t  = mcpp::plugins::testing;
 namespace ts = mcpp::plugins::toolset;
@@ -84,6 +85,11 @@ std::string stem(const std::string& path) {
 // The derived triplet's name under two different roots: equal names mean the
 // name, and the text it is hashed from, hold no path (design §6.6).
 std::string first_linux_name;
+
+// The resolver under the `deps-cmake` spec, which every case above shares.
+mcpp::plugins::tool::found tool_resolve(mcpp::plugins::tool::choice c = {}) {
+    return mcpp::plugins::tool::resolve(mcpp::deps::cmake_spec("mcpp.deps.cmake"), c);
+}
 
 } // namespace
 
@@ -444,6 +450,97 @@ int main(int argc, char** argv) {
                        "moc reads the package's headers");
               c.expect(!r.has_line("mcpp:action=", {"qt:moc:", "ui_form"}) && !r.has_line("mcpp:action=", {"qt:moc:", "stale"}),
                        "moc reads no header another build system wrote");
+          } },
+
+        // ── the tool resolver (0.19.0, mcpp#755) ────────────────────────────
+        //
+        // One order for every member: the build program's choice, the member's
+        // legacy variable, the engine's override, the declared payload. Each
+        // case states what the engine would answer and reads which source the
+        // resolver took -- and, for a choice, that no payload was requested.
+        { "tool: a choice names the program and asks for no payload",
+          // Relative to the package root, which is where a build program's own
+          // option would name it.
+          t::row::linux_libcxx().file("pkg/opt/bin/cmake")
+              .xpkg("xim", "cmake", "{root}/payload")
+              .xpkg_source("xim", "cmake", "pending"),
+          [] {
+              const auto f = tool_resolve(mcpp::plugins::tool::program(
+                  std::string(mcpp::manifest_dir()) + "/opt/bin/cmake"));
+              std::printf("source=%s program=%s\n",
+                          std::string(mcpp::plugins::tool::name(f.source)).c_str(),
+                          f.program.c_str());
+              return f ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("source=choice", "opt/bin/cmake"), "the choice is the source");
+              c.expect(!r.has_line("mcpp:xpkg-request="), "a choice requests no payload");
+              c.expect(r.has_line("mcpp:decision=tool:mcpp.deps.cmake:cmake", {"choice", "opt/bin/cmake"}),
+                       "the decision names the choice and the program");
+          } },
+
+        { "tool: an override answers, and the payload is not consulted",
+          t::row::linux_libcxx().file("opt/bin/cmake")
+              .xpkg("xim", "cmake", "{root}/opt")
+              .xpkg_source("xim", "cmake", "override")
+              .xpkg_program("xim", "cmake", "{root}/opt/bin/cmake"),
+          [] {
+              const auto f = tool_resolve();
+              std::printf("source=%s program=%s\n",
+                          std::string(mcpp::plugins::tool::name(f.source)).c_str(),
+                          f.program.c_str());
+              return f ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("source=override", "opt/bin/cmake"), "the override is the source");
+              c.expect(!r.has_line("mcpp:xpkg-request="), "an override requests nothing");
+          } },
+
+        { "tool: a payload declared on request is asked for, and nothing is planned",
+          t::row::linux_libcxx().xpkg_source("xim", "cmake", "pending"),
+          [] {
+              const auto f = tool_resolve();
+              std::printf("pending=%d program=%s\n", f.pending() ? 1 : 0, f.program.c_str());
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("pending=1 program="), "the resolver reports it is pending");
+              c.expect(r.has_line("mcpp:xpkg-request=xim:cmake"), "the payload is requested");
+              c.expect(!r.has_line("mcpp:decision="), "a pending payload decides nothing yet");
+          } },
+
+        { "tool: the installed payload answers when nothing else does",
+          t::row::linux_libcxx().file("payload/bin/cmake")
+              .xpkg("xim", "cmake", "{root}/payload"),
+          [] {
+              const auto f = tool_resolve();
+              std::printf("source=%s program=%s\n",
+                          std::string(mcpp::plugins::tool::name(f.source)).c_str(),
+                          f.program.c_str());
+              return f ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("source=payload", "payload/bin/cmake"), "the payload is the source");
+              c.expect(r.has_line("mcpp:decision=tool:mcpp.deps.cmake:cmake", {"payload"}),
+                       "the decision names the payload");
+          } },
+
+        { "tool: nothing names it, and the refusal lists every way to",
+          t::row::linux_libcxx(),
+          [] {
+              const auto f = tool_resolve();
+              std::printf("%s\n", mcpp::plugins::tool::describe_missing(
+                  mcpp::deps::cmake_spec("mcpp.deps.cmake"), f).c_str());
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("mcpp.deps.cmake: no cmake."), "it names the member and the tool");
+              c.expect(r.has_line("  consulted: options::cmake (not set)"), "it names the option");
+              c.expect(r.has_line("    o.cmake = "), "it names the build program's way");
+              c.expect(r.has_line("    [xlings.overrides] \"xim:cmake\" = \"/path\""),
+                       "it names the manifest's way");
+              c.expect(r.has_line("    MCPP_XLINGS_OVERRIDE_XIM_CMAKE=/path"),
+                       "it names the environment's way");
           } },
 
         // ── compatibility ───────────────────────────────────────────────────

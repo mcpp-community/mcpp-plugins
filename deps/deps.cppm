@@ -37,8 +37,18 @@ import mcpp.plugins;
 // The 0.16.0 names of the helpers that moved to `mcpp.plugins.fs` and
 // `mcpp.plugins.toolset` (a compatibility unit, until 2027-03-28).
 export import mcpp.deps.compat;
+// The one resolver of a member's tools (0.19.0, mcpp#755).
+export import mcpp.plugins.tool;
 
 export namespace mcpp::deps {
+
+// THE `cmake` deps-cmake AND deps-archive RUN (0.19.0, mcpp#755): the payload
+// both features declare, in its two layouts (`bin/` and, on macOS,
+// `CMake.app/Contents/bin`), found by the one resolver every member uses.
+inline mcpp::plugins::tool::spec cmake_spec(std::string who) {
+    return { .who = std::move(who), .package = "cmake", .programs = {"cmake"},
+             .bin_dirs = {"bin", "CMake.app/Contents/bin"}, .option = "options::cmake" };
+}
 
 // Prints `message` and records it as a `mcpp::warning`, folded onto one line.
 // The engine discards a build program's output when it exits 0, so a note that

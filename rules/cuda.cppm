@@ -44,6 +44,7 @@ export module mcpp.rules.cuda;
 
 import std;
 import mcpp;
+import mcpp.plugins.tool;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -87,6 +88,12 @@ enum class route { automatic, clang, nvcc };
 
 struct options {
     route       which   = route::automatic;
+    // THE TOOLKIT (0.19.0, mcpp#755): a root holding the whole of it
+    // (`mcpp::plugins::tool::root("/usr/local/cuda")`), `nvcc` itself, or the
+    // default -- the payloads this rule declares, or overrides of them. A
+    // toolkit named here is not downloaded: the payloads are declared on
+    // request.
+    mcpp::plugins::tool::choice toolkit;
     // Header search paths for the island. Relative entries resolve against the
     // package root; an ABSOLUTE entry is passed through unchanged.
     //
@@ -266,7 +273,43 @@ inline std::string xpkg(const char* name) {
     return {};
 }
 
-inline std::optional<toolkit> find_toolkit() {
+// The components this rule declares, in the order they are asked for.
+inline constexpr const char* kComponents[] = {
+    "cuda-nvcc", "cuda-cudart", "cuda-crt", "libcurand", "cuda-cccl", "libcuda-host-link",
+};
+
+inline const mcpp::plugins::tool::spec& nvcc_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.rules.cuda", .package = "cuda-nvcc", .programs = {"nvcc"},
+        .option = "options::toolkit" };
+    return s;
+}
+
+// `pending` is set when the toolkit was asked for: the engine installs every
+// component in one batch and runs the program again.
+inline std::optional<toolkit> find_toolkit(const options& opt, bool& pending) {
+    pending = false;
+    if (!opt.toolkit.is_default()) {
+        // ONE ROOT FOR EVERY COMPONENT: an NVIDIA installation keeps nvcc,
+        // the runtime, CCCL and cuRAND in one tree. The driver library is the
+        // machine's, unless the payload that links against it is installed.
+        auto f = mcpp::plugins::tool::resolve(nvcc_spec(), opt.toolkit);
+        if (!f) {
+            std::cerr << mcpp::plugins::tool::describe_missing(nvcc_spec(), f) << '\n';
+            return std::nullopt;
+        }
+        toolkit t;
+        t.nvcc_root = t.cudart_root = t.crt_root = t.curand_root = t.cccl_root = f.root;
+        t.driver_dir = xpkg("libcuda-host-link");
+        return t;
+    }
+    for (auto const* c : kComponents)
+        if (std::string_view(mcpp::xpkg_source("xim", c)) == "pending") {
+            (void)mcpp::xpkg_request("xim", c);
+            pending = true;
+        }
+    if (pending) return std::nullopt;
+    (void)mcpp::plugins::tool::resolve(nvcc_spec());   // the decision record
     toolkit t;
     t.nvcc_root   = xpkg("cuda-nvcc");
     t.cudart_root = xpkg("cuda-cudart");
@@ -552,7 +595,8 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             mcpp::accel()) << '\n';
         return out;
     }
-    auto tk = find_toolkit();
+    bool tkPending = false;
+    auto tk = find_toolkit(opt, tkPending);
     if (!tk) return out;
     state_driver_relation(*tk, tg);
 

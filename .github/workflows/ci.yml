@@ -60,7 +60,14 @@ env:
   # 2026.9.28.3 IS WHAT 0.17.0 NEEDS, and the package floor states it: the
   # build information `mcpp.plugins.toolset` reads, `mcpp::report`, and one
   # placement edge for many files (mcpp#734).
-  MCPP_VERSION: 2026.9.28.3
+  #
+  # 2026.10.1.3 IS WHAT 0.19.0 NEEDS (mcpp#755): protocol 15 states where each
+  # tool and payload comes from -- `xpkg_source`, `xpkg_program`,
+  # `xpkg_request`, `mcpp::decision`, `mcpp::toolchain`, `mcpp::phase` -- and
+  # it is the release that honours the `provision = "on-request"` entries this
+  # collection now declares, so a consumer that names its own tool downloads
+  # nothing. An older engine refuses the manifest at the package floor.
+  MCPP_VERSION: 2026.10.1.3
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
@@ -1690,6 +1697,12 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
+      # 0.19.0 (mcpp#755): a tool the build program names is used and the
+      # payload is not asked for; an override says the same and is reported;
+      # `--managed-only` refuses both.
+      - name: a tool the build program names is used, and its payload is not asked for
+        run: bash .github/scripts/check-deps-and-qt.sh tool-sources
+
       # 0.18.0: an installation is kept under a key with no path of the
       # machine, and taken by a build without target/, by a checkout at another
       # path; an edit, other CFLAGS and an installation that names its own
@@ -2387,6 +2400,12 @@ jobs:
 
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
+
+      # 0.19.0 (mcpp#755): a tool the build program names is used and the
+      # payload is not asked for; an override says the same and is reported;
+      # `--managed-only` refuses both.
+      - name: a tool the build program names is used, and its payload is not asked for
+        run: bash .github/scripts/check-deps-and-qt.sh tool-sources
 
       # 0.18.0: an installation is kept under a key with no path of the
       # machine, and taken by a build without target/, by a checkout at another

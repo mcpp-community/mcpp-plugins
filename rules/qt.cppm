@@ -55,6 +55,7 @@ export module mcpp.rules.qt;
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
 
 export namespace mcpp::rules::qt {
 
@@ -297,10 +298,18 @@ inline sdk_source locate(const options& opt = {}) {
     auto extras = [&] {
         for (auto const& r : opt.extra_roots) add(detail::absolute_from_root(r));
     };
-    // 1. The build program.
+    // 1. The build program. Recorded as the source of the SDK (0.19.0), so a
+    // build says where Qt came from the way it says where every tool did.
     if (!opt.root.empty()) {
         out.level = "options";
-        add(detail::absolute_from_root(opt.root));
+        const auto root = detail::absolute_from_root(opt.root);
+        add(root);
+        // Recorded only when the SDK is there: `add` keeps a directory that
+        // exists, and a root that does not is reported by the caller as no SDK
+        // rather than as the source of one.
+        if (!out.roots.empty())
+            mcpp::decision("tool:mcpp.rules.qt:qt", "choice", root.generic_string().c_str(),
+                           "", 0, "xim:qt");
         extras();
         return out;
     }
@@ -309,17 +318,27 @@ inline sdk_source locate(const options& opt = {}) {
     if (const char* env = std::getenv("QT_ROOT_DIR"); env && *env) {
         out.level = "QT_ROOT_DIR";
         add(fs::path(env));
+        if (!out.roots.empty())
+            mcpp::decision("tool:mcpp.rules.qt:qt", "env", env, "QT_ROOT_DIR", 0, "xim:qt");
         extras();
         return out;
     }
     // 3. A declared payload. `xim:qt` is the full base and `xim:qt-base` its
     // qtbase + qttools subset; a project that declares both uses the full one.
-    const std::string full = mcpp::xpkg_dir("xim", "qt");
-    const std::string base = full.empty() ? std::string(mcpp::xpkg_dir("xim", "qt-base")) : full;
+    // Resolved through `mcpp.plugins.tool`, so an `[xlings.overrides]` entry
+    // for either package answers here and the source is recorded (0.19.0).
+    auto payload_root = [](const char* package) {
+        const mcpp::plugins::tool::spec s{
+            .who = "mcpp.rules.qt", .package = package, .programs = {},
+            .option = "options::root", .request = false };
+        return mcpp::plugins::tool::resolve(s).root;
+    };
+    const std::string full = payload_root("qt");
+    const std::string base = full.empty() ? payload_root("qt-base") : full;
     if (!base.empty()) {
         out.level = "xlings";
         add(fs::path(base));
-        if (const std::string addons = mcpp::xpkg_dir("xim", "qt-addons"); !addons.empty())
+        if (const std::string addons = payload_root("qt-addons"); !addons.empty())
             add(fs::path(addons));
     }
     extras();

@@ -4,27 +4,27 @@ The `deps-*` members answer where a library comes from: a vcpkg manifest, a CMak
 
 ## `deps-vcpkg`
 
-Module `mcpp.deps.vcpkg`; engine floor: 2026.9.28.3 (0.17.0, mcpp#734; 2026.9.26.2 before).
+Module `mcpp.deps.vcpkg`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.28.3 before).
 
-**Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
+**Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis, installed when this member asks for it (`provision = "on-request"`, 0.19.0) -- a project that names its own vcpkg with `options::vcpkg` or `[xlings.overrides]` downloads none. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-cmake`
 
-Module `mcpp.deps.cmake`; engine floor: 2026.9.28.3 (0.17.0, mcpp#734; 2026.9.26.2 before).
+Module `mcpp.deps.cmake`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.28.3 before).
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, with the Ninja generator and the toolset mcpp resolved, and maps the prefix as `deps-vcpkg` does; an installation is kept outside the package and taken by any later build with the same key (0.18.0)
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, installed when this member asks for it (`provision = "on-request"`, 0.19.0) -- a project that names its own cmake with `options::cmake` or `[xlings.overrides]` downloads none. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, with the Ninja generator and the toolset mcpp resolved, and maps the prefix as `deps-vcpkg` does; an installation is kept outside the package and taken by any later build with the same key (0.18.0)
 
 ## `deps-archive`
 
-Module `mcpp.deps.archive`; engine floor: 2026.9.26.2.
+Module `mcpp.deps.archive`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.26.2 before).
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis. From 0.14.0. Extracts a zip archive the project keeps and places its tree beside the program: one action names every member as an output, read from the archive's central directory while the build program runs, and each is deployed, so `mcpp run` finds the files and `mcpp pack` carries them. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, installed when this member asks for it (`provision = "on-request"`, 0.19.0). From 0.14.0. Extracts a zip archive the project keeps and places its tree beside the program: one action names every member as an output, read from the archive's central directory while the build program runs, and each is deployed, so `mcpp run` finds the files and `mcpp pack` carries them. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-vcpkg`: the libraries a vcpkg manifest names
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.18.1", features = ["deps-vcpkg"], host-module = true }
+plugins = { version = "0.19.0", features = ["deps-vcpkg"], host-module = true }
 ```
 
 ```cpp
@@ -75,8 +75,16 @@ states every path it can, and the build is where the absence fails.
 | `install_root` | empty is vcpkg's default, `<manifest root>/vcpkg_installed`. Each triplet is its own vcpkg installation, `<install root>/<triplet>`, because vcpkg's manifest mode removes from an installation the packages of every other triplet (0.15.0; 0.14.0's prefix `<install root>/<triplet>` is no longer read) |
 | `overlay_triplets` | further overlay-triplet directories |
 | `install_args` | arguments appended to `vcpkg install` |
-| `vcpkg_root` | a vcpkg root other than the `xim:vcpkg` payload |
+| `vcpkg` | the vcpkg tool: a program, `tool::root(dir)`, or `tool::on_path()`; empty is the `xim:vcpkg` payload, or an override of it (0.19.0) |
+| `vcpkg_root` | a vcpkg root other than the `xim:vcpkg` payload; the 0.18.1 spelling of `vcpkg = tool::root(...)`, still read |
 | `deploy` | files of the prefix the program reads at run time, each `{file, to}`: `file` relative to the prefix root, `to` the directory beside the program (`{"share/opencc/t2s.json", "BaseConfig/opencc"}`) |
+
+**Where the tool comes from (0.19.0).** Each member resolves its tool through
+`mcpp.plugins.tool`, in one order: the option above, then an override
+(`[xlings.overrides]`, `MCPP_XLINGS_OVERRIDE_<NS>_<NAME>`, `config.toml`), then
+the declared payload — which is installed only when the member asks for it, so a
+project that names its own tool downloads none. The build reports the source it
+used, and `mcpp why tool <name>` answers from the same record.
 
 The payload `xim:vcpkg` is vcpkg-tool's release binary with the standalone
 bundle published beside it, so the scripts a port calls are the ones that tool
@@ -215,6 +223,7 @@ takes it.
 | `toolset`, `crt_linkage` | as `deps-vcpkg` takes them (0.17.0) |
 | `generator` | `default` (and `ninja`, its 0.17.0 spelling): the Ninja generator with the toolset named, wherever the toolset is resolved; `visual_studio`: CMake's Visual Studio generator on the instance mcpp resolved, for a subproject that needs MSBuild (0.18.0) |
 | `cache` | where installations are kept: a directory, `"off"`, or empty for `MCPP_DEPS_CMAKE_CACHE` and then the user's cache directory (0.18.0) |
+| `cmake` | the `cmake` program: a path (as before), `tool::root(dir)` or `tool::on_path()`; empty is the `xim:cmake` payload, or an override of it. A tool named here is not downloaded (0.19.0) |
 
 ### The toolset and the generator
 

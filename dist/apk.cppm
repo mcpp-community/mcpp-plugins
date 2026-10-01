@@ -107,6 +107,7 @@ export module mcpp.dist.apk;
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
 
 // `std::format` is header-only and used throughout; `std::println` is not --
 // see `rules/spirv.cppm` for the libc++-on-macOS-14 measurement that this
@@ -203,6 +204,12 @@ struct options {
     // `keystore_alias` and `keystore_password_env` are then both required,
     // because a private key has no convention this member may assume.
     std::string keystore;
+    // THE PAYLOADS THIS MEMBER RUNS (0.19.0, mcpp#755): each a root holding
+    // that part of the Android pipeline, or the default -- the payload this
+    // member declares, or an override of it. One named here is not downloaded.
+    // `platform` is a root carrying `android.jar`; `keystore_package` above
+    // stays the way a keystore package is named.
+    mcpp::plugins::tool::choice build_tools, platform, jdk, bundletool_dir, kotlin, coursier;
     std::string keystore_alias;
     // The NAME of an environment variable `apksigner` itself reads
     // (`--ks-pass env:<NAME>`) -- this member never reads the secret; only
@@ -1228,7 +1235,30 @@ inline bool unpack_aar(const std::string& aar, const fs::path& dest, const std::
 // reports only "no action claimed --format 'apk'" (measured on 0.9.3 with two
 // triples). The warning channel is one line per directive, so line breaks in
 // the message are folded into spaces.
+// THE ROOT OF ONE OF THIS MEMBER'S PAYLOADS (0.19.0, mcpp#755): what the
+// build program named, an override, or the payload. `pending` is set when the
+// payload was asked for, and the engine then installs it and runs this program
+// again -- the member returns without planning.
+inline std::string payload_root(std::string_view package,
+                                const mcpp::plugins::tool::choice& named,
+                                bool& pending) {
+    pending = false;
+    mcpp::plugins::tool::spec s{ .who = "mcpp.dist.apk", .package = std::string(package),
+                                 .programs = {}, .option = "options::" + std::string(package) };
+    if (!named.is_default()) return mcpp::plugins::tool::resolve(s, named).root;
+    if (std::string_view(mcpp::xpkg_source("xim", s.package.c_str())) == "pending") {
+        (void)mcpp::xpkg_request("xim", s.package.c_str());
+        pending = true;
+        return {};
+    }
+    auto f = mcpp::plugins::tool::resolve(s);
+    return f.root;
+}
+
 inline plan& refuse(plan& p, std::string reason, const std::string& message) {
+    // A reason with no message: the payload was asked for and the engine runs
+    // this program again (0.19.0), so there is nothing to tell anyone yet.
+    if (message.empty()) { p.reason = std::move(reason); return p; }
     std::cerr << message << '\n';
     std::string folded;
     folded.reserve(message.size());
@@ -1530,14 +1560,17 @@ inline plan plan_for(options opt = {}) {
     }
 
     // ── the payloads this member declared ──────────────────────────────
-    const std::string buildTools = mcpp::xpkg_dir("xim", "android-build-tools");
+    bool payloadPending = false;
+    const std::string buildTools = payload_root("android-build-tools", opt.build_tools, payloadPending);
+    if (payloadPending) return refuse(p, "android-build-tools requested", {});
     if (buildTools.empty()) {
         return refuse(p, "android-build-tools not found",
             "mcpp.dist.apk: xim:android-build-tools was not found. Declare it "
             "under [target.'cfg(env = \"android\")'.feature-xlings.dist-apk] in "
             "the consuming project, or install it directly.");
     }
-    const std::string platformDir = mcpp::xpkg_dir("xim", "android-platform");
+    const std::string platformDir = payload_root("android-platform", opt.platform, payloadPending);
+    if (payloadPending) return refuse(p, "android-platform requested", {});
     if (platformDir.empty()) {
         return refuse(p, "android-platform not found",
             "mcpp.dist.apk: xim:android-platform was not found (declare it under "
@@ -1589,7 +1622,8 @@ inline plan plan_for(options opt = {}) {
     // android-build-tools' runtime dependency, which provisions the JDK for
     // ITS OWN wrappers and does not make it visible to a consumer's build
     // program (docs/31, "declare the tool where it will be looked up").
-    const std::string jdkHome = mcpp::xpkg_dir("xim", "jdk-temurin");
+    const std::string jdkHome = payload_root("jdk-temurin", opt.jdk, payloadPending);
+    if (payloadPending) return refuse(p, "jdk-temurin requested", {});
     if (jdkHome.empty()) {
         return refuse(p, "jdk-temurin not found",
             "mcpp.dist.apk: xim:jdk-temurin was not found (declare it under "
@@ -1611,7 +1645,8 @@ inline plan plan_for(options opt = {}) {
     // writes runs the JDK it was installed against.
     std::string bundletool;
     if (bundle) {
-        const std::string btDir = mcpp::xpkg_dir("xim", "bundletool");
+        const std::string btDir = payload_root("bundletool", opt.bundletool_dir, payloadPending);
+        if (payloadPending) return refuse(p, "bundletool requested", {});
         bundletool = btDir.empty() ? std::string()
                                    : (fs::path(btDir) / "bin" / "bundletool").string();
         if (!is_file(bundletool)) {
@@ -1716,7 +1751,8 @@ inline plan plan_for(options opt = {}) {
                 "names into {}.", mode, opt.maven_lock, cacheRoot));
         }
         const auto coursier = [&]() -> std::string {
-            const std::string dir = mcpp::xpkg_dir("xim", "coursier");
+            bool pend = false;
+            const std::string dir = payload_root("coursier", opt.coursier, pend);
             return dir.empty() ? std::string() : (fs::path(dir) / "bin" / "cs").string();
         };
         const auto no_coursier = [&](plan& pl) -> plan& {
@@ -1888,7 +1924,8 @@ inline plan plan_for(options opt = {}) {
     }
     std::string kotlinc, kotlinStdlib;
     if (needsKotlin) {
-        const std::string kdir = mcpp::xpkg_dir("xim", "kotlin");
+        const std::string kdir = payload_root("kotlin", opt.kotlin, payloadPending);
+        if (payloadPending) return refuse(p, "kotlin requested", {});
         if (!kdir.empty()) {
             kotlinc      = (fs::path(kdir) / "bin" / "kotlinc").string();
             kotlinStdlib = (fs::path(kdir) / "kotlinc" / "lib" / "kotlin-stdlib.jar").string();
@@ -1911,7 +1948,9 @@ inline plan plan_for(options opt = {}) {
     if (!opt.sign) {
         // Unsigned: no keystore is resolved, so none has to be declared.
     } else if (opt.keystore.empty()) {
-        const std::string ksDir = mcpp::xpkg_dir("xim", "android-debug-keystore");
+        const std::string ksDir = payload_root("android-debug-keystore",
+                                               mcpp::plugins::tool::choice{}, payloadPending);
+        if (payloadPending) return refuse(p, "android-debug-keystore requested", {});
         if (ksDir.empty()) {
             return refuse(p, "android-debug-keystore not found",
                 "mcpp.dist.apk: xim:android-debug-keystore was not found (declare "

@@ -72,6 +72,7 @@ export module mcpp.rules.sycl;
 
 import std;
 import mcpp;
+import mcpp.plugins.tool;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -109,9 +110,11 @@ struct options {
     // forcing a header into every C++ translation unit puts declarations ahead
     // of `export module`, which no module interface unit accepts.
     std::vector<std::string> flags;
-    // An explicit compiler path wins over the payload. Set it when a project
-    // pins a DPC++ other than the one the workspace installed.
-    std::string compiler;
+    // The DPC++ compiler (0.19.0: a `tool::choice`, so a path still assigns).
+    // Default: the `xim:dpcpp` payload, or an override of it. The host C and
+    // C++ libraries (`xim:gcc`, `xim:glibc`, `xim:linux-headers`) are payloads
+    // too, and an override in `[xlings.overrides]` names another of each.
+    mcpp::plugins::tool::choice compiler;
     std::string out_dir = std::string(mcpp::out_dir());
 };
 
@@ -343,7 +346,13 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         return out;
     }
 
-    const std::string dpcpp = payload("dpcpp");
+    const mcpp::plugins::tool::spec dpcppSpec{
+        .who = "mcpp.rules.sycl", .package = "dpcpp", .programs = {"clang++"},
+        .option = "options::compiler" };
+    const auto dpcppTool = mcpp::plugins::tool::resolve(dpcppSpec, opt.compiler);
+    // Asked for: the engine installs `xim:dpcpp` and runs this program again.
+    if (dpcppTool.pending()) return out;
+    const std::string dpcpp = dpcppTool.program;
     const std::string gcc   = payload("gcc");
     const std::string cuda  = tg.cuda_archs.empty() ? std::string{} : payload("cuda-nvcc");
     // THE C LIBRARY IS THE SAME QUESTION AS THE C++ ONE, ONE LAYER DOWN.
@@ -374,7 +383,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // The payload is needed for the COMPILER, so a project that named its own
     // does not need it. Asking for both would tell someone who has already
     // solved this to solve it again.
-    if (dpcpp.empty() && opt.compiler.empty()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
+    if (dpcpp.empty() && opt.compiler.is_default()) missing += "    \"xim:dpcpp\" = \"7.1.0\"\n";
     // THE THREE BELOW ARE THE HOST C AND C++ LIBRARIES, AND ONLY LINUX HAS
     // THIS PROBLEM. Requiring them on Windows would refuse a build over three
     // packages that this ecosystem does not publish for it and that the
@@ -412,11 +421,9 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         return out;
     }
 
-    auto exe = opt.compiler;
-    if (exe.empty()) exe = dpcpp + "/bin/clang++" + kExe;
+    const auto exe = dpcpp;
     if (!is_file(exe)) {
-        std::cerr << std::format("mcpp.rules.sycl: {} is not a file. The dpcpp payload publishes its SYCL\n"
-            "  compiler under clang's own name; set options::compiler to name another.", exe) << '\n';
+        std::cerr << mcpp::plugins::tool::describe_missing(dpcppSpec, dpcppTool) << '\n';
         return out;
     }
     if (auto v = compiler_version(exe); !v.empty()) mcpp::fact("dpcpp", v.c_str());

@@ -78,6 +78,11 @@ struct options {
     std::vector<std::string> install_args;
     // The vcpkg root. Empty is the `xim:vcpkg` payload this feature declares.
     std::string vcpkg_root;
+    // The vcpkg tool (0.19.0, mcpp#755): a program, a root, or the default --
+    // the `xim:vcpkg` payload, or an override of it. `vcpkg_root` above is
+    // the same statement as `tool::root(...)`, kept for the projects that
+    // write it. A tool named here is not downloaded.
+    mcpp::plugins::tool::choice vcpkg;
     // Files of the prefix the program reads at run time, placed beside it
     // (`{"share/opencc/t2s.json", "BaseConfig/opencc"}`): `mcpp run` finds them
     // and `mcpp pack` carries them. See `mcpp::plugins::fs::deploy_after`.
@@ -338,10 +343,18 @@ inline prefix use(const options& opt = {}) {
     }
 
     // ── the tool ──
-    const std::string vcpkgRoot = opt.vcpkg_root.empty()
-        ? std::string(mcpp::xpkg_dir("xim", "vcpkg")) : mcpp::deps::generic(mcpp::deps::absolute_from_root(opt.vcpkg_root));
-    const fs::path exe = vcpkgRoot.empty() ? fs::path()
-        : fs::path(vcpkgRoot) / (ts::host_is_windows() ? "vcpkg.exe" : "vcpkg");
+    // The tool and the scripts it was released with live in one root: the
+    // program's directory.
+    const mcpp::plugins::tool::spec vcpkgSpec{
+        .who = "mcpp.deps.vcpkg", .package = "vcpkg", .programs = {"vcpkg"},
+        .bin_dirs = {""}, .option = "options::vcpkg" };
+    mcpp::plugins::tool::choice vcChoice = opt.vcpkg;
+    if (vcChoice.is_default() && !opt.vcpkg_root.empty())
+        vcChoice = mcpp::plugins::tool::root(opt.vcpkg_root, opt.vcpkg.where);
+    const auto vcTool = mcpp::plugins::tool::resolve(vcpkgSpec, vcChoice);
+    const std::string vcpkgRoot = vcTool.program.empty() ? vcTool.root
+        : mcpp::deps::generic(fs::path(vcTool.program).parent_path());
+    const fs::path exe = vcTool.program.empty() ? fs::path() : fs::path(vcTool.program);
 
     // ── the overlays: the manifest's own, then the project's extras ──
     std::vector<fs::path> overlayTriplets = manifest_overlays(manifestRoot, "overlay-triplets");
@@ -494,11 +507,12 @@ inline prefix use(const options& opt = {}) {
     const fs::path manifestFile = manifestRoot / "vcpkg.json";
     const fs::path configFile   = manifestRoot / "vcpkg-configuration.json";
     mcpp::rerun_if_changed(mcpp::deps::generic(configFile).c_str());
-    if (exe.empty() || !fs::is_regular_file(exe, ec)) {
-        mcpp::deps::warn(std::format(
-            "{}: the vcpkg tool is not installed (xpkg_dir(\"xim\", \"vcpkg\") answered \"{}\"), "
-            "so this plan installs nothing. The `deps-vcpkg` feature declares `xim:vcpkg`; "
-            "`mcpp build` provisions it before this program runs.", who, vcpkgRoot));
+    if (vcTool.pending()) {
+        // Asked for: the engine installs `xim:vcpkg` and runs this program
+        // again, with it. Nothing is planned in this run.
+    } else if (exe.empty() || !fs::is_regular_file(exe, ec)) {
+        mcpp::deps::warn(mcpp::plugins::tool::describe_missing(vcpkgSpec, vcTool)
+                         + "\n  So this plan installs nothing.");
     } else {
         // THE ACTION IS vcpkg ITSELF. Everything an installation needs is an
         // argument: `--vcpkg-root` pairs the tool with the scripts it was

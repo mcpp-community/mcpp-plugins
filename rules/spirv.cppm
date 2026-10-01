@@ -63,6 +63,7 @@ import mcpp;
 // consumer names, written once for every member that embeds a payload.
 import mcpp.plugins;
 import mcpp.plugins.declare;
+import mcpp.plugins.tool;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -97,9 +98,11 @@ struct options {
     std::vector<std::string> defines;
     // glslang's optimiser (`-Os`), which is spirv-opt linked into it.
     bool optimize = true;
-    // An explicit compiler path wins over discovery. Set it when a project
-    // pins a glslang other than the one the workspace installed.
-    std::string compiler;
+    // The shader compiler (0.19.0: a `tool::choice`, so a path still
+    // assigns): glslang or glslc, told apart by program name. Default: the
+    // payload this rule declares for the host (`xim:glslang` on Linux,
+    // `xim:shaderc` on macOS and Windows), or an override of it.
+    mcpp::plugins::tool::choice compiler;
     std::string out_dir = std::string(mcpp::out_dir());
 
     // ── What a consumer names ────────────────────────────────────────────────
@@ -227,6 +230,8 @@ struct compiler {
     // Set when discovery already said why it failed, so the caller does not
     // follow a precise message with a generic one that contradicts it.
     bool        reported = false;
+    // The payload was asked for (on request): this program runs again with it.
+    bool        pending = false;
     explicit operator bool() const { return kind != flavour::none && !path.empty(); }
     const char* name() const { return kind == flavour::glslc ? "glslc" : "glslang"; }
 };
@@ -279,39 +284,81 @@ inline std::string first_on_path(const char* exe) {
     return {};
 }
 
-// Discovery, in the order a project can predict: what it named, what the
-// environment named, the payload the workspace installed, then the PATH. The
-// PATH comes last on purpose -- a host shader compiler is a fine fallback and
-// a poor default, because it makes the SPIR-V depend on a machine rather than
-// on a declaration.
-inline compiler find_compiler(const options& opt) {
-    if (!opt.compiler.empty()) {
-        auto k = classify(opt.compiler);
-        if (k == flavour::none) {
-            // Named but unrecognised: taking it as glslang would pass glslang's
-            // flags to something that is not glslang, and the error would name
-            // a flag rather than this decision.
-            std::cerr << std::format("mcpp.rules.spirv: options::compiler names '{}', which is neither glslang\n"
-                "  nor glslc by program name, and the two share almost no flags. Rename the\n"
-                "  program or point at the real one.", opt.compiler) << '\n';
-            return { .reported = true };
-        }
-        return { opt.compiler, k };
+// DISCOVERY THROUGH `mcpp.plugins.tool` (0.19.0), in the order every member
+// uses: what the build program named, the environment variables this rule has
+// always read (`MCPP_GLSLC`, then `MCPP_GLSLANG`), the engine's override or
+// payload (glslang, then shaderc). A name is classified by program name, so
+// `MCPP_GLSLC=/opt/bin/glslc` needs no second variable to say what it is.
+//
+// THE PATH IS NO LONGER CONSULTED BY ITSELF. Until 0.18 it was the last
+// resort, which made the SPIR-V depend on whatever the machine had; it is now
+// a choice (`tool::on_path()`). The old fallback still answers, with a warning
+// naming that choice, until 2027-04-01.
+inline const mcpp::plugins::tool::spec& glslang_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.rules.spirv", .package = "glslang",
+        .programs = {"glslangValidator", "glslang"}, .option = "options::compiler",
+        .legacy_env = "MCPP_GLSLANG" };
+    return s;
+}
+inline const mcpp::plugins::tool::spec& shaderc_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.rules.spirv", .package = "shaderc", .programs = {"glslc"},
+        .option = "options::compiler", .legacy_env = "MCPP_GLSLC" };
+    return s;
+}
+
+inline compiler from_found(const mcpp::plugins::tool::found& f) {
+    if (f.pending()) return { .pending = true };
+    if (!f) return {};
+    auto k = classify(f.program);
+    if (k == flavour::none) {
+        std::cerr << std::format("mcpp.rules.spirv: '{}' is neither glslang nor glslc by program\n"
+            "  name, and the two share almost no flags. Rename the program or point at the\n"
+            "  real one.", f.program) << '\n';
+        return { .reported = true };
     }
-    if (const char* e = std::getenv("MCPP_GLSLC");   e && *e) return { e, flavour::glslc };
-    if (const char* e = std::getenv("MCPP_GLSLANG"); e && *e) return { e, flavour::glslang };
+    return { f.program, k };
+}
 
-    if (const char* dir = mcpp::xpkg_dir("glslang"); dir && *dir)
-        for (const char* exe : {"glslangValidator", "glslang"})
-            if (auto p = program_in(std::filesystem::path(dir) / "bin", exe); !p.empty())
-                return { p, flavour::glslang };
-    if (const char* dir = mcpp::xpkg_dir("shaderc"); dir && *dir)
-        if (auto p = program_in(std::filesystem::path(dir) / "bin", "glslc"); !p.empty())
-            return { p, flavour::glslc };
-
-    for (const char* exe : {"glslangValidator", "glslang"})
-        if (auto p = first_on_path(exe); !p.empty()) return { p, flavour::glslang };
-    if (auto p = first_on_path("glslc"); !p.empty()) return { p, flavour::glslc };
+inline compiler find_compiler(const options& opt) {
+    namespace tool = mcpp::plugins::tool;
+    if (!opt.compiler.is_default()) {
+        // A program is resolved under the spec its name selects; a root or
+        // PATH is tried for glslang's names, then glslc's.
+        if (opt.compiler.how == tool::choice::kind::program) {
+            const auto k = classify(opt.compiler.value);
+            if (k == flavour::none) {
+                std::cerr << std::format("mcpp.rules.spirv: options::compiler names '{}', which is neither glslang\n"
+                    "  nor glslc by program name, and the two share almost no flags. Rename the\n"
+                    "  program or point at the real one.", opt.compiler.value) << '\n';
+                return { .reported = true };
+            }
+            return from_found(tool::resolve(k == flavour::glslc ? shaderc_spec() : glslang_spec(),
+                                            opt.compiler));
+        }
+        if (auto c = from_found(tool::resolve(glslang_spec(), opt.compiler)); c) return c;
+        return from_found(tool::resolve(shaderc_spec(), opt.compiler));
+    }
+    for (auto* s : {&shaderc_spec(), &glslang_spec()})
+        if (const char* e = std::getenv(s->legacy_env.c_str()); e && *e)
+            return from_found(tool::resolve(*s));
+    for (auto* s : {&glslang_spec(), &shaderc_spec()}) {
+        auto quiet = *s;
+        quiet.legacy_env.clear();
+        auto f = tool::resolve(quiet);
+        if (f || f.pending()) return from_found(f);
+    }
+    for (const char* exe : {"glslangValidator", "glslang", "glslc"})
+        if (auto p = first_on_path(exe); !p.empty()) {
+            mcpp::warning(std::format(
+                "mcpp.rules.spirv: using '{}' from PATH, because nothing else names a shader "
+                "compiler. A compiler found on PATH is a choice the build program states: "
+                "`options::compiler = mcpp::plugins::tool::on_path();`. This fallback is "
+                "removed on 2027-04-01.", p).c_str());
+            mcpp::decision("tool:mcpp.rules.spirv:glslang", "path", p.c_str());
+            return { p, classify(p) };
+        }
     return {};
 }
 
@@ -555,6 +602,8 @@ inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     if (shaders.empty()) return true;
 
     const auto cc = find_compiler(opt);
+    // Asked for: the engine installs the payload and runs this program again.
+    if (cc.pending) return true;
     if (!cc) {
         if (cc.reported) return false;
         std::cerr << std::format("mcpp.rules.spirv: no shader compiler found.\n"

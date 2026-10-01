@@ -1,12 +1,12 @@
 # `rules-qt`
 
-`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
+`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0, 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
 
 ## Use
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.18.1", features = ["rules-qt"], host-module = true }
+plugins = { version = "0.19.0", features = ["rules-qt"], host-module = true }
 
 # The SDK and its version are the project's declaration.
 [target.'cfg(any(windows, linux, macos))'.xlings.workspace]

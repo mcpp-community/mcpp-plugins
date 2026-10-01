@@ -45,8 +45,9 @@ struct options {
     // Names the action and the directory the archive is extracted into. Empty
     // takes the archive's file name without its extension.
     std::string name;
-    // The `cmake` executable. Empty is the `xim:cmake` payload.
-    std::string cmake;
+    // The `cmake` executable (0.19.0: a `tool::choice`, so a path still
+    // assigns). Default: the `xim:cmake` payload, or an override of it.
+    mcpp::plugins::tool::choice cmake;
 };
 
 struct result {
@@ -159,24 +160,18 @@ inline result unpack(const options& opt) {
     }
 
     // ── the tool ──
-    std::string cmake;
-    if (!opt.cmake.empty()) {
-        cmake = mcpp::deps::generic(mcpp::deps::absolute_from_root(opt.cmake));
-    } else if (const std::string root = mcpp::xpkg_dir("xim", "cmake"); !root.empty()) {
-        const bool win = std::string(mcpp::host()).find("windows") != std::string::npos;
-        for (auto const& sub : { fs::path("bin"), fs::path("CMake.app") / "Contents" / "bin" }) {
-            const auto exe = fs::path(root) / sub / (win ? "cmake.exe" : "cmake");
-            if (fs::is_regular_file(exe, ec)) { cmake = mcpp::deps::generic(exe); break; }
-        }
-    }
+    const auto tool = mcpp::plugins::tool::resolve(mcpp::deps::cmake_spec("mcpp.deps.archive"),
+                                                   opt.cmake);
+    const std::string cmake = tool.program;
     if (cmake.empty()) {
         // Nothing is extracted, so nothing can be deployed: a deployed file
-        // must be an output of some action.
-        mcpp::deps::warn(std::format(
-            "{}: cmake is not installed (xpkg_dir(\"xim\", \"cmake\") answered \"{}\"), so this plan "
-            "extracts nothing from {}. The `deps-archive` feature declares `xim:cmake`; "
-            "`mcpp build` provisions it before this program runs.",
-            who, std::string(mcpp::xpkg_dir("xim", "cmake")), mcpp::deps::generic(archive)));
+        // must be an output of some action. A requested payload is installed
+        // and this program runs again; anything else is reported.
+        if (!tool.pending())
+            mcpp::deps::warn(mcpp::plugins::tool::describe_missing(
+                mcpp::deps::cmake_spec("mcpp.deps.archive"), tool)
+                + std::format("\n  So this plan extracts nothing from {}.",
+                              mcpp::deps::generic(archive)));
         r.files.clear();
         return r;
     }

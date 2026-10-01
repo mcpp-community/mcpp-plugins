@@ -70,6 +70,9 @@ inline constexpr std::string_view kKeys[] = {
     "MCPP_ABI_TOOL_RC", "MCPP_ABI_TOOL_AS", "MCPP_ABI_TOOL_MT",
     "MCPP_TOOL_ENV", "MCPP_TOOLSET_IDENTITY", "MCPP_MSVC_INSTANCE_DIR", "MCPP_NINJA",
     "MCPP_CXX_RUNTIME", "MCPP_MSVC_CRT_LINKAGE",
+    // Sources (0.19.0, mcpp#755): which phase is running. The per-payload keys
+    // are stated by `context::xpkg*`, which names them itself.
+    "MCPP_PHASE",
 };
 
 inline std::string read_file(const std::filesystem::path& p) {
@@ -97,8 +100,9 @@ struct context {
         files.emplace_back(std::move(path), std::move(content));
         return *this;
     }
-    // `xpkg_dir(ns, name)`: the directory of a declared payload.
-    context& xpkg(std::string_view ns, std::string_view name, std::string dir) {
+    // `MCPP_XPKG_<NS>_<NAME>_<SUFFIX>`, spelled as the engine spells it.
+    std::string xpkg_key(std::string_view ns, std::string_view name,
+                         std::string_view suffix) const {
         std::string key = "MCPP_XPKG_";
         auto put = [&](std::string_view s) {
             for (std::size_t i = 0; i < s.size(); ++i) {
@@ -109,9 +113,24 @@ struct context {
         };
         if (!ns.empty()) { put(ns); key += '_'; }
         put(name);
-        key += "_DIR";
-        return set(std::move(key), std::move(dir));
+        key += '_';
+        key += suffix;
+        return key;
     }
+    // `xpkg_dir(ns, name)`: the directory of a declared payload.
+    context& xpkg(std::string_view ns, std::string_view name, std::string dir) {
+        return set(xpkg_key(ns, name, "DIR"), std::move(dir));
+    }
+    // `xpkg_source(ns, name)` (0.19.0): "payload", "override" or "pending".
+    context& xpkg_source(std::string_view ns, std::string_view name, std::string source) {
+        return set(xpkg_key(ns, name, "SOURCE"), std::move(source));
+    }
+    // `xpkg_program(ns, name)` (0.19.0): the program an override named.
+    context& xpkg_program(std::string_view ns, std::string_view name, std::string program) {
+        return set(xpkg_key(ns, name, "PROGRAM"), std::move(program));
+    }
+    // The phase a case runs in (0.19.0): "toolchain" for a toolchain phase.
+    context& phase(std::string name) { return set("MCPP_PHASE", std::move(name)); }
 };
 
 // Contexts that describe the rows a plugin meets. Paths are under `{root}`,

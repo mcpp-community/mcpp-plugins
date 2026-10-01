@@ -86,8 +86,10 @@ struct options {
     // and whether the prefix's shared-library directory reaches `mcpp run`
     // and `mcpp pack`.
     bool shared = false;
-    // The `cmake` executable. Empty is the `xim:cmake` payload.
-    std::string cmake;
+    // The `cmake` executable (0.19.0: a `tool::choice`, so a path still
+    // assigns). Default: the `xim:cmake` payload, or an override of it. A
+    // choice made here is not downloaded: the payload is declared on request.
+    mcpp::plugins::tool::choice cmake;
     // Files of the prefix placed beside the program, as `mcpp.deps.vcpkg`
     // takes them (`{"bin/tool.cfg", "."}`).
     std::vector<mcpp::plugins::fs::deploy_entry> deploy;
@@ -167,18 +169,8 @@ struct prefix {
     explicit operator bool() const { return !root.empty(); }
 };
 
-inline std::string cmake_exe(const options& opt) {
-    namespace fs = std::filesystem;
-    if (!opt.cmake.empty()) return mcpp::deps::generic(mcpp::deps::absolute_from_root(opt.cmake));
-    const std::string dir = mcpp::xpkg_dir("xim", "cmake");
-    if (dir.empty()) return {};
-    const bool win = std::string(mcpp::host()).find("windows") != std::string::npos;
-    std::error_code ec;
-    for (auto const& sub : { fs::path("bin"), fs::path("CMake.app") / "Contents" / "bin" }) {
-        const auto exe = fs::path(dir) / sub / (win ? "cmake.exe" : "cmake");
-        if (fs::is_regular_file(exe, ec)) return mcpp::deps::generic(exe);
-    }
-    return {};
+inline mcpp::plugins::tool::found cmake_exe(const options& opt) {
+    return mcpp::plugins::tool::resolve(mcpp::deps::cmake_spec("mcpp.deps.cmake"), opt.cmake);
 }
 
 namespace detail {
@@ -420,12 +412,14 @@ inline prefix use(const options& opt) {
     p.mechanism = std::string(ts::name(named ? ts::mechanism::chain
                                        : instance ? ts::mechanism::instance : ts::mechanism::detected));
 
-    const std::string cmake = cmake_exe(opt);
-    if (cmake.empty()) {
-        mcpp::deps::warn(std::format(
-            "{}: no cmake (xpkg_dir(\"xim\", \"cmake\") answered \"{}\"), so this plan builds "
-            "nothing. The `deps-cmake` feature declares `xim:cmake`; `mcpp build` provisions it "
-            "before this program runs.", who, std::string(mcpp::xpkg_dir("xim", "cmake"))));
+    const auto tool = cmake_exe(opt);
+    const std::string cmake = tool.program;
+    if (tool.pending()) {
+        // Asked for: the engine installs `xim:cmake` and runs this program
+        // again, with it. Nothing is planned in this run.
+    } else if (cmake.empty()) {
+        mcpp::deps::warn(mcpp::plugins::tool::describe_missing(
+            mcpp::deps::cmake_spec("mcpp.deps.cmake"), tool) + "\n  So this plan builds nothing.");
     } else {
         // ONE ACTION, THREE STEPS. `cmake -P` runs a script this program
         // writes: configure (every time -- over an existing cache CMake re-runs

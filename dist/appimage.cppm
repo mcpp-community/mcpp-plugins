@@ -44,6 +44,7 @@ export module mcpp.dist.appimage;
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
 
 // Nothing here uses `std::println`, and that is not a style choice: both of its
 // overloads reach into the libc++ dylib for symbols macOS 14 does not ship, so
@@ -90,9 +91,12 @@ struct options {
     // tries.
     std::string icon;
 
-    // An explicit `appimagetool` wins over discovery. Set it to pin a build
-    // other than the one the workspace installed.
-    std::string tool;
+    // `appimagetool` (0.19.0: a `tool::choice`, so a path still assigns).
+    // Default: the `xim:appimagetool` payload this feature declares, or an
+    // override of it. PATH is not consulted by default -- a host tool would
+    // make the produced AppImage depend on a machine rather than on a
+    // declaration -- and `mcpp::plugins::tool::on_path()` asks for it.
+    mcpp::plugins::tool::choice tool;
     // The type-2 runtime stub the produced AppImage starts with.
     //
     // IT IS DECLARED BECAUSE THE TOOL WOULD OTHERWISE FETCH IT. Measured on
@@ -213,20 +217,15 @@ inline std::string payload_dir_of(const std::string& tool) {
     return std::filesystem::path(tool).parent_path().string();
 }
 
-inline std::string discover_tool(const options& opt) {
-    if (!opt.tool.empty()) return opt.tool;
-    // THE PAYLOAD THIS MEMBER DECLARED, and nothing else.
-    //
-    // `xpkg_dir` answers from `MCPP_XPKG_*_DIR`, which mcpp sets for the
-    // package being built -- so a member that runs a payload tool declares the
-    // payload itself rather than relying on a consumer's manifest. There is
-    // deliberately no PATH fallback: a host `appimagetool` would make the
-    // produced AppImage depend on a machine rather than on a declaration, and
-    // an AppImage is the artifact for which that matters most.
-    const std::string dir = mcpp::xpkg_dir("xim", "appimagetool");
-    if (dir.empty()) return {};
-    const std::string exe = (std::filesystem::path(dir) / "appimagetool").string();
-    return is_file(exe) ? exe : std::string();
+inline const mcpp::plugins::tool::spec& appimagetool_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.dist.appimage", .package = "appimagetool",
+        .programs = {"appimagetool"}, .bin_dirs = {"", "bin"}, .option = "options::tool" };
+    return s;
+}
+
+inline mcpp::plugins::tool::found discover_tool(const options& opt) {
+    return mcpp::plugins::tool::resolve(appimagetool_spec(), opt.tool);
 }
 
 inline std::string discover_runtime(const options& opt, const std::string& tool) {
@@ -326,19 +325,16 @@ inline plan plan_for(options opt = {}) {
         return p;
     }
 
-    const std::string tool = discover_tool(opt);
+    const auto toolFound = discover_tool(opt);
+    const std::string tool = toolFound.program;
     if (tool.empty()) {
-        // NAMES WHERE IT LOOKED, not a manifest the reader does not own. The
-        // payload is declared by this package's own feature, so a consumer who
-        // sees this has an installation problem rather than a declaration to
-        // add.
-        std::cerr << std::format(
-            "mcpp.dist.appimage: appimagetool was not found.\n"
-            "  looked for: {}/appimagetool  (the `xim:appimagetool` payload "
-            "this feature declares)\n"
-            "  set `options::tool` to name one explicitly.",
-            mcpp::xpkg_dir("xim", "appimagetool")) << '\n';
-        p.reason = "appimagetool not found";
+        // NAMES WHAT WAS CONSULTED, not a manifest the reader does not own.
+        // The payload is declared by this package's own feature, so a consumer
+        // who sees this has an installation problem rather than a declaration
+        // to add.
+        if (!toolFound.pending())
+            std::cerr << mcpp::plugins::tool::describe_missing(appimagetool_spec(), toolFound) << '\n';
+        p.reason = toolFound.pending() ? "appimagetool requested" : "appimagetool not found";
         return p;
     }
     const std::string runtime = discover_runtime(opt, tool);

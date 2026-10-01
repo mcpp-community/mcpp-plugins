@@ -1,0 +1,79 @@
+# mcpp 构建插件框架：实施计划与任务依赖
+
+日期：2026-10-01。状态：执行中。
+
+依据：`2026-10-01-ecosystem-build-plugin-framework-design.md` v3（下称“设计”）及其 §0 的已定事项。本记录覆盖 2026-10-01 /goal 的要求：
+- D6 一步到位，不分期交付；
+- 每个仓库单 PR，标题带版本号；
+- CI 全绿；
+- 自我 review，包括生态级 review；
+- 发布：GitHub 加 GitCode（本地 gtc），mcpp-index 与 xim-pkgindex 登记；
+- 在 xlings subos 沙箱中以 CN 镜像做真实验证；
+- 关闭已完成的 issue；
+- 文档与代码注释不含表情符号。
+
+## 1. 交付物与版本
+
+| 仓库 | PR | 版本 | 内容 |
+|---|---|---|---|
+| mcpp-community/mcpp | 1 个 | 发布当日的 `YYYY.M.D.N` | 核心：决策记录与输出语义、E1、E2、决策指令、自定义工具链（路径与 toolchain 阶段）、规范与文档（中英）、测试 |
+| mcpp-community/mcpp-plugins | 1 个 | 0.19.0 | `mcpp.plugins.tool`、`mcpp.plugins.toolchain`、成员迁移、按需条目、文档、fixture、CI |
+| speak-agent/llvm-macos27-lab | 1 个以上 | — | LLVM `arm64e.x1` 修复在 macOS 27 / Xcode 27 上的可用性；裁剪后的工具链资产 |
+| speak-agent/mcpp-framework-lab | 1 个以上 | — | 工具来源、输出、可观察性的验收 |
+| speak-agent/mcpp-toolchain-lab | 1 个以上 | — | 自定义工具链的验收（含 macOS 27） |
+| mcpplibs/mcpp-index | 1 个 | — | 登记 plugins 0.19.0 |
+| openxlings/xim-pkgindex | release 自动开出的 bump PR | — | 登记 mcpp 新版本 |
+
+设计 §10 中的 S4（xim `llvm` 23.1.3 打包）取决于上游发布。它不在本 goal 的关键路径上：若上游在收尾前发布了 23.1.3，就按设计执行；否则在 mcpp#669 中记录 lab 的结果，并留作后续。
+
+## 2. 任务与依赖
+
+```
+T0  issues（mcpp、plugins）与 lab 仓库
+T1  核心：来源类、决策记录、渲染（status 行、标签、Finished 汇总）、resolution.json、
+    mcpp why tool/payload、--managed-only
+T2  E1 覆盖（清单、target cfg、全局配置、环境变量；供给过滤；统一校验；
+    fillXpkgDirs 的 DIR/PROGRAM/SOURCE；xpkg_program、xpkg_source）      ← T1
+T3  E2 按需（provision 键；xpkg_request/xpkg_pending；xpkg-request 指令；
+    批量供给与选择性重跑；离线拒绝；plan_only note）                   ← T1, T2
+T4  decision 指令（插件把工具决定写进记录）                            ← T1
+T5  自定义工具链按路径（[toolchain] 表、MCPP_TOOLCHAIN=path:、bootstrap 键；
+    探测；不做 post-install；指纹含内容 hash；lock 记为 local）          ← T1
+T6  toolchain 阶段（configure = "build.mcpp"；mcpp:toolchain 指令；mcpp::phase）  ← T4, T5
+T7  mcpp 规范与文档（中英）、CHANGELOG、设计记录                          ← T1–T6 的语义
+T8  mcpp 单测与 e2e                                                      ← 各项随实现
+T9  plugins 0.19.0（tool、toolchain、成员迁移、on-request、文档、fixture、CI）
+                                                                         ← T2, T3, T4, T6 的宿主接口
+T10 llvm-macos27-lab                                                     （独立，最早开始）
+T11 framework-lab、toolchain-lab                                         ← T9（以及 T10 的资产）
+T12 两个 PR 的 CI 全绿；以 mcpp_source_ref 指向 mcpp 分支做 plugins 预验证
+T13 自我 review（含生态级）
+T14 发布 mcpp → xim-pkgindex bump PR 合入 → bootstrap pin
+T15 发布 plugins 0.19.0 → gtc → mcpp-index
+T16 沙箱验证（xlings subos，CN 镜像）；lab 改指已发布版本复跑
+T17 issue 评论与关闭；设计记录追加状态行
+```
+
+**并行**：
+- T10 不依赖任何实现，最早开始；
+- T1 完成后，T2/T4/T5 可以并行；
+- T7 与 T9 的文档部分在接口冻结后与实现并行；
+- 后台 agent 同时最多 3 个。
+
+## 3. 质量门（每个视角在哪里被检查）
+
+| 视角 | 检查 |
+|---|---|
+| 架构 | 核心只承担语义与接口；具体工具的知识留在 L2 与成员中（设计 §3 原则 4）；新模块的 import 指向类型的提供者 |
+| 稳定性 | 默认构建的输出与行为逐字节不变（framework-lab `default` case 与 e2e）；已有 e2e 全部通过 |
+| 简洁 | 两个入口共用一个描述 schema；一份决策记录驱动全部输出 |
+| 用户体验 | 显式选择一行 `Using`；错误首行写明来源；报错给出四种指定方式 |
+| 兼容性 | 旧插件不改代码即可从 E1 受益；`tool::choice` 可由字符串隐式构造；新键在旧引擎上会被拒或忽略，提 floor |
+| 跨平台 | 单测与 e2e 覆盖 Linux、macOS、Windows；Windows 路径与 `.exe`；macOS 27 由 lab 覆盖 |
+| 一致性 | 优先级只写一份（核心一份、L2 一份）；文档中英结构一一对应 |
+| 无感升级 | 不写任何新键的项目在新版本上行为不变；插件 0.19.0 的成员在默认路径上下载与输出不变 |
+| 测试覆盖 | 每个新清单键、指令、查询函数与命令都有单测或 e2e；每条拒绝都有一个反例用例 |
+
+## 4. 执行记录
+
+（随执行追加：PR、run、发布与验证结果。）

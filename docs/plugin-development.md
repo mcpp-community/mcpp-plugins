@@ -34,7 +34,7 @@ mcpp is a general build engine with a framework for build plugins. Plugins come 
 | layer | modules | provided by |
 |---|---|---|
 | L1 `mcpp.core` | `mcpp.core`, spelled `mcpp` as well (the two are permanently equivalent) | the engine |
-| L2 general library | `mcpp.plugins.declare`, `mcpp.plugins.toolset`, `mcpp.plugins.fs`; `mcpp.plugins.testing` | this package, feature `plugins-core` (`plugins-testing` for the kit) |
+| L2 general library | `mcpp.plugins.declare`, `mcpp.plugins.toolset`, `mcpp.plugins.fs`, `mcpp.plugins.tool`; `mcpp.plugins.testing`, `mcpp.plugins.toolchain` | this package, feature `plugins-core` (`plugins-testing` for the kit, `plugins-toolchain` for the toolchain builders) |
 | L3 plugins | `mcpp.deps.*`, `mcpp.rules.*`, `mcpp.dist.*`, `mcpp.tools.*` here; `mcpp.<namespace>.*` elsewhere | this package, by feature; any package |
 
 A layer depends only on the layers below it. L2 knows no foreign tool: it turns
@@ -52,7 +52,7 @@ mcpp-index refuses such a package.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.18.1", features = ["plugins-core"], host-module = true, reexport = true }
+plugins = { version = "0.19.0", features = ["plugins-core"], host-module = true, reexport = true }
 ```
 
 `reexport = true` is needed when the plugin's consumers import L2 modules in
@@ -60,13 +60,56 @@ their own build programs.
 
 **The engine floor.** A plugin states the first mcpp release it needs in
 `[package] mcpp = ">=<release>"`; an older engine stops before any other work
-and names the upgrade. This package's floor is 2026.9.28.3, the release that
-states the build information L2 reads.
+and names the upgrade. This package's floor is 2026.10.1.3, the release that
+states where each tool and payload comes from (protocol 15).
+
+**Where a member's tool comes from.** A member that runs a program resolves it
+through `mcpp.plugins.tool`, which answers in one order for every member:
+
+1. the build program's own choice — `o.cmake = "/usr/bin/cmake"`, or
+   `tool::root(dir)`, `tool::on_path()`;
+2. the variable that member has always read (`MCPP_SLANGC`), kept for the
+   projects that write it;
+3. the engine's override (`[xlings.overrides]`, `MCPP_XLINGS_OVERRIDE_*`,
+   `config.toml`) — the payload is then not installed at all;
+4. the declared payload, asked for here when it is declared
+   `provision = "on-request"`.
+
+A member writes one `tool::spec` per tool (the package, the program names, the
+directories under a root, the option's name, a legacy variable) and calls
+`resolve`:
+
+```cpp
+inline const mcpp::plugins::tool::spec& cmake_spec() { /* … */ }
+
+auto t = mcpp::plugins::tool::resolve(cmake_spec(), opt.cmake);
+if (t.pending()) return true;        // asked for; the engine runs this program again
+if (!t) { mcpp::deps::warn(mcpp::plugins::tool::describe_missing(cmake_spec(), t)); return false; }
+run(t.program);
+```
+
+A choice **never asks for the payload**, which is what makes "the build program
+names its own tool" mean "the payload is not downloaded". `resolve` records the
+answer with `mcpp::decision`, so the build reports the source and
+`mcpp why tool <name>` can answer. `describe_missing` is the one refusal text,
+listing every way to name the tool.
+
+An option field is a `tool::choice`, which a string constructs, so
+`o.cmake = "/usr/bin/cmake"` keeps working and the line that wrote it is what a
+build reports.
+
+**Stating the build toolchain.** `mcpp.plugins.toolchain` (feature
+`plugins-toolchain`) builds the statement a root build program makes in its
+toolchain phase, for a project whose `[toolchain]` says
+`configure = "build.mcpp"`: `layout`, `prefixed`, `compose`,
+`from_env_script`, `with_launcher`, `with_sysroot`, `with_tool`, `managed`,
+`env`, and `configure(fn)` / `use(d)`.
 
 **Testing a plugin.** `mcpp.plugins.testing` runs a plugin function in a child
 process against a stated build context (`row::windows_visual_studio()`,
 `row::windows_managed()`, `row::linux_gcc()`, `row::linux_libcxx()`, or a
-context built with `set` and `file`) and hands the lines it emitted and the
+context built with `set`, `file`, `xpkg`, `xpkg_source`, `xpkg_program` and
+`phase`) and hands the lines it emitted and the
 files it wrote to a check. The test is a build program; a failed case fails the
 build and prints the report. `tests/plugin-logic` is this package's own use.
 
