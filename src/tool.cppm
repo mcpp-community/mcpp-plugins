@@ -73,6 +73,26 @@ inline std::string program_in(const std::filesystem::path& dir, std::string_view
     return {};
 }
 
+// A STATED PATH, WITH THE SAME SUFFIX RULE AS A DISCOVERED ONE. A build program
+// writes the path a shell gave it, and on Windows `command -v cmake` answers
+// `C:/Program Files/CMake/bin/cmake` for a `cmake.exe`; process creation there
+// appends the suffix itself, so a resolver that insisted on the exact spelling
+// refused a program the host would have run (measured in CI: the cmake consumer
+// reported `options::cmake = "C:/Program Files/CMake/bin/cmake" (not found)` on a
+// runner carrying cmake). Empty when neither spelling is a file.
+inline std::string program_at(const std::filesystem::path& p) {
+    if (is_file(p)) return generic(p);
+    auto with = p;
+    with += ".exe";
+    if (is_file(with)) return generic(with);
+    if (p.extension() == ".exe") {
+        auto without = p;
+        without.replace_extension();
+        if (is_file(without)) return generic(without);
+    }
+    return {};
+}
+
 inline std::string find_on_path(std::string_view name) {
     const char* path = std::getenv("PATH");
     if (!path) return {};
@@ -226,9 +246,9 @@ inline found resolve(const spec& s, const choice& c = {}) {
                         record(from::choice, file, line);
                         return out;
                     }
-                } else if (detail::is_file(p)) {
-                    out.program = detail::generic(p);
-                    out.root = detail::root_of(p);
+                } else if (auto hit = detail::program_at(p); !hit.empty()) {
+                    out.program = std::move(hit);
+                    out.root = detail::root_of(out.program);
                     record(from::choice, file, line);
                     return out;
                 }

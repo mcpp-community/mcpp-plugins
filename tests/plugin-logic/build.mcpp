@@ -479,6 +479,27 @@ int main(int argc, char** argv) {
                        "the decision names the choice and the program");
           } },
 
+        { "tool: a stated path resolves whichever executable suffix the file carries",
+          // What a shell hands a build program on Windows: `command -v cmake`
+          // answers a path with no `.exe`, for a `cmake.exe`. Process creation
+          // there appends the suffix, so the resolver does too -- stated on a
+          // Linux row, because the rule is the same on every host.
+          t::row::linux_libcxx().file("pkg/opt/bin/cmake.exe")
+              .xpkg_source("xim", "cmake", "pending"),
+          [] {
+              const auto f = tool_resolve(mcpp::plugins::tool::program(
+                  std::string(mcpp::manifest_dir()) + "/opt/bin/cmake"));
+              std::printf("source=%s program=%s\n",
+                          std::string(mcpp::plugins::tool::name(f.source)).c_str(),
+                          f.program.c_str());
+              return f ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("source=choice", "opt/bin/cmake.exe"),
+                       "the file beside the stated path answers");
+              c.expect(!r.has_line("mcpp:xpkg-request="), "a choice requests no payload");
+          } },
+
         { "tool: an override answers, and the payload is not consulted",
           t::row::linux_libcxx().file("opt/bin/cmake")
               .xpkg("xim", "cmake", "{root}/opt")
