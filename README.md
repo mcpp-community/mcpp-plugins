@@ -44,7 +44,10 @@ The second segments `core`, `plugins`, `deps`, `rules`, `dist` and `tools` of
 `mcpp.` belong to this package and the engine; a third-party plugin names its
 modules `mcpp.<its namespace>.*` ([docs/plugin-development.md](docs/plugin-development.md#3-layers-names-and-the-engine-floor)).
 The full account of the families, and of how the engine routes a file to a
-rule, is in [docs/engine-and-rules.md](docs/engine-and-rules.md).
+rule, is in [docs/engine-and-rules.md](docs/engine-and-rules.md). Where the tool a
+member runs comes from -- what a project can name, what a plugin must declare for
+naming it to avoid a download, and the scenarios on both sides -- is in
+[docs/tool-sources.md](docs/tool-sources.md).
 
 ## Members
 

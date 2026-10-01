@@ -98,6 +98,11 @@ An option field is a `tool::choice`, which a string constructs, so
 `o.cmake = "/usr/bin/cmake"` keeps working and the line that wrote it is what a
 build reports.
 
+A choice alone does not prevent a download: an eagerly declared payload is
+provisioned before any build program runs. The pair that makes "named here, not
+downloaded" true, the scenarios on both sides of it, and how each official member
+declares its tools are in [tool-sources.md](tool-sources.md).
+
 **Stating the build toolchain.** `mcpp.plugins.toolchain` (feature
 `plugins-toolchain`) builds the statement a root build program makes in its
 toolchain phase, for a project whose `[toolchain]` says
