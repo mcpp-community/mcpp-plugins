@@ -39,6 +39,9 @@
 
 module;
 #include <stdlib.h>
+#if !defined(_WIN32)
+#include <unistd.h>     // environ -- the kit clears the real build's MCPP_XPKG_*
+#endif
 
 export module mcpp.plugins.testing;
 
@@ -71,9 +74,38 @@ inline constexpr std::string_view kKeys[] = {
     "MCPP_TOOL_ENV", "MCPP_TOOLSET_IDENTITY", "MCPP_MSVC_INSTANCE_DIR", "MCPP_NINJA",
     "MCPP_CXX_RUNTIME", "MCPP_MSVC_CRT_LINKAGE",
     // Sources (0.19.0, mcpp#755): which phase is running. The per-payload keys
-    // are stated by `context::xpkg*`, which names them itself.
+    // are stated by `context::xpkg*`, which names them itself, and the ones the
+    // real build set are cleared by `inherited_payload_keys`.
     "MCPP_PHASE",
 };
+
+// EVERY `MCPP_XPKG_*` THE REAL BUILD SET, so that a case sees only the payloads
+// it states. These cases run inside a build program, and the engine gives that
+// program one `_DIR`, `_PROGRAM` and `_SOURCE` for each payload its package
+// declares -- `pending` among them, for a payload declared
+// `provision = "on-request"` and not installed. Inherited, that made the eight
+// vcpkg cases ask for `xim:vcpkg` and plan nothing on a host where it was not
+// installed, while passing on one where it was; the symptom was a plan with the
+// prefix mapping but no install action (measured on macOS arm64, 0.19.0).
+//
+// Enumerated rather than listed: the keys are derived from package names, so no
+// fixed list can cover the next payload a member reads.
+inline std::vector<std::string> inherited_payload_keys() {
+#if defined(_WIN32)
+    char** env = _environ;
+#else
+    char** env = environ;
+#endif
+    std::vector<std::string> out;
+    for (char** e = env; e && *e; ++e) {
+        std::string_view entry(*e);
+        const auto eq = entry.find('=');
+        if (eq == std::string_view::npos) continue;
+        const auto name = entry.substr(0, eq);
+        if (name.starts_with("MCPP_XPKG_")) out.emplace_back(name);
+    }
+    return out;
+}
 
 inline std::string read_file(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
@@ -293,6 +325,8 @@ inline int run(int argc, char** argv, std::span<const test_case> cases) {
     // The union of the keys any case states, beside the kit's own list.
     std::vector<std::string> keys;
     for (auto k : detail::kKeys) keys.emplace_back(k);
+    for (auto& k : detail::inherited_payload_keys())
+        if (std::ranges::find(keys, k) == keys.end()) keys.push_back(std::move(k));
     for (auto const& c : cases)
         for (auto const& kv : c.ctx.values)
             if (std::ranges::find(keys, kv.first) == keys.end()) keys.push_back(kv.first);

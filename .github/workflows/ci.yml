@@ -746,7 +746,11 @@ jobs:
             grep -v '^[[:space:]]*#' mcpp.toml | grep -n 'host-module'
             exit 1
           fi
-          "$MCPP" build | tee build.log
+          # `2>&1`, BECAUSE THE LINE THIS ASSERTS ON IS NARRATION. mcpp writes
+          # every status line to standard error from 2026.10.1.1 (the output
+          # streams design), so a step that captures stdout alone reads an empty
+          # log and reports that the rule did not run while it did.
+          "$MCPP" build 2>&1 | tee build.log
           grep -q 'Rules mcpp.rules.spirv' build.log \
             || { echo "FAIL: the build did not report which rule it ran"; exit 1; }
           "$MCPP" run | tee run.log
