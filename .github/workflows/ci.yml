@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mcpp_source_ref:
-        description: "A branch or tag of mcpp-community/mcpp to build and run in place of the release MCPP_VERSION names"
+        description: "A branch or tag of mcpp-community/mcpp to build and run in place of the release MCPP_BOOTSTRAP names"
         required: false
         default: ""
 
@@ -60,7 +60,25 @@ env:
   # 2026.9.28.3 IS WHAT 0.17.0 NEEDS, and the package floor states it: the
   # build information `mcpp.plugins.toolset` reads, `mcpp::report`, and one
   # placement edge for many files (mcpp#734).
-  MCPP_VERSION: 2026.9.28.3
+  #
+  # 2026.10.1.3 IS WHAT 0.19.0 NEEDS (mcpp#755): protocol 15 states where each
+  # tool and payload comes from -- `xpkg_source`, `xpkg_program`,
+  # `xpkg_request`, `mcpp::decision`, `mcpp::toolchain`, `mcpp::phase` -- and
+  # it is the release that honours the `provision = "on-request"` entries this
+  # collection now declares, so a consumer that names its own tool downloads
+  # nothing. An older engine refuses the manifest at the package floor.
+  MCPP_VERSION: 2026.10.1.3
+  # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
+  #
+  # `MCPP_VERSION` states the engine this collection needs -- the package floor
+  # (`[package] mcpp`) is the same statement -- and a release of it may not exist
+  # yet: 0.19.0 was written against mcpp#755 and pinned 2026.10.1.3 before that
+  # release was published. Every fetch therefore names this variable instead, and
+  # the dispatch input `mcpp_source_ref` builds the engine under review with it.
+  #
+  # It moves to `MCPP_VERSION` once that release exists, so the ordinary path
+  # runs the engine this collection states.
+  MCPP_BOOTSTRAP: 2026.10.1.3
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
@@ -107,16 +125,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.mcpp
-          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/*/mcpp.toml') }}
+          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-${{ hashFiles('tests/*/mcpp.toml') }}
           restore-keys: |
-            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-
 
       - name: Fetch the released mcpp
         run: |
           curl -L -fsS --retry 3 --retry-all-errors -o mcpp.tar.gz \
-            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-linux-x86_64.tar.gz"
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_BOOTSTRAP}/mcpp-${MCPP_BOOTSTRAP}-linux-x86_64.tar.gz"
           tar -xzf mcpp.tar.gz
-          MCPP="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/bin/mcpp"
+          MCPP="$PWD/mcpp-${MCPP_BOOTSTRAP}-linux-x86_64/bin/mcpp"
           "$MCPP" --version
           # THE BUNDLED xlings, NAMED EXPLICITLY BECAUSE `MCPP_HOME` IS PINNED.
           #
@@ -126,7 +144,7 @@ jobs:
           # with `xlings binary not found` -- measured. The override is needed
           # only for that first call: mcpp copies the binary into the pinned
           # home and answers from there afterwards.
-          export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_VERSION}-linux-x86_64/registry/bin/xlings"
+          export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_BOOTSTRAP}-linux-x86_64/registry/bin/xlings"
           "$MCPP" self config --mirror GLOBAL
           echo "MCPP=$MCPP" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
@@ -728,7 +746,11 @@ jobs:
             grep -v '^[[:space:]]*#' mcpp.toml | grep -n 'host-module'
             exit 1
           fi
-          "$MCPP" build | tee build.log
+          # `2>&1`, BECAUSE THE LINE THIS ASSERTS ON IS NARRATION. mcpp writes
+          # every status line to standard error from 2026.10.1.1 (the output
+          # streams design), so a step that captures stdout alone reads an empty
+          # log and reports that the rule did not run while it did.
+          "$MCPP" build 2>&1 | tee build.log
           grep -q 'Rules mcpp.rules.spirv' build.log \
             || { echo "FAIL: the build did not report which rule it ran"; exit 1; }
           "$MCPP" run | tee run.log
@@ -1690,6 +1712,12 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
+      # 0.19.0 (mcpp#755): a tool the build program names is used and the
+      # payload is not asked for; an override says the same and is reported;
+      # `--managed-only` refuses both.
+      - name: a tool the build program names is used, and its payload is not asked for
+        run: bash .github/scripts/check-deps-and-qt.sh tool-sources
+
       # 0.18.0: an installation is kept under a key with no path of the
       # machine, and taken by a build without target/, by a checkout at another
       # path; an edit, other CFLAGS and an installation that names its own
@@ -1783,20 +1811,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.mcpp
-          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/spirv-consumer/mcpp.toml') }}
+          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-${{ hashFiles('tests/spirv-consumer/mcpp.toml') }}
           restore-keys: |
-            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-
 
       - name: Fetch the released mcpp
         run: |
           set -e
           curl -L -fsS --retry 3 --retry-all-errors -o mcpp.pkg \
-            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-${{ matrix.asset }}"
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_BOOTSTRAP}/mcpp-${MCPP_BOOTSTRAP}-${{ matrix.asset }}"
           case "${{ matrix.asset }}" in
             *.zip) unzip -q mcpp.pkg ;;
             *)     tar -xzf mcpp.pkg ;;
           esac
-          dir="mcpp-${MCPP_VERSION}-${{ matrix.dir-suffix }}"
+          dir="mcpp-${MCPP_BOOTSTRAP}-${{ matrix.dir-suffix }}"
           MCPP="$PWD/$dir/bin/mcpp"
           "$MCPP" --version
           # The bundled xlings, named explicitly because MCPP_HOME is pinned
@@ -2388,6 +2416,12 @@ jobs:
       - name: deps-cmake builds a CMake subproject as an action and links it
         run: bash .github/scripts/check-deps-and-qt.sh cmake-consumer
 
+      # 0.19.0 (mcpp#755): a tool the build program names is used and the
+      # payload is not asked for; an override says the same and is reported;
+      # `--managed-only` refuses both.
+      - name: a tool the build program names is used, and its payload is not asked for
+        run: bash .github/scripts/check-deps-and-qt.sh tool-sources
+
       # 0.18.0: an installation is kept under a key with no path of the
       # machine, and taken by a build without target/, by a checkout at another
       # path; an edit, other CFLAGS and an installation that names its own
@@ -2454,20 +2488,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.mcpp
-          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-${{ hashFiles('tests/vcpkg-consumer/mcpp.toml') }}
+          key: mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-${{ hashFiles('tests/vcpkg-consumer/mcpp.toml') }}
           restore-keys: |
-            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_VERSION }}-
+            mcpp-sandbox-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-
 
       - name: Fetch the released mcpp
         run: |
           set -e
           curl -L -fsS --retry 3 --retry-all-errors -o mcpp.pkg \
-            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_VERSION}/mcpp-${MCPP_VERSION}-windows-x86_64.zip"
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_BOOTSTRAP}/mcpp-${MCPP_BOOTSTRAP}-windows-x86_64.zip"
           case "windows-x86_64.zip" in
             *.zip) unzip -q mcpp.pkg ;;
             *)     tar -xzf mcpp.pkg ;;
           esac
-          dir="mcpp-${MCPP_VERSION}-windows-x86_64"
+          dir="mcpp-${MCPP_BOOTSTRAP}-windows-x86_64"
           MCPP="$PWD/$dir/bin/mcpp"
           "$MCPP" --version
           # The bundled xlings, named explicitly because MCPP_HOME is pinned

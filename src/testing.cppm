@@ -39,6 +39,16 @@
 
 module;
 #include <stdlib.h>
+// The environment as an array, so the kit can clear the real build's
+// MCPP_XPKG_*. Darwin does not export `environ` to anything but a main program,
+// and offers `_NSGetEnviron()` instead; elsewhere the symbol is declared here
+// rather than taken from <unistd.h>, whose declaration a module purview does not
+// see.
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#elif !defined(_WIN32)
+extern "C" char** environ;
+#endif
 
 export module mcpp.plugins.testing;
 
@@ -70,7 +80,41 @@ inline constexpr std::string_view kKeys[] = {
     "MCPP_ABI_TOOL_RC", "MCPP_ABI_TOOL_AS", "MCPP_ABI_TOOL_MT",
     "MCPP_TOOL_ENV", "MCPP_TOOLSET_IDENTITY", "MCPP_MSVC_INSTANCE_DIR", "MCPP_NINJA",
     "MCPP_CXX_RUNTIME", "MCPP_MSVC_CRT_LINKAGE",
+    // Sources (0.19.0, mcpp#755): which phase is running. The per-payload keys
+    // are stated by `context::xpkg*`, which names them itself, and the ones the
+    // real build set are cleared by `inherited_payload_keys`.
+    "MCPP_PHASE",
 };
+
+// EVERY `MCPP_XPKG_*` THE REAL BUILD SET, so that a case sees only the payloads
+// it states. These cases run inside a build program, and the engine gives that
+// program one `_DIR`, `_PROGRAM` and `_SOURCE` for each payload its package
+// declares -- `pending` among them, for a payload declared
+// `provision = "on-request"` and not installed. Inherited, that made the eight
+// vcpkg cases ask for `xim:vcpkg` and plan nothing on a host where it was not
+// installed, while passing on one where it was; the symptom was a plan with the
+// prefix mapping but no install action (measured on macOS arm64, 0.19.0).
+//
+// Enumerated rather than listed: the keys are derived from package names, so no
+// fixed list can cover the next payload a member reads.
+inline std::vector<std::string> inherited_payload_keys() {
+#if defined(_WIN32)
+    char** env = _environ;
+#elif defined(__APPLE__)
+    char** env = *_NSGetEnviron();
+#else
+    char** env = environ;
+#endif
+    std::vector<std::string> out;
+    for (char** e = env; e && *e; ++e) {
+        std::string_view entry(*e);
+        const auto eq = entry.find('=');
+        if (eq == std::string_view::npos) continue;
+        const auto name = entry.substr(0, eq);
+        if (name.starts_with("MCPP_XPKG_")) out.emplace_back(name);
+    }
+    return out;
+}
 
 inline std::string read_file(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
@@ -97,8 +141,9 @@ struct context {
         files.emplace_back(std::move(path), std::move(content));
         return *this;
     }
-    // `xpkg_dir(ns, name)`: the directory of a declared payload.
-    context& xpkg(std::string_view ns, std::string_view name, std::string dir) {
+    // `MCPP_XPKG_<NS>_<NAME>_<SUFFIX>`, spelled as the engine spells it.
+    std::string xpkg_key(std::string_view ns, std::string_view name,
+                         std::string_view suffix) const {
         std::string key = "MCPP_XPKG_";
         auto put = [&](std::string_view s) {
             for (std::size_t i = 0; i < s.size(); ++i) {
@@ -109,9 +154,24 @@ struct context {
         };
         if (!ns.empty()) { put(ns); key += '_'; }
         put(name);
-        key += "_DIR";
-        return set(std::move(key), std::move(dir));
+        key += '_';
+        key += suffix;
+        return key;
     }
+    // `xpkg_dir(ns, name)`: the directory of a declared payload.
+    context& xpkg(std::string_view ns, std::string_view name, std::string dir) {
+        return set(xpkg_key(ns, name, "DIR"), std::move(dir));
+    }
+    // `xpkg_source(ns, name)` (0.19.0): "payload", "override" or "pending".
+    context& xpkg_source(std::string_view ns, std::string_view name, std::string source) {
+        return set(xpkg_key(ns, name, "SOURCE"), std::move(source));
+    }
+    // `xpkg_program(ns, name)` (0.19.0): the program an override named.
+    context& xpkg_program(std::string_view ns, std::string_view name, std::string program) {
+        return set(xpkg_key(ns, name, "PROGRAM"), std::move(program));
+    }
+    // The phase a case runs in (0.19.0): "toolchain" for a toolchain phase.
+    context& phase(std::string name) { return set("MCPP_PHASE", std::move(name)); }
 };
 
 // Contexts that describe the rows a plugin meets. Paths are under `{root}`,
@@ -274,6 +334,8 @@ inline int run(int argc, char** argv, std::span<const test_case> cases) {
     // The union of the keys any case states, beside the kit's own list.
     std::vector<std::string> keys;
     for (auto k : detail::kKeys) keys.emplace_back(k);
+    for (auto& k : detail::inherited_payload_keys())
+        if (std::ranges::find(keys, k) == keys.end()) keys.push_back(std::move(k));
     for (auto const& c : cases)
         for (auto const& kv : c.ctx.values)
             if (std::ranges::find(keys, kv.first) == keys.end()) keys.push_back(kv.first);

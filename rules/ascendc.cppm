@@ -58,6 +58,7 @@ export module mcpp.rules.ascendc;
 
 import std;
 import mcpp;
+import mcpp.plugins.tool;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -224,9 +225,34 @@ struct toolkit {
     }
 };
 
-inline std::optional<toolkit> find_toolkit() {
+// THE TOOLKIT (0.19.0, mcpp#755): what the build program named, an override,
+// or the payload this rule declares, asked for when it is declared on request.
+// `pending` then says the engine installs it and runs this program again.
+inline const mcpp::plugins::tool::spec& cann_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.rules.ascendc", .package = "cann-toolkit",
+        // `<root>/cann/<arch>-linux/ccec_compiler/bin/bisheng` is the layout;
+        // the root is what this rule reads, so no program is looked for.
+        .programs = {}, .option = "options::toolkit" };
+    return s;
+}
+
+inline std::optional<toolkit> find_toolkit(const mcpp::plugins::tool::choice& named = {},
+                                           bool* pending = nullptr) {
+    if (pending) *pending = false;
     toolkit t;
-    const auto pkg = xpkg("cann-toolkit");
+    std::string pkg;
+    if (!named.is_default()) {
+        auto f = mcpp::plugins::tool::resolve(cann_spec(), named);
+        pkg = f.root;
+    } else if (std::string_view(mcpp::xpkg_source("xim", "cann-toolkit")) == "pending") {
+        (void)mcpp::xpkg_request("xim", "cann-toolkit");
+        if (pending) *pending = true;
+        return std::nullopt;
+    } else {
+        pkg = xpkg("cann-toolkit");
+        if (!pkg.empty()) (void)mcpp::plugins::tool::resolve(cann_spec());
+    }
     if (pkg.empty()) {
         std::cerr << std::format("mcpp.rules.ascendc: the CANN toolkit is not installed.\n"
             "  This rule DECLARES it, so a project normally writes nothing. Check, in "
@@ -258,6 +284,10 @@ inline std::optional<toolkit> find_toolkit() {
 // ─── The rule ──────────────────────────────────────────────────────────────
 
 struct options {
+    // THE TOOLKIT (0.19.0, mcpp#755): a root holding CANN, or the default --
+    // the `xim:cann-toolkit` payload this rule declares, or an override of it.
+    // A toolkit named here is not downloaded.
+    mcpp::plugins::tool::choice toolkit;
     // Include directories of the PROJECT, added after the toolkit's own.
     std::vector<std::string> includes;
     // Extra flags, appended last so they win.
@@ -304,7 +334,8 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
             "  default for it.", mcpp::accel()) << '\n';
         return out;
     }
-    auto tk = find_toolkit();
+    bool tkPending = false;
+    auto tk = find_toolkit(opt.toolkit, &tkPending);
     if (!tk) return out;
 
     const std::string outDir = opt.out_dir.empty() ? std::string(mcpp::out_dir())
@@ -416,7 +447,7 @@ inline bool compile(options opt = {}) {
     // translation units, which is right: a consumer of this project has no
     // business seeing the toolkit's headers. `link_search` reaches the final
     // link, which is what `-lascendcl` in the manifest then resolves against.
-    if (auto tk = find_toolkit()) {
+    if (auto tk = find_toolkit(opt.toolkit)) {
         if (std::filesystem::is_directory(tk->host_include()))
             mcpp::include_dir(tk->host_include().c_str());
         if (std::filesystem::is_directory(tk->lib64())) {

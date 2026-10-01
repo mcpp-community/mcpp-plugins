@@ -576,7 +576,97 @@ vcpkg_make_port() {
     echo "ok: a make-based port builds with the managed toolset first on the kept PATH"
 }
 
+# 0.19.0 (mcpp#755): a tool the build program names is used, and the payload the
+# member declares `provision = "on-request"` is NOT asked for.
+#
+# THE CRITERION IS THE ENGINE'S OWN RECORD, NOT THE STORE. A runner may already
+# hold `xim:cmake` -- every other case here installs it -- so "nothing was
+# downloaded" cannot be read from the store, and a clean `MCPP_HOME` would cost
+# a download per case. `resolution.json` states what each payload's source was
+# and whether this build asked for it, which is the decision itself. The pair is
+# the criterion: the same project asks for the payload when nothing names a
+# tool, and does not when the build program names one.
+tool_sources() {
+    cd "$ROOT/tests/cmake-consumer"
+    local cmake; cmake=$(command -v cmake || true)
+    [ -n "$cmake" ] || { echo "SKIP: no cmake on this host to name"; return 0; }
+
+    # `considered` of the payload entry, and the class of each subject.
+    record() {
+        python3 - <<'PYEOF'
+import glob, json, sys
+paths = glob.glob("target/*/*/resolution.json")
+if not paths:
+    print("NO-RECORD"); raise SystemExit(0)
+doc = json.load(open(sorted(paths)[0]))
+for d in doc.get("sources", []):
+    print(d["subject"], d["class"], "|", "; ".join(d.get("considered", [])), sep="\t")
+PYEOF
+    }
+
+    cp build.mcpp build.mcpp.bak
+    restore() { mv -f build.mcpp.bak build.mcpp 2>/dev/null || true; }
+    trap restore EXIT
+
+    # The control: nothing names a tool, so the member asks for the payload.
+    rm -rf target
+    NO_COLOR=1 "$MCPP" build >/dev/null 2>&1 || fail "the control build failed"
+    record | grep -q "payload:xim:cmake.*installed on request" \
+        || fail "the control did not ask for xim:cmake: $(record)"
+
+    # The build program names the host's cmake, through the member's option.
+    python3 - "$cmake" <<'PYEOF'
+import pathlib, sys
+p = pathlib.Path("build.mcpp")
+t = p.read_text()
+marker = "    o.shared    = true;"
+assert marker in t, t
+p.write_text(t.replace(marker, marker + '\n    o.cmake     = "%s";' % sys.argv[1].replace("\\", "/"), 1))
+PYEOF
+    rm -rf target
+    local out
+    out=$(MCPP_NO_AUTO_INSTALL=1 NO_COLOR=1 "$MCPP" build 2>&1) \
+        || fail "a named cmake still needed the payload: $out"
+    case "$out" in
+        *"Using cmake (mcpp.deps.cmake)"*"[program · build.mcpp:"*) ;;
+        *) fail "the build did not report the tool's source: $out" ;;
+    esac
+    case "$out" in
+        *"program: cmake (mcpp.deps.cmake)"*) ;;
+        *) fail "the Finished line did not summarise the source: $out" ;;
+    esac
+    record | grep -q "payload:xim:cmake.*not requested by this build" \
+        || fail "the payload was asked for although the program named a cmake: $(record)"
+    MCPP_NO_AUTO_INSTALL=1 "$MCPP" run | grep -q '^cmake-consumer: greet says 42$' \
+        || fail "the program built with the named cmake does not run"
+
+    # The same statement as an engine override, with the payload untouched.
+    restore
+    rm -rf target
+    out=$(MCPP_XLINGS_OVERRIDE_XIM_CMAKE="$cmake" MCPP_NO_AUTO_INSTALL=1 NO_COLOR=1 "$MCPP" build 2>&1) \
+        || fail "an override still needed the payload: $out"
+    case "$out" in
+        *"Using xim:cmake"*"[custom · env MCPP_XLINGS_OVERRIDE_XIM_CMAKE]"*) ;;
+        *) fail "the build did not report the override: $out" ;;
+    esac
+    record | grep -q "payload:xim:cmake.*custom.*overridden" \
+        || fail "the record does not state the override: $(record)"
+
+    # `--managed-only` refuses the same build, naming the payload.
+    rm -rf target
+    out=$(MCPP_XLINGS_OVERRIDE_XIM_CMAKE="$cmake" MCPP_NO_AUTO_INSTALL=1 NO_COLOR=1 \
+          "$MCPP" build --managed-only 2>&1 || true)
+    case "$out" in
+        *managed-only*xim:cmake*) ;;
+        *) fail "--managed-only did not refuse the override: $out" ;;
+    esac
+    trap - EXIT
+    rm -rf target
+    echo "OK: a named tool is used, the payload is not asked for, and both are reported"
+}
+
 case "${1:-}" in
+    tool-sources)        tool_sources ;;
     vcpkg-consumer)      vcpkg_consumer ;;
     vcpkg-libcxx)        vcpkg_libcxx ;;
     archive-consumer)    archive_consumer ;;
@@ -592,5 +682,5 @@ case "${1:-}" in
     vcpkg-managed)       vcpkg_managed ;;
     vcpkg-msbuild-refused) vcpkg_msbuild_refused ;;
     vcpkg-make-port)     vcpkg_make_port ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
 esac

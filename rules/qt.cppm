@@ -55,6 +55,7 @@ export module mcpp.rules.qt;
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
 
 export namespace mcpp::rules::qt {
 
@@ -128,11 +129,26 @@ inline std::filesystem::path absolute_from_root(const std::string& p) {
     return path.lexically_normal();
 }
 
+// INDEXED, NOT A RANGE-FOR, FOR A COMPILER REASON (gcc 16.1.0, 0.19.0). The
+// range-for walked a `std::string` through `__gnu_cxx::__normal_iterator`, whose
+// `operator*` and `operator++` are `always_inline` and reach this module from
+// the `std` module. Once this file imported one module more, gcc refused both:
+//
+//     error: inlining failed in call to 'always_inline'
+//       'constexpr __gnu_cxx::__normal_iterator<...>::operator*() const'
+//     note: called from here      for (char c : message)
+//
+// in `warn@mcpp.rules.qt` alone, while every other range-for in the collection
+// compiled. An index touches no iterator, so it does not depend on what a BMI
+// carries across a module boundary. The same hazard class is on record in the
+// engine (a clang 20.1.7 crash from an exported `std::pair` specialization): the
+// error names a file the change never touched.
 inline void warn(const std::string& message) {
     std::cerr << message << '\n';
     std::string folded;
     bool space = false;
-    for (char c : message) {
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        const char c = message[i];
         if (c == '\n') { space = true; continue; }
         if (space) { if (c == ' ') continue; folded += ' '; space = false; }
         folded += c;
@@ -302,10 +318,18 @@ inline sdk_source locate(const options& opt = {}) {
     auto extras = [&] {
         for (auto const& r : opt.extra_roots) add(detail::absolute_from_root(r));
     };
-    // 1. The build program.
+    // 1. The build program. Recorded as the source of the SDK (0.19.0), so a
+    // build says where Qt came from the way it says where every tool did.
     if (!opt.root.empty()) {
         out.level = "options";
-        add(detail::absolute_from_root(opt.root));
+        const auto root = detail::absolute_from_root(opt.root);
+        add(root);
+        // Recorded only when the SDK is there: `add` keeps a directory that
+        // exists, and a root that does not is reported by the caller as no SDK
+        // rather than as the source of one.
+        if (!out.roots.empty())
+            mcpp::decision("tool:mcpp.rules.qt:qt", "choice", root.generic_string().c_str(),
+                           "", 0, "xim:qt");
         extras();
         return out;
     }
@@ -314,17 +338,27 @@ inline sdk_source locate(const options& opt = {}) {
     if (const char* env = std::getenv("QT_ROOT_DIR"); env && *env) {
         out.level = "QT_ROOT_DIR";
         add(fs::path(env));
+        if (!out.roots.empty())
+            mcpp::decision("tool:mcpp.rules.qt:qt", "env", env, "QT_ROOT_DIR", 0, "xim:qt");
         extras();
         return out;
     }
     // 3. A declared payload. `xim:qt` is the full base and `xim:qt-base` its
     // qtbase + qttools subset; a project that declares both uses the full one.
-    const std::string full = mcpp::xpkg_dir("xim", "qt");
-    const std::string base = full.empty() ? std::string(mcpp::xpkg_dir("xim", "qt-base")) : full;
+    // Resolved through `mcpp.plugins.tool`, so an `[xlings.overrides]` entry
+    // for either package answers here and the source is recorded (0.19.0).
+    auto payload_root = [](const char* package) {
+        const mcpp::plugins::tool::spec s{
+            .who = "mcpp.rules.qt", .package = package, .programs = {},
+            .option = "options::root", .request = false };
+        return mcpp::plugins::tool::resolve(s).root;
+    };
+    const std::string full = payload_root("qt");
+    const std::string base = full.empty() ? payload_root("qt-base") : full;
     if (!base.empty()) {
         out.level = "xlings";
         add(fs::path(base));
-        if (const std::string addons = mcpp::xpkg_dir("xim", "qt-addons"); !addons.empty())
+        if (const std::string addons = payload_root("qt-addons"); !addons.empty())
             add(fs::path(addons));
     }
     extras();

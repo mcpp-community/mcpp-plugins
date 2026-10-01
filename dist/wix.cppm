@@ -101,6 +101,7 @@ export module mcpp.dist.wix;
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
 
 // Nothing here uses `std::println`, and that is not a style choice: both of
 // its overloads reach into the libc++ dylib for symbols macOS 14 does not
@@ -169,9 +170,11 @@ struct options {
     // `<ComponentGroupRef Id="StagedFiles" />`.
     std::string wxs;
 
-    // An explicit `wix` wins over the declared payload. Set it to pin a build
-    // other than `xim:wix`, for instance one the project compiled itself.
-    std::string tool;
+    // The `wix` CLI (0.19.0: a `tool::choice`, so a path still assigns).
+    // Default: the `xim:wix` payload this feature declares, or an override of
+    // it. PATH is not consulted by default, for the reason the header gives;
+    // `mcpp::plugins::tool::on_path()` asks for it.
+    mcpp::plugins::tool::choice tool;
 
     // Where the produced file lands. Empty means
     // `<out_dir>/<product_name>-<arch>.msi`.
@@ -266,6 +269,9 @@ inline bool write_if_different(const std::filesystem::path& path,
 // --format 'msi'", names no reason. The warning channel is one line per
 // directive, so line breaks are folded into spaces.
 inline plan& refuse(plan& p, std::string reason, const std::string& message) {
+    // A reason with no message: the tool was asked for and the engine runs
+    // this program again (0.19.0), so there is nothing to tell anyone yet.
+    if (message.empty()) { p.reason = std::move(reason); return p; }
     std::cerr << message << '\n';
     std::string folded;
     folded.reserve(message.size());
@@ -484,9 +490,17 @@ inline std::string wix_payload_exe() {
     return is_file(exe.string()) ? exe.string() : std::string();
 }
 
-inline std::string discover_tool(const options& opt) {
-    if (!opt.tool.empty()) return opt.tool;
-    return wix_payload_exe();
+// The payload keeps its tool at `tool/tools/net6.0/any/wix.exe`, so the
+// resolver is given that directory under the root.
+inline const mcpp::plugins::tool::spec& wix_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.dist.wix", .package = "wix", .programs = {"wix"},
+        .bin_dirs = {"tool/tools/net6.0/any"}, .option = "options::tool" };
+    return s;
+}
+
+inline mcpp::plugins::tool::found discover_tool(const options& opt) {
+    return mcpp::plugins::tool::resolve(wix_spec(), opt.tool);
 }
 
 // The stock bootstrapper application's extension: what the project named, else
@@ -695,18 +709,13 @@ inline plan plan_for(options opt = {}) {
                      "`options::target` to the program target's name.");
     }
 
-    const std::string tool = discover_tool(opt);
+    const auto toolFound = discover_tool(opt);
+    const std::string tool = toolFound.program;
     if (tool.empty()) {
-        return refuse(p, "wix not found", std::format(
-            "mcpp.dist.wix: the wix CLI was not found.\n"
-            "  xpkg_dir(\"xim\", \"wix\") answered \"{}\"; the payload's tool is "
-            "tool/tools/net6.0/any/wix.exe beneath it.\n"
-            "  `xim:wix` is declared by this feature under "
-            "[target.windows.feature-xlings.dist-wix], so an empty answer means "
-            "the payload is not installed for this build (mcpp provisions it "
-            "when the feature is active on a Windows target)\n"
-            "  or set `options::tool` to name one explicitly.",
-            mcpp::xpkg_dir("xim", "wix")));
+        if (toolFound.pending())
+            return refuse(p, "wix requested", {});
+        return refuse(p, "wix not found",
+                      mcpp::plugins::tool::describe_missing(wix_spec(), toolFound));
     }
 
     const std::string hostArch = mcpp::target_arch();

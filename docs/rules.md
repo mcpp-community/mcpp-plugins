@@ -4,19 +4,19 @@ The rules that compile one kind of translation unit with a compiler mcpp does no
 
 ## `rules-ascendc`
 
-Module `mcpp.rules.ascendc`; engine floor: 2026.9.6.6.
+Module `mcpp.rules.ascendc`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
 
 **Needs and behaviour.** `[build] accel = "ascend8.5+{dav-c220}"`, a constrained glob for `*.asc`. Compiles with BiSheng in MIXED mode, so the object carries the device binary and a host-callable launcher and joins the ordinary link -- no registration file and no device-link step. Its own engine needs are `.asc` in the device-source table and `mcpp::link_flag` for the `-rpath-link` the toolkit's shared libraries require, both 2026.9.6.5
 
 ## `rules-cuda`
 
-Module `mcpp.rules.cuda`; engine floor: 2026.9.6.6.
+Module `mcpp.rules.cuda`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
 
 **Needs and behaviour.** `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one
 
 ## `rules-hip`
 
-Module `mcpp.rules.hip`; engine floor: 2026.9.6.6.
+Module `mcpp.rules.hip`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
 
 **Needs and behaviour.** `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine
 
@@ -28,13 +28,13 @@ Module `mcpp.rules.metal`; engine floor: 2026.9.8.1.
 
 ## `rules-slang`
 
-Module `mcpp.rules.slang`; engine floor: 2026.9.7.1.
+Module `mcpp.rules.slang`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.7.1 before).
 
 **Needs and behaviour.** `[build] accel = "vulkan1.2"`, a constrained glob for `*.slang`. Slang is a different language from GLSL rather than a second driver for it -- its own module system, generics, and targets beyond SPIR-V -- so it is a rule of its own. `.slang` is **not** in the engine's device-source table: this feature declares `device_extensions = [".slang"]` and `rule_module = "mcpp.rules.slang"`, and the engine routes it from there. That is the criterion for the whole arrangement -- a new device language costs no engine release. Since 0.7.0 it has the same `options::storage` axis as `rules-spirv` (header / object / sidecar), `options::extra_args` for the arguments the rule has no field for, and `options::per_file` for what one shader gets that the others do not -- a project with a `-fvk-use-gl-layout` and one shader needing `-emit-spirv-via-glsl` writes both without leaving one `compile()` call
 
 ## `rules-spirv`
 
-Module `mcpp.rules.spirv`; engine floor: 2026.9.6.6.
+Module `mcpp.rules.spirv`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
 
 **Needs and behaviour.** `[build] accel = "vulkan1.2"`, a constrained glob for the shader stages; compiles each shader through a `role = "source"` action and states which of the two compilers produced it
 
@@ -46,6 +46,6 @@ Module `mcpp.rules.swift`; engine floor: 2026.9.8.1.
 
 ## `rules-sycl`
 
-Module `mcpp.rules.sycl`; engine floor: 2026.9.6.6.
+Module `mcpp.rules.sycl`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
 
 **Needs and behaviour.** `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1

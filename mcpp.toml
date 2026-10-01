@@ -1,10 +1,12 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.18.1"
-# The first mcpp release that states the build information (protocol 14),
-# places files in one edge, and renders structured diagnostics (mcpp#734).
-mcpp        = ">=2026.9.28.3"
+version     = "0.19.0"
+# The first mcpp release that states where each tool and payload comes from
+# (protocol 15, mcpp#755): `xpkg_source`, `xpkg_program`, `xpkg_request`,
+# `mcpp::decision`, `mcpp::toolchain`, `mcpp::phase`, and the
+# `provision = "on-request"` entries below.
+mcpp        = ">=2026.10.1.3"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -30,8 +32,12 @@ import_std = true
 #                      be that action's declared input
 #   src/declare.cppm,  L2, the official general library for build programs
 #   src/toolset.cppm,  (mcpp#734): `mcpp.plugins.declare`,
-#   src/fs.cppm        `mcpp.plugins.toolset`, `mcpp.plugins.fs`
+#   src/fs.cppm        `mcpp.plugins.toolset`, `mcpp.plugins.fs`,
+#   src/tool.cppm      `mcpp.plugins.tool` -- where a tool a member runs comes
+#                      from, one order for every member (mcpp#755)
 #   src/testing.cppm   `mcpp.plugins.testing`, the test kit for plugins
+#   src/toolchain.cppm `mcpp.plugins.toolchain`, a build toolchain stated by
+#                      the root build program (feature `plugins-toolchain`)
 #
 # The L2 units import `mcpp.core` (spelled `mcpp`), which exists only inside a
 # build program, so listing them here would break the ORDINARY build of this
@@ -83,8 +89,16 @@ default = []
 #                          build system (`instance`, `chain`, `detected`)
 #   mcpp.plugins.fs        deterministic file generation and placement
 [features.plugins-core]
-sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm",
+sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm",
            "src/compat/detected_toolset.cppm"]
+
+# `mcpp.plugins.toolchain` -- the builders a root build program states its
+# build toolchain with, in the toolchain phase of a project whose `[toolchain]`
+# says `configure = "build.mcpp"` (mcpp#755). Its own feature rather than part
+# of `plugins-core`: a project that states no toolchain compiles nothing of it.
+[features.plugins-toolchain]
+sources = ["src/toolchain.cppm"]
+implies = ["plugins-core"]
 
 # The test kit: a plugin function runs against a stated build context, and its
 # directives are compared. Separate from `plugins-core`, so that no build
@@ -487,17 +501,22 @@ implies           = ["plugins-core"]
 # `cmake_minimum_required` of ports that CMake 3 accepted. On Linux and macOS
 # vcpkg's documented host prerequisites -- git, curl, zip, unzip, tar and a C
 # compiler -- are the host's, as they are for vcpkg itself.
+# PROVISIONED WHEN A BUILD PROGRAM ASKS FOR IT (0.19.0, mcpp#755). A consumer
+# whose build program names its own vcpkg -- `options::vcpkg`, or an
+# `[xlings.overrides]` entry -- never downloads this one, and a consumer that
+# names none asks for it through `mcpp.plugins.tool` and gets it installed
+# before the plan is made.
 [feature-xlings.deps-vcpkg]
-"xim:vcpkg" = ">=2026.7.27"
+"xim:vcpkg" = { version = ">=2026.7.27", provision = "on-request" }
 
 # A floor: CMake's version is coupled to the subproject's
 # `cmake_minimum_required`, which only rises.
 [feature-xlings.deps-cmake]
-"xim:cmake" = ">=3.31"
+"xim:cmake" = { version = ">=3.31", provision = "on-request" }
 
 # `cmake -E tar xf --touch` extracts a zip on every host; `--touch` is 3.24+.
 [feature-xlings.deps-archive]
-"xim:cmake" = ">=3.31"
+"xim:cmake" = { version = ">=3.31", provision = "on-request" }
 
 # ── The environment `dist-appimage` needs ──────────────────────────────────
 #
@@ -520,8 +539,14 @@ implies           = ["plugins-core"]
 # A FLOOR RATHER THAN AN EXACT VERSION. appimagetool's version is coupled to
 # nothing this rule cannot see; 1.9.1 is where the runtime stub ships beside the
 # tool, which is what makes an offline build expressible.
+# ASKED FOR WHEN A PACK NEEDS IT (0.19.0, mcpp#755). An ordinary Linux build
+# of a project that names this member installed the tool and never ran it:
+# provisioning happens before the build program learns `--format`, which is the
+# cost this file recorded under `dist-apk`'s `bundletool`. The member now asks
+# for it while planning the pack, so a build that packs nothing downloads
+# nothing, and `mcpp pack --format appimage` installs it then.
 [target.'cfg(linux)'.feature-xlings.dist-appimage]
-"xim:appimagetool" = ">=1.9.1"
+"xim:appimagetool" = { version = ">=1.9.1", provision = "on-request" }
 
 # WiX IS A PAYLOAD, AND FOR A WHILE THIS FILE SAID IT COULD NOT BE. The
 # toolset is under the Microsoft Reciprocal License and its own licence text
@@ -619,7 +644,10 @@ implies           = ["plugins-core"]
 "xim:android-platform"        = "36-r2"
 "xim:jdk-temurin"             = "25.0.4+7"
 "xim:android-debug-keystore"  = "1.0.0"
-"xim:bundletool"              = "1.18.3"
+# `xim:bundletool` BUILDS `--format aab` AND IS ASKED FOR THEN (0.19.0,
+# mcpp#755): the member requests it while planning a bundle, so an ordinary
+# `--format apk` build installs nothing for it.
+"xim:bundletool"              = { version = "1.18.3", provision = "on-request" }
 
 # The compiler `options::kotlin_sources` needs, and the resolver `options::maven`
 # needs, each behind its own feature (see `[features.dist-apk-kotlin]`). The

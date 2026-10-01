@@ -51,6 +51,7 @@ import mcpp;
 // reaches them through one shape.
 import mcpp.plugins;
 import mcpp.plugins.declare;
+import mcpp.plugins.tool;
 
 // `std::println` is avoided here for the reason every file in this package
 // records: it is not header-only, and the symbols its overloads reach for were
@@ -102,8 +103,10 @@ struct options {
     };
     std::map<std::string, overrides> per_file;
 
-    // An explicit compiler path wins over discovery.
-    std::string compiler;
+    // The Slang compiler (0.19.0: a `tool::choice`, so a path still
+    // assigns). Default: the `xim:slang` payload this rule declares, or an
+    // override of it.
+    mcpp::plugins::tool::choice compiler;
     std::string out_dir = std::string(mcpp::out_dir());
 
     // ── What a consumer names ────────────────────────────────────────────────
@@ -209,17 +212,31 @@ inline std::string first_on_path(const char* exe) {
     return {};
 }
 
-// Discovery, in the order a project can predict: what it named, what the
-// environment named, the payload the rule declared, then the PATH. The PATH
-// comes last on purpose -- a host slangc is a fine fallback and a poor default,
-// because it makes the SPIR-V depend on a machine rather than on a declaration.
-inline std::string find_compiler(const options& opt) {
-    if (!opt.compiler.empty()) return opt.compiler;
-    if (const char* e = std::getenv("MCPP_SLANGC"); e && *e) return e;
-    if (const char* dir = mcpp::xpkg_dir("slang"); dir && *dir)
-        if (auto p = (std::filesystem::path(dir) / "bin" / (std::string("slangc") + kExeSuffix)).string();
-            is_file(p)) return p;
-    return first_on_path("slangc");
+// DISCOVERY THROUGH `mcpp.plugins.tool` (0.19.0): what the build program
+// named, `MCPP_SLANGC`, the engine's override or the declared payload. The
+// PATH answers only as a choice (`tool::on_path()`); the old silent fallback
+// still answers, with a warning naming that choice, until 2027-04-01.
+inline const mcpp::plugins::tool::spec& slangc_spec() {
+    static const mcpp::plugins::tool::spec s{
+        .who = "mcpp.rules.slang", .package = "slang", .programs = {"slangc"},
+        .option = "options::compiler", .legacy_env = "MCPP_SLANGC" };
+    return s;
+}
+
+inline mcpp::plugins::tool::found find_compiler(const options& opt) {
+    auto f = mcpp::plugins::tool::resolve(slangc_spec(), opt.compiler);
+    if (f || f.pending() || !opt.compiler.is_default()) return f;
+    if (auto p = first_on_path("slangc"); !p.empty()) {
+        mcpp::warning(std::format(
+            "mcpp.rules.slang: using '{}' from PATH, because nothing else names slangc. A "
+            "compiler found on PATH is a choice the build program states: "
+            "`options::compiler = mcpp::plugins::tool::on_path();`. This fallback is "
+            "removed on 2027-04-01.", p).c_str());
+        mcpp::decision("tool:mcpp.rules.slang:slangc", "path", p.c_str());
+        f.program = p;
+        f.source = mcpp::plugins::tool::from::path;
+    }
+    return f;
 }
 
 inline std::string run_and_capture(const std::string& cmd) {
@@ -341,7 +358,10 @@ inline std::string key_of(std::string_view path) {
 inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     if (shaders.empty()) return true;
 
-    const auto cc = find_compiler(opt);
+    const auto found = find_compiler(opt);
+    // Asked for: the engine installs `xim:slang` and runs this program again.
+    if (found.pending()) return true;
+    const std::string cc = found.program;
     if (cc.empty()) {
         std::cerr <<
             "mcpp.rules.slang: no Slang compiler found.\n"

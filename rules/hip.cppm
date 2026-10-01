@@ -37,6 +37,7 @@ export module mcpp.rules.hip;
 
 import std;
 import mcpp;
+import mcpp.plugins.tool;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -64,6 +65,10 @@ enum class platform { automatic, nvidia, amd };
 
 struct options {
     platform which = platform::automatic;
+    // THE TOOLKIT (0.19.0, mcpp#755): a root holding HIP and the CUDA back
+    // end, or the default -- the payloads this rule declares, or overrides of
+    // them. A toolkit named here is not downloaded.
+    mcpp::plugins::tool::choice toolkit;
     // Header search paths for the island. Relative entries resolve against the
     // package root; an ABSOLUTE entry is passed through unchanged, which is
     // the form `mcpp::dep_dir` answers with -- a device compiler is a separate
@@ -303,8 +308,37 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         return out;
     }
 
-    toolkit tk{ payload("hip-nvidia"), payload("cuda-nvcc"), payload("cuda-cudart"),
-                payload("libcurand"), payload("cuda-cccl"), payload("cuda-profiler-api") };
+    // The components this rule declares. A root named by the build program
+    // supplies every one of them, as an installation of HIP for NVIDIA does;
+    // otherwise each is the payload, or an override of it, and one declared on
+    // request is asked for here.
+    static constexpr const char* kComponents[] = {
+        "hip-nvidia", "cuda-nvcc", "cuda-cudart", "libcurand", "cuda-cccl", "cuda-profiler-api",
+    };
+    const mcpp::plugins::tool::spec hipSpec{
+        .who = "mcpp.rules.hip", .package = "hip-nvidia", .programs = {"hipcc", "clang++"},
+        .option = "options::toolkit" };
+    toolkit tk;
+    if (!opt.toolkit.is_default()) {
+        auto f = mcpp::plugins::tool::resolve(hipSpec, opt.toolkit);
+        if (!f) {
+            std::cerr << mcpp::plugins::tool::describe_missing(hipSpec, f) << '\n';
+            return out;
+        }
+        tk = toolkit{ f.root, f.root, f.root, f.root, f.root, f.root };
+    } else {
+        bool pending = false;
+        for (auto const* c : kComponents)
+            if (std::string_view(mcpp::xpkg_source("xim", c)) == "pending") {
+                (void)mcpp::xpkg_request("xim", c);
+                pending = true;
+            }
+        // Asked for: the engine installs them and runs this program again.
+        if (pending) return out;
+        (void)mcpp::plugins::tool::resolve(hipSpec);   // the decision record
+        tk = toolkit{ payload("hip-nvidia"), payload("cuda-nvcc"), payload("cuda-cudart"),
+                      payload("libcurand"), payload("cuda-cccl"), payload("cuda-profiler-api") };
+    }
 
     // Each missing payload is named with the line that adds it. `hip-nvidia`
     // is this rule's own; the other four are the CUDA back end the NVIDIA
