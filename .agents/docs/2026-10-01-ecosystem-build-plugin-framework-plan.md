@@ -136,8 +136,52 @@ consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
 **一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
 不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
 
+**llvm-macos27-lab 已完结**：PR #1 已 squash 合入(`3f2cceaf2cac`),主干运行 36878561820 六个
+作业全绿,工具链资产已发布并校验:tag `toolchain-21ef2ddb8060`、
+`llvm-23.1.2-x1-macos-arm64.tar.xz`、77,959,884 字节、
+sha256 `40b9fa16be5628a5d277824f961faa33dadbf84d9520cff9fe2aeb9b0b217ebf`(下载后 `sha256sum -c`
+通过)。lld 报 `LLD 23.1.3 (…21ef2ddb…)`,包含 `ee66426152f9` 与 `532fa5afbe2b`。一处与预期不同:
+原装 lld 的报错词是 `unknown target` 而不是 `unknown architecture`,两者都点出 `arm64e.x1`,
+负例判据因此接受两种措辞,并仍要求 `could not load TAPI file` 与链接失败。另一处事实:同一台
+`xcode-27` runner 上,原装 lld 对随附的 `MacOSX26.5.sdk` 链接正常——只有 27.x SDK 列出
+`arm64e.x1`。冷构建 lld 2033 秒(3 核 7 GB),ccache 命中后 77 秒。
+
 **llvm-macos27-lab**（speak-agent，公开）：`release/23.x` 的 `21ef2ddb8060`（含
 `ee66426152f9`）构建的 lld 在 `xcode-27`(macOS 27.0、Xcode 27.0、SDK 27.0)上链接并
 运行 C、C++23(含 `std::format`)与 `import std;`;反例以 23.1.2 原装 lld 失败并点出
 `arm64e.x1`,`macos-15` 对照两者皆成功。官方 23.1.2 的 macOS 包确实带 libc++ 头文件、
 库与 `std` 模块源码(与 §12 R20a 的疑问相反)。
+
+## 5. 生态级 review
+
+按「这条机制在生态的每个接缝处是否闭合」来看,而不是按仓库看。
+
+**1. 链条闭合。** 引擎给出语义与接口(协议 15 的六个访问器与两条指令、三个清单键、来源记录),
+L2 把它们变成一个解析器与一个工具链描述,成员只写自己的知识,消费方什么都不用写。闭合的读数有
+三处:`tests/cmake-consumer` 在 `MCPP_NO_AUTO_INSTALL=1` 下由 `build.mcpp` 点名 cmake 即可构建;
+framework-lab 的 8 个用例在 ubuntu-24.04、macos-15、windows-2022 上全绿;`plugin-logic` 27 例
+覆盖 13 个成员的决定。
+
+**2. 版本地板与无感升级。** 0.19.0 的地板是 2026.10.1.3。两个方向都量过:新插件在旧引擎上,
+2026.10.1.2 只说 `unknown key 'provision'`,不提版本——因为地板检查需要那次解析没能产出的文档;
+这成了第 7 处修复(解析失败路径从文件文本读地板)。旧插件在新引擎上,默认路径的输出与行为逐字
+不变,由既有 e2e 与 framework-lab 的 `default` 用例断言。
+
+**3. 默认代价的真实变化。** `provision = "on-request"` 之后,plugins CI 的 macOS 与 Windows
+`rules` 作业日志里 `xim:vcpkg` 出现 0 次(main 上这两个作业会 provisioning
+`xim:vcpkg@>=2026.7.27`)。节省是真的,而它也正是第 4 处发现的来源:少装一个载荷,会让依赖
+「装过」的测试环境露出假设。
+
+**4. 可观察性是一条路径,不是一个开关。** 一个显式来源 = 一行 `Using`(类与出处)+ 一条
+`Finished` 汇总项 + `resolution.json` 的一条 `sources` 记录 + `mcpp why` 的一段。四处读的是同一条
+`SourceDecision`,所以不可能三处一致、一处落后。
+
+**5. 新增的风险,按发生的那次记。** (a) 构建程序的环境是「在构建中跑的测试宿主」的契约的一部分:
+引擎多设一个变量,就可能改变一个这样的宿主的答案(第 4 处发现);(b) 命令长度是个有名字的通道,
+而宿主模块数量是它的无界载荷(第 3 处发现);(c) 一个按路径命名的工具链把产物与机器状态绑在一起,
+所以身份按内容而不是按版本,并写进 stamp 供快速路径比较。
+
+**6. 没做的事,以及为什么不做。** 工具链描述数据化(核心读描述文件)——`[toolchain] { path }`
+的字段已经与那份描述同形,所以它是后续的第三种载体,而不是改写;`mcpp.lock` 不记工具链——lock 的
+内容是依赖解析的结果;`kind = "bin"` 的宿主工具仍走 `[tools.overrides]`——键空间与语义不同,
+合并会让一张表有两种键。
