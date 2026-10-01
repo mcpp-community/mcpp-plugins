@@ -145,6 +145,18 @@ consumer fixture 与 27 例 `plugin-logic` 通过;`tests/cmake-consumer` 在
    当转义(与 POSIX shell 不同),所以第一版修法无效。clang 22.1.8 实测:响应文件写
    `'-DX=a\b'` 得到 `X=ab`,写 `-DX=a\\b` 得到 `X=a\b`。
 
+9. 被陈述的链接器只在 Linux 的 clang 分支进入链接(`--ld-path` 写在那一支里)。macOS 的
+   Apple 链接形状拿不到它:工具进了指纹(改 wrapper 会让快速路径失效),却不参与链接,
+   而且什么都不说。由 toolchain-lab 在 macos-15 上量到(`build.ninja` 里没有 `--ld-path`)。
+   现在在所有形状之后追加一次;gcc 的树陈述 `ld` 改为在声明处拒绝,并补了反例用例。
+   **引擎自己的 e2e 875 断言了这条,但在没装 llvm 载荷的宿主上 SKIP,而 macOS CI 正是这样的
+   宿主——这就是 lab 存在的理由。**
+10. 一个被陈述的程序路径必须按宿主自己的规则补可执行后缀。Windows 上 `command -v cmake`
+    回答 `C:/Program Files/CMake/bin/cmake`(对应 `cmake.exe`),而进程创建会自己补 `.exe`;
+    解析器坚持原样拼写,于是拒绝了宿主本可以运行的程序(CI 实测:cmake 消费方报
+    `options::cmake = "C:/Program Files/CMake/bin/cmake" (not found)`,随后因为子工程没有配置
+    而编译失败)。L2 与引擎的覆盖路径现在用同一条规则,各补一个用例。
+
 **一处可测量的生态效果**:`provision = "on-request"` 之后,macOS 与 Windows 的 `rules` 作业
 不再安装 `xim:vcpkg`(main 上会装)。这既是本次要的节省,也正是它暴露了第 4 处发现。
 
