@@ -78,7 +78,7 @@ env:
   #
   # It moves to `MCPP_VERSION` once that release exists, so the ordinary path
   # runs the engine this collection states.
-  MCPP_BOOTSTRAP: 2026.10.1.2
+  MCPP_BOOTSTRAP: 2026.10.1.3
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
