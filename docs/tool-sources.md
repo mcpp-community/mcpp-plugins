@@ -67,50 +67,113 @@ This is the chapter for a project that wants its own tool rather than the one th
 plugin declares, stated in the build program and nowhere else -- no
 `[xlings.overrides]`, no environment variable. Chapter 4 covers those.
 
-### 3.1 The four spellings
+### 3.1 Four ways, each a whole build program
 
-Four spellings, all in `build.mcpp`, none of which downloads the payload. The
-example is `deps-vcpkg`, whose option is `options::vcpkg`; every member that
-drives a tool has the same shape, with its own option name (section 3.6).
+Every example here is a complete `build.mcpp` that compiles. A member reads one
+option (section 3.6 is the index); what differs is what the project states.
+
+**A program this machine already has.** The plainest form: a string assigns to the
+option, so a project written before 0.19.0 keeps compiling unchanged.
 
 ```cpp
-// build.mcpp
+// build.mcpp -- features = ["deps-vcpkg"]
 import std;
 import mcpp;
 import mcpp.deps.vcpkg;
-import mcpp.plugins.tool;     // for `tool::root` and `tool::on_path` below
 
 int main() {
     mcpp::deps::vcpkg::options o;
-    o.libraries = { "fmt", "spdlog" };
-
-    // 1. the program itself -- a string assigns, so code written before 0.19.0
-    //    keeps compiling
-    o.vcpkg = "/opt/vcpkg/vcpkg";
-
-    // 2. a tree. Each member states where it looks under a root: `deps-vcpkg`
-    //    expects `vcpkg` directly there, `deps-cmake` looks in `bin` and in
-    //    `CMake.app/Contents/bin`
-    o.vcpkg = mcpp::plugins::tool::root("/opt/vcpkg");
-
-    // 3. the first one on PATH. A fallback is a choice, stated here, rather
-    //    than something a member does quietly
-    o.vcpkg = mcpp::plugins::tool::on_path();
-
-    // 4. the spelling `deps-vcpkg` has had since 0.18.1, still read: the same
-    //    statement as `tool::root(...)`
-    o.vcpkg_root = "/opt/vcpkg";
-
+    o.libraries = { "fmt" };
+    o.vcpkg     = "/opt/vcpkg/vcpkg";
     return mcpp::deps::vcpkg::use(o) ? 0 : 1;
 }
 ```
 
-`mcpp.plugins.tool` needs no extra feature: `deps-vcpkg` implies `deps`, which
-implies `plugins-core`. It does need the `import` above, though -- a feature makes
-a module available, not visible. Assigning a plain string (form 1) and
-`vcpkg_root` (form 4) need no import; naming `tool::root` or `tool::on_path` does,
-and without it the compiler says `declaration of 'root' must be imported from
-module 'mcpp.plugins.tool' before it is required`.
+**A tree, with the member looking inside it.** `tool::root` states a directory and
+lets the member apply its own layout: `deps-cmake` looks for `cmake` in `bin` and
+in `CMake.app/Contents/bin`, `deps-vcpkg` directly under the root.
+
+```cpp
+// build.mcpp -- features = ["deps-cmake"]
+import std;
+import mcpp;
+import mcpp.deps.cmake;
+import mcpp.plugins.tool;
+
+int main() {
+    mcpp::deps::cmake::options o;
+    o.source    = "greet";
+    o.libraries = { "greet" };
+    o.cmake     = mcpp::plugins::tool::root("/opt/cmake-3.31.6");
+    return mcpp::deps::cmake::use(o) ? 0 : 1;
+}
+```
+
+**Whatever is on PATH, as a stated choice.** A member never falls back to PATH on
+its own; `tool::on_path()` is how a project asks for that, so the log records that
+the build depends on the machine.
+
+```cpp
+// build.mcpp -- features = ["rules-spirv"]
+import std;
+import mcpp;
+import mcpp.rules.spirv;
+import mcpp.plugins.tool;
+
+int main() {
+    mcpp::rules::spirv::options o;
+    o.compiler = mcpp::plugins::tool::on_path();
+    return mcpp::rules::spirv::compile(o) ? 0 : 1;
+}
+```
+
+**A root that is the whole toolkit.** `rules-cuda` takes one tree holding nvcc, the
+runtime, CCCL and cuRAND, rather than a program:
+
+```cpp
+// build.mcpp -- features = ["rules-cuda"]
+import std;
+import mcpp;
+import mcpp.rules.cuda;
+import mcpp.plugins.tool;
+
+int main() {
+    mcpp::rules::cuda::options o;
+    o.toolkit = mcpp::plugins::tool::root("/usr/local/cuda-12.9");
+    return mcpp::rules::cuda::compile(o) ? 0 : 1;
+}
+```
+
+`rules-qt`, `rules-ascendc` and `dist-apk` state a root with a plain string,
+because their option has always been a directory:
+
+```cpp
+// build.mcpp -- features = ["rules-qt"]
+import std;
+import mcpp;
+import mcpp.rules.qt;
+
+int main() {
+    mcpp::rules::qt::options o;
+    o.modules = { "Core", "Widgets" };
+    o.root    = "/opt/Qt/6.11.1/gcc_64";
+    return mcpp::rules::qt::compile(o) ? 0 : 1;
+}
+```
+
+**The spelling `deps-vcpkg` has had since 0.18.1** states the same thing as
+`tool::root`, and is still read:
+
+```cpp
+o.vcpkg_root = "/opt/vcpkg";
+```
+
+`mcpp.plugins.tool` needs no extra feature: each `deps-*` and `rules-*` feature
+implies `plugins-core`. It does need the `import` shown above, though -- a feature
+makes a module available, not visible. Assigning a plain string needs no import;
+naming `tool::root` or `tool::on_path` does, and without it the compiler says
+`declaration of 'root' must be imported from module 'mcpp.plugins.tool' before it
+is required`.
 
 ### 3.2 Where a relative path points
 
@@ -123,19 +186,37 @@ o.vcpkg = mcpp::plugins::tool::root("third_party/vcpkg");
 
 ### 3.3 Deciding inside the build program
 
-**The choice is a value, so the decision is ordinary code.** Register the variable
-that informs it, and the build re-plans when it changes:
+**The choice is a value, so the decision is ordinary code.** A project that ships a
+vendored copy and also honours what CI provides writes both, and registers the
+variable so the build re-plans when it changes:
 
 ```cpp
-if (const char* r = std::getenv("VCPKG_ROOT"); r && *r) {
-    mcpp::rerun_if_env_changed("VCPKG_ROOT");
-    o.vcpkg = mcpp::plugins::tool::root(r);     // use it where CI provides one
+// build.mcpp -- features = ["deps-vcpkg"]
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+import mcpp.plugins.tool;
+
+int main() {
+    mcpp::deps::vcpkg::options o;
+    o.libraries = { "fmt" };
+
+    // the copy in the repository, relative to the package root
+    o.vcpkg = mcpp::plugins::tool::root("third_party/vcpkg");
+
+    // and the machine's own, where CI provides one
+    if (const char* r = std::getenv("VCPKG_ROOT"); r && *r) {
+        mcpp::rerun_if_env_changed("VCPKG_ROOT");
+        o.vcpkg = mcpp::plugins::tool::root(r);
+    }
+    return mcpp::deps::vcpkg::use(o) ? 0 : 1;
 }
-// left default: the ecosystem's xim:vcpkg
 ```
 
-`mcpp::plugins::toolchain::env("VCPKG_ROOT")` is the same two lines, for a
-project that already enables `plugins-toolchain`.
+Leaving the option untouched in some branch is also a decision: that branch takes
+the ecosystem's `xim:vcpkg`. `mcpp::plugins::toolchain::env("VCPKG_ROOT")` is the
+same two lines as the `getenv` pair, for a project that already enables
+`plugins-toolchain`.
 
 ### 3.4 A stated choice that fails is not replaced
 
