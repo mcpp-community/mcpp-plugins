@@ -564,6 +564,34 @@ int main(int argc, char** argv) {
                        "it names the environment's way");
           } },
 
+        { "qt: rcc tracks the resource paths stored in XML text children",
+          with_qt(t::row::linux_gcc())
+              .file("qt/bin/rcc").file("qt/bin/rcc.exe")
+              .file("pkg/res/app.qrc",
+                    "<RCC><qresource prefix=\"/\">\n"
+                    "  <file>assets/greeting.txt</file>\n"
+                    "  <file alias=\"sample.zip\"> \n"
+                    "    data/Sample<!-- split text -->Project.zip \n"
+                    "  </file>\n"
+                    "</qresource></RCC>\n")
+              .file("pkg/res/assets/greeting.txt", "hello\n")
+              .file("pkg/res/data/SampleProject.zip", "resource contents\n"),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.resources = {"res/app.qrc"};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const auto a = r.line("mcpp:action=", {"qt:rcc:app"});
+              c.expect(a.find("pkg/res/assets/greeting.txt") != std::string::npos,
+                       "rcc tracks a resource relative to the qrc directory");
+              c.expect(a.find("pkg/res/data/SampleProject.zip") != std::string::npos,
+                       "rcc tracks the aliased source after joining and trimming text children");
+          } },
+
         // ── compatibility ───────────────────────────────────────────────────
         { "compat: program_compilers keeps its 0.16.0 answer and says until when",
           t::row::linux_libcxx().file("llvm/bin/clang").file("llvm/bin/clang++"),
