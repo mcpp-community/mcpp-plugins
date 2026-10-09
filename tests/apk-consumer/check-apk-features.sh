@@ -35,7 +35,7 @@ rm -rf target
 unset APK_CONSUMER_TEMPLATE APK_CONSUMER_LEVEL1 || true
 "$MCPP" build --target "$TARGET" > build-a.log 2>&1 || fail "build failed" build-a.log
 "$MCPP" pack --format apk --target "$TARGET" > pack-a.log 2>&1 || fail "pack failed" pack-a.log
-MANIFEST=target/.build-mcpp/out/dist-apk/AndroidManifest.xml
+MANIFEST="$(sh "$(dirname "$0")/../out-dir.sh")/dist-apk/AndroidManifest.xml"
 cmp fixtures/expected-manifest-level0-0.8.0.xml "$MANIFEST" \
     || fail "level 0's manifest is not byte-identical to 0.8.0's" "$MANIFEST" fixtures/expected-manifest-level0-0.8.0.xml
 echo "ok: level 0 with no template renders 0.8.0's manifest byte-for-byte"

@@ -45,7 +45,7 @@ reading metal-version "$(xcrun --sdk macosx metal --version 2>&1 | head -1)"
 # ── 1. three libraries beside the program ─────────────────────────────────
 echo "== 1. the shaders compile to Metal libraries the program finds =="
 "$MCPP" build > metal-build.log 2>&1 || fail "mcpp build failed" metal-build.log
-gen=target/.build-mcpp/out/metal
+gen="$(sh "$(dirname "$0")/../out-dir.sh")/metal"
 for name in scale tint tint_red; do
     [ -f "$gen/$name.air" ] || fail "no $gen/$name.air" metal-build.log
     [ -f "$gen/$name.metallib" ] || fail "no $gen/$name.metallib" metal-build.log
