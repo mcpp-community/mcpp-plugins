@@ -523,6 +523,8 @@ jobs:
           "$MCPP" run --no-accel | tee cpurun.log
           grep -q '^out\[0\]=6 out\[1\]=12 out\[2\]=18 out\[3\]=24' cpurun.log
           grep -q '^all ok' cpurun.log
+          # The CPU leg is another configuration, with its own output directory.
+          d=$(sh "$GITHUB_WORKSPACE/tests/out-dir.sh")/island
           diff /tmp/device-leg.cppm "$d/island_interface.kernels.cppm" || {
             echo "FAIL: the qualified names differ between the two legs"; exit 1; }
           echo "ok: the CPU leg reaches the same qualified names"
@@ -562,8 +564,8 @@ jobs:
       - name: a new island file reaches the boundary with nothing else touched
         working-directory: tests/island-interface
         run: |
-          d=$(sh "$GITHUB_WORKSPACE/tests/out-dir.sh")/island
           rm -rf target && "$MCPP" build > base.log 2>&1
+          d=$(sh "$GITHUB_WORKSPACE/tests/out-dir.sh")/island
           before=$(grep -c '^using ::' "$d/island_interface.kernels.cppm")
           mkdir -p src/kernels/audio
           printf 'MCPP_EXPORT_C\nint island_fft(float* out, unsigned n) { (void)out; (void)n; return 0; }\n' \
