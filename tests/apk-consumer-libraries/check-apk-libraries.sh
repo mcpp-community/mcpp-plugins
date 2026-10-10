@@ -110,8 +110,9 @@ grep -q "android.permission.VIBRATE" libs-perm1.log || fail "the library's permi
 grep -q "android.permission.WAKE_LOCK" libs-perm1.log || fail "the archive's permission was not merged" libs-perm1.log
 grep -q "android.permission.CAMERA" libs-perm1.log && fail "the permission the application removed is in the package" libs-perm1.log
 grep -q 'org.mcpp.apklibs.lib.FLAVOUR' libs-xml1.log || fail "the library's meta-data was not merged" libs-xml1.log
-grep -q 'tools' target/.build-mcpp/out/dist-apk/AndroidManifest.xml \
-    && fail "the merged manifest still carries a tools: attribute" target/.build-mcpp/out/dist-apk/AndroidManifest.xml
+merged="$(sh "$(dirname "$0")/../out-dir.sh")/dist-apk/AndroidManifest.xml"
+grep -q 'tools' "$merged" \
+    && fail "the merged manifest still carries a tools: attribute" "$merged"
 echo "ok: the manifest merges the library's and the archive's permissions and meta-data, drops the removed one, and keeps no tools: attribute"
 
 "$JAR" tf "$apk" > libs-list1.log
