@@ -52,7 +52,7 @@ mcpp-index refuses such a package.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.19.0", features = ["plugins-core"], host-module = true, reexport = true }
+plugins = { version = "0.19.1", features = ["plugins-core"], host-module = true, reexport = true }
 ```
 
 `reexport = true` is needed when the plugin's consumers import L2 modules in
@@ -124,7 +124,26 @@ what it keeps, since when, its retirement date (six months later), its
 replacement and the note it prints once per build.
 `.github/scripts/check-compat-retirement.sh` fails once a date has passed.
 
-## 4. A new plugin
+## 4. The C++ a plugin is written in
+
+A plugin is C++23 that three combinations of compiler and standard library accept, because each of them compiles it for some user:
+
+| combination | who compiles the plugin with it | CI |
+|---|---|---|
+| GCC 16 with libstdc++ | `mcpp build` on Linux by default | `consumers` |
+| clang (LLVM 22) with libc++ | `mcpp build --toolchain llvm@22.1.8` on Linux, and every build on macOS | `toolchain-llvm`, `rules-cross-platform` |
+| clang with libstdc++'s `std` module | an editor's clangd (mcppls) reading a project built with GCC | `toolchain-editor` |
+
+MSVC is a fourth for the members that claim Windows, checked by `rules-cross-platform` and `deps-managed-msvc`. The third combination is never used by a build, so only the editor lane sees what it rejects; it runs `mcppls diagnostics build.mcpp` on every fixture and fails on any error.
+
+Known differences, each one met in this package:
+
+- **A type that holds a container of itself does not use `std::pair` or `std::tuple` for the element.** Under clang with libstdc++'s `std` module, `std::vector<std::pair<std::string, value>>` inside `value` instantiates the pair while `value` is incomplete and fails with "incomplete type used in type trait expression"; GCC and clang with libc++ accept it. The element is a plain struct, and a member function that walks the container is defined after both types are complete (`mcpp::plugins::json::member`, 0.19.1).
+- **No compiler's leniency is relied on.** An extension, a missing `typename`, or a template accepted only because one compiler instantiates it later is a failure in another lane.
+- **A build program does not use `std::println`.** On macOS 14 the build program links the system libc++, which lacks a symbol it needs; `std::format` into a string and `std::cout` work everywhere.
+- **A module does not instantiate `std::filesystem::path`'s iterator.** Under MSVC 14.52 every importer that then touches `std::filesystem` fails inside the STL; `mcpp::plugins::names::components` splits a path as a string instead.
+
+## 5. A new plugin
 
 A plugin in this package consists of:
 - a module file under `rules/`, `tools/`, `dist/` or `deps/`;

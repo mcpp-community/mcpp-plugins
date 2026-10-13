@@ -49,7 +49,7 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.19.0";
+inline constexpr std::string_view version = "0.19.1";
 
 } // namespace mcpp::plugins
 
@@ -274,18 +274,35 @@ inline void set_attr(node& n, const std::string& key, const std::string& value) 
 // `true`, `false` and `null`; a number keeps its spelling in `text`.
 export namespace mcpp::plugins::json {
 
+// A MEMBER IS ITS OWN STRUCT, NOT `std::pair<std::string, value>`. Under clang
+// with libstdc++'s `std` module, `pair<string, value>` inside `value` is
+// instantiated while `value` is still incomplete -- its destructor needs the
+// pair and the pair needs `value` -- and the unit fails with "incomplete type
+// used in type trait expression". GCC accepts the pair and so does clang with
+// libc++, so neither build lane saw it; clangd reading a GCC project in the
+// editor is exactly that combination. A plain aggregate, with `get()` defined
+// once both types are complete, compiles under all three.
+struct member;
+
 struct value {
     enum class kind { null, boolean, number, string, array, object };
-    kind                                             type = kind::null;
-    std::string                                      text;    // string, number or boolean spelling
-    std::vector<value>                               items;
-    std::vector<std::pair<std::string, value>>       members;
+    kind                type = kind::null;
+    std::string         text;    // string, number or boolean spelling
+    std::vector<value>  items;
+    std::vector<member> members;
 
-    const value* get(std::string_view key) const {
-        for (auto const& m : members) if (m.first == key) return &m.second;
-        return nullptr;
-    }
+    const value* get(std::string_view key) const;
 };
+
+struct member {
+    std::string first;
+    value       second;
+};
+
+inline const value* value::get(std::string_view key) const {
+    for (auto const& m : members) if (m.first == key) return &m.second;
+    return nullptr;
+}
 
 struct reader {
     std::string_view s;
