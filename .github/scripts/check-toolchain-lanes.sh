@@ -120,6 +120,14 @@ editor_lane() {
         [ -f "$dir/build.mcpp" ] || continue
         echo "── $fixture"
         out="${RUNNER_TEMP:-/tmp}/editor-$fixture.json"
+        # CONFIGURED FIRST, as a project is before anyone opens it: the
+        # configuration provisions what the build program's context names --
+        # the toolchain a fixture pins, the Qt SDK, a shader compiler -- and
+        # without it the build database describes no build program, so the
+        # editor finds not even `mcpp` (measured on a fresh runner).
+        (cd "$dir" && "$MCPP_EDITOR" build --configure-only) > "${out%.json}.configure.log" 2>&1 ||
+            { cat "${out%.json}.configure.log"
+              echo "| $fixture | — | — | \`mcpp build --configure-only\` failed |" >> "$summary"; failed=1; continue; }
         # mcppls exits 1 when it reports an error and still writes the report,
         # so the report decides; only a run that wrote none is its own failure.
         local status=0

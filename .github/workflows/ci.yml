@@ -1803,7 +1803,10 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       MCPP_HOME: /home/runner/.mcpp
-    timeout-minutes: 60
+    # Each fixture is configured before it is read, which provisions what its
+    # build program names (the device toolchains, the Qt SDK); a cold cache
+    # downloads all of them.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -1824,9 +1827,6 @@ jobs:
           export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_EDITOR_VERSION}-linux-x86_64/registry/bin/xlings"
           "$MCPP_EDITOR" --version
           "$MCPP_EDITOR" self config --mirror GLOBAL
-          # The default toolchain, installed before the first fixture rather
-          # than inside mcppls's first build-database run and its deadline.
-          (cd tests/island-interface && "$MCPP_EDITOR" build --configure-only)
           echo "MCPP_EDITOR=$MCPP_EDITOR" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
 
