@@ -89,6 +89,15 @@ env:
   # what it built. This is how a change to the engine is measured against this
   # collection before either is released.
   MCPP_SOURCE_REF: ${{ inputs.mcpp_source_ref || '' }}
+  # THE EDITOR LANE'S TWO PROGRAMS (0.19.1), PINNED. mcppls reads a fixture's
+  # `build.mcpp` as an editor does, with its own clangd over the GCC
+  # toolchain's libstdc++ -- the one combination no build compiles. The mcpp it
+  # runs is the first release that describes build programs in the build
+  # database (2026.10.11.1); under an older one mcppls reads no build program
+  # and says so, which the lane counts as a failure. Raising either is a
+  # one-line change here.
+  MCPPLS_VERSION: 0.0.15
+  MCPP_EDITOR_VERSION: 2026.10.11.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1740,6 +1749,100 @@ jobs:
 
       - name: a package that enables rules-qt only for its module builds without a report
         run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
+
+  # ── THE OTHER TWO WAYS THIS CODE IS COMPILED ON LINUX (0.19.1) ─────────────
+  #
+  # The consumers job builds with the default toolchain, GCC with libstdc++.
+  # Two more combinations read the same sources, and each has refused code the
+  # others accept: clang with libc++ (`--toolchain llvm@…`, macOS's family),
+  # and clang with libstdc++'s `std` module, which is how an editor's clangd
+  # reads a project built with GCC. `json::value` held a
+  # `std::pair<std::string, value>` that only the last one rejects, so every
+  # build passed while every build program showed a missing module in the
+  # editor. `.github/scripts/check-toolchain-lanes.sh` states what each lane
+  # runs; docs/plugin-development.md §4 states the rule.
+  toolchain-llvm:
+    name: llvm (linux x86_64, clang + libc++)
+    runs-on: ubuntu-24.04
+    env:
+      MCPP_HOME: /home/runner/.mcpp
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the mcpp sandbox
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp
+          key: mcpp-sandbox-llvm-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-${{ hashFiles('tests/*/mcpp.toml') }}
+          restore-keys: |
+            mcpp-sandbox-llvm-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_BOOTSTRAP }}-
+
+      - name: Fetch the released mcpp
+        run: |
+          curl -L -fsS --retry 3 --retry-all-errors -o mcpp.tar.gz \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_BOOTSTRAP}/mcpp-${MCPP_BOOTSTRAP}-linux-x86_64.tar.gz"
+          tar -xzf mcpp.tar.gz
+          MCPP="$PWD/mcpp-${MCPP_BOOTSTRAP}-linux-x86_64/bin/mcpp"
+          "$MCPP" --version
+          # The bundled xlings, named because `MCPP_HOME` is pinned (see consumers).
+          export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_BOOTSTRAP}-linux-x86_64/registry/bin/xlings"
+          "$MCPP" self config --mirror GLOBAL
+          echo "MCPP=$MCPP" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      - name: the mcpp under review, built from MCPP_SOURCE_REF when it is set
+        timeout-minutes: 45
+        run: bash .github/scripts/mcpp-under-review.sh
+
+      - name: the collection builds and runs under clang with libc++
+        run: bash .github/scripts/check-toolchain-lanes.sh llvm
+
+  toolchain-editor:
+    name: editor (linux x86_64, clangd + libstdc++)
+    runs-on: ubuntu-24.04
+    env:
+      MCPP_HOME: /home/runner/.mcpp
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the mcpp sandbox
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp
+          key: mcpp-sandbox-editor-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_EDITOR_VERSION }}-${{ hashFiles('tests/*/mcpp.toml') }}
+          restore-keys: |
+            mcpp-sandbox-editor-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.MCPP_EDITOR_VERSION }}-
+
+      - name: Fetch the mcpp the editor runs
+        run: |
+          curl -L -fsS --retry 3 --retry-all-errors -o mcpp.tar.gz \
+            "https://github.com/mcpp-community/mcpp/releases/download/v${MCPP_EDITOR_VERSION}/mcpp-${MCPP_EDITOR_VERSION}-linux-x86_64.tar.gz"
+          tar -xzf mcpp.tar.gz
+          MCPP_EDITOR="$PWD/mcpp-${MCPP_EDITOR_VERSION}-linux-x86_64/bin/mcpp"
+          export MCPP_VENDORED_XLINGS="$PWD/mcpp-${MCPP_EDITOR_VERSION}-linux-x86_64/registry/bin/xlings"
+          "$MCPP_EDITOR" --version
+          "$MCPP_EDITOR" self config --mirror GLOBAL
+          # The default toolchain, installed before the first fixture rather
+          # than inside mcppls's first build-database run and its deadline.
+          (cd tests/island-interface && "$MCPP_EDITOR" build --configure-only)
+          echo "MCPP_EDITOR=$MCPP_EDITOR" >> "$GITHUB_ENV"
+          echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      - name: Fetch the mcppls release payload, checked against its SHA256SUMS
+        run: |
+          base="https://github.com/Sunrisepeak/mcpp-language-server/releases/download/v${MCPPLS_VERSION}"
+          curl -L -fsS --retry 3 --retry-all-errors -o payload-linux-x64.tar.gz "$base/payload-linux-x64.tar.gz"
+          curl -L -fsS --retry 3 --retry-all-errors -o SHA256SUMS "$base/SHA256SUMS"
+          grep ' payload-linux-x64.tar.gz$' SHA256SUMS | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/mcppls" && tar -xzf payload-linux-x64.tar.gz -C "$RUNNER_TEMP/mcppls"
+          MCPPLS="$RUNNER_TEMP/mcppls/payload/bin/mcppls"
+          "$MCPPLS" --version
+          echo "MCPPLS=$MCPPLS" >> "$GITHUB_ENV"
+
+      - name: every fixture's build.mcpp reads without an error in the editor
+        run: bash .github/scripts/check-toolchain-lanes.sh editor
 
   # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
   #

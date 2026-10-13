@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.19.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.19.1", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -120,7 +120,11 @@ docs/                one page per member or group of members
 
 A member is one module file, one feature in `mcpp.toml`, a consumer under
 `tests/` that CI builds and asserts on, a row in the table above with its mcpp
-floor, and a version bump. The conventions a member follows -- the same for a
+floor, and a version bump. Its code is the C++23 that GCC with libstdc++, clang
+with libc++ and an editor's clangd with libstdc++ all accept, and CI builds or
+reads every fixture under each of the three
+([docs/plugin-development.md](docs/plugin-development.md#4-the-c-a-plugin-is-written-in)).
+The conventions a member follows -- the same for a
 third-party or a project's own plugin -- are in
 [docs/plugin-development.md](docs/plugin-development.md); the division between
 what the engine owns and what the member owns is in
