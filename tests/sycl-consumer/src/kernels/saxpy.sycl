@@ -5,19 +5,18 @@
 // NOT.
 //
 // tests/cuda-consumer and tests/hip-consumer say in their own comments that
-// their islands touch no standard library, because an island that pulls one in
-// links a second C++ runtime into a program whose own came from mcpp's
-// toolchain. A SYCL island cannot make that promise: SYCL IS a C++ library,
-// `sycl::queue` and `sycl::buffer` are class templates over standard types,
-// and `libsycl.so` is itself compiled against libstdc++.
+// their islands touch no standard library. A SYCL island cannot make that
+// promise: SYCL IS a C++ library, `sycl::queue` and `sycl::buffer` are class
+// templates over standard types, and `libsycl.so` is itself compiled against
+// libstdc++ and throws `sycl::exception` on it.
 //
-// So the second runtime is present here by construction, and what makes that
-// safe is the seam rather than an absence. Nothing below crosses
-// `saxpy_device`'s signature: the parameters are pointers and a count, the
-// return is an int, and no object allocated by one runtime is freed by the
-// other. `mcpp.rules.sycl` links the libstdc++ half explicitly for the same
-// reason -- it is a consequence of the compiler this rule chose, not something
-// the manifest should have to know.
+// So the whole program uses libstdc++ (0.20.0): the manifest supplies it to the
+// llvm build through `gcc.libstdcxx`, and `mcpp.rules.sycl` points the device
+// compiler at the same GCC. One C++ runtime in the process is what lets a
+// `catch (sycl::exception const&)` match what the runtime threw; until 0.19
+// the program linked libc++ beside it, and only `catch (...)` matched
+// (mcpp-community/mcpp#838). The seam stays `extern "C"` for the reason the
+// siblings give: it is the one place a backend can be exchanged.
 //
 // WHAT THIS ISLAND CAN AND CANNOT TURN INTO A RETURN CODE.
 //

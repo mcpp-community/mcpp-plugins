@@ -46,6 +46,8 @@ Module `mcpp.rules.swift`; engine floor: 2026.9.8.1.
 
 ## `rules-sycl`
 
-Module `mcpp.rules.sycl`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
+Module `mcpp.rules.sycl`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before); an llvm build needs 2026.10.26.1 (0.20.0).
+
+**One C++ runtime, libstdc++ (0.20.0).** `libsycl.so` is compiled against libstdc++ and throws `sycl::exception` on it, and a typed `catch` does not match across two C++ runtimes in one process (mcpp#838). The program's own C++ library is therefore libstdc++: a gcc toolchain, or llvm with `gcc.libstdcxx` in the graph (`[target.'cfg(accelerator = "sycl")'.dependencies] gcc.libstdcxx = "16.1.0.1"`). On Linux the rule refuses any other C++ library before a unit is compiled, naming both remedies, and `compat:sycl-runtime` states the same requirement. The rule names no C++ library on the link line (0.19 added `-l:libstdc++.so.6` beside an llvm build's libc++); `--gcc-install-dir` follows the build's GCC: the graph's supplier (`MCPP_CXX_ABI_ROOT`), else the gcc toolchain's payload, else the `xim:gcc` the rule declares.
 
 **Needs and behaviour.** `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1
