@@ -1,5 +1,6 @@
-// The deps members' decisions, and the files rules-qt reads by default, one
-// case per decision (mcpp#734, design §6).
+// The deps members' decisions, the files rules-qt reads by default, and what
+// a platform's plugin states (mcpp.plugins.platform, the package reader), one
+// case per decision (mcpp#734, design §6; mcpp SPEC-013 §12, SPEC-014 §4.5).
 // Each case states a build context, runs the member, and reads the action it
 // declared and the files it wrote. Nothing is installed or run.
 import std;
@@ -11,9 +12,12 @@ import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
 import mcpp.rules.qt;
 import mcpp.plugins.tool;
+import mcpp.plugins.platform;
+import mcpp.plugins;
 
 namespace t  = mcpp::plugins::testing;
 namespace ts = mcpp::plugins::toolset;
+namespace pf = mcpp::plugins::platform;
 
 namespace {
 
@@ -76,6 +80,46 @@ std::string derived_triplet(const t::result& r) {
     for (auto const& f : r.files_under("out/deps-vcpkg/triplets"))
         if (f.find("-mcpp-") != std::string::npos) return f;
     return {};
+}
+
+// A universal package's metadata as `mcpp pack` writes it (SPEC-014 §4.5).
+constexpr std::string_view kPackage = R"({
+  "schema": 1,
+  "name": "hello",
+  "version": "0.1.0",
+  "platform": "openkal-platform@0.17.2",
+  "linkage": "declared",
+  "mode": "vendored",
+  "legs": ["x86_64-openkal", "aarch64-openkal"],
+  "systems": [],
+  "launch": {
+    "entry": { "aarch64": "lib/aarch64/hello.oke", "x86_64": "lib/x86_64/hello.oke" },
+    "runner": ["okrun", "{}"]
+  },
+  "files": [
+    { "leg": null, "path": "bin/hello", "role": "launcher", "sha256": "aa" },
+    { "leg": "aarch64-openkal", "path": "lib/aarch64/hello.oke", "role": "image", "sha256": "bb" },
+    { "leg": "x86_64-openkal", "path": "lib/x86_64/hello.oke", "role": "image", "sha256": "cc" },
+    { "leg": null, "path": "share/data.txt", "role": "resource", "sha256": "dd" }
+  ]
+}
+)";
+
+t::context with_stage(t::context c, std::string_view doc = kPackage) {
+    return c.file("stage/hello-0.1.0-openkal/mcpp-package.json", std::string(doc))
+        .set("MCPP_PACK_STAGE_DIR", "{root}/stage/hello-0.1.0-openkal");
+}
+
+// The format a case provides: `okb`, its command the stage and the entry.
+int provide_okb() {
+    auto r = pf::provide_format("okb", [](const mcpp::plugins::package::info& p, mcpp::action& a) {
+        static std::string out;
+        out = p.name + "-" + p.version + ".okb";
+        a.arg("okld").arg("bundle").arg(out.c_str()).arg("--package").arg("${mcpp.stage_dir}")
+         .output(out.c_str());
+        return true;
+    });
+    return r ? 0 : 1;
 }
 
 std::string stem(const std::string& path) {
@@ -590,6 +634,135 @@ int main(int argc, char** argv) {
                        "rcc tracks a resource relative to the qrc directory");
               c.expect(a.find("pkg/res/data/SampleProject.zip") != std::string::npos,
                        "rcc tracks the aliased source after joining and trimming text children");
+          } },
+
+        // ── the package reader (mcpp::plugins::package) ─────────────────────
+        { "package: a staged package's metadata is read, every field",
+          with_stage(t::row::linux_libcxx()),
+          [] {
+              auto p = mcpp::plugins::package::read(mcpp::pack_stage_dir());
+              if (!p) { std::printf("error=%s\n", p.error().c_str()); return 1; }
+              std::printf("name=%s version=%s platform=%s legs=%zu runner=%s\n", p->name.c_str(),
+                          p->version.c_str(), p->platform.c_str(), p->legs.size(), p->runner.front().c_str());
+              std::printf("images=%zu entry.x86_64=%s first=%s\n",
+                          mcpp::plugins::package::files_with_role(*p, "image").size(),
+                          mcpp::plugins::package::entry_of(*p, "x86_64").c_str(), p->entry.front().first.c_str());
+              std::printf("leg.launcher=[%s]\n", p->files.front().leg.c_str());
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the document is read");
+              c.expect(r.has_line("name=hello version=0.1.0 platform=openkal-platform@0.17.2 legs=2 runner=okrun"),
+                       "the package, its platform, its legs and its runner");
+              c.expect(r.has_line("images=2 entry.x86_64=lib/x86_64/hello.oke first=aarch64"),
+                       "the images by role, the entry by architecture, in the document's order");
+              c.expect(r.has_line("leg.launcher=[]"), "a file every leg shares has no leg");
+          } },
+
+        { "package: a document of another schema is refused, naming it",
+          with_stage(t::row::linux_libcxx(), R"({"schema": 2, "name": "x", "files": []})"),
+          [] {
+              auto p = mcpp::plugins::package::read(mcpp::pack_stage_dir());
+              if (p) return 0;
+              std::printf("error=%s\n", p.error().c_str());
+              return 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code != 0, "the document is refused");
+              c.expect(r.has_line("error=", {"schema 2", "reads schema 1"}), "the refusal names both schemas");
+          } },
+
+        // ── a package format's provider (mcpp.plugins.platform) ─────────────
+        { "provide_format: an ordinary pass declares the format and submits nothing",
+          with_stage(t::row::linux_libcxx()),
+          [] { return provide_okb(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the provider succeeds");
+              c.expect(r.has_line("mcpp:pack-format=okb"), "the format is declared on every pass");
+              c.expect(r.count("mcpp:action=") == 0, "no action outside the pass that asks for the format");
+          } },
+
+        { "provide_format: the pass for the format makes the action from the staged package",
+          with_stage(t::row::linux_libcxx()).pack("okb", "{root}/stage/hello-0.1.0-openkal"),
+          [] { return provide_okb(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the provider succeeds");
+              c.expect(r.has_line("mcpp:pack-format=okb"), "the format is declared");
+              c.expect(r.has_line("mcpp:action=", {"\"role\":\"artifact\"", "hello-0.1.0.okb", "${mcpp.stage_dir}"}),
+                       "one artifact action, named from the package's metadata");
+          } },
+
+        { "provide_format: the pass for the format without a staged package is refused",
+          t::row::linux_libcxx().pack("okb", "{root}/nowhere"),
+          [] { return provide_okb(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code != 0, "the provider fails");
+              c.expect(r.count("mcpp:action=") == 0, "no action");
+              c.expect(r.has_line("mcpp:warning=", {"provide_format", "mcpp-package.json"}),
+                       "the refusal names the missing document");
+          } },
+
+        { "provide_format: a format mcpp writes itself is refused",
+          t::row::linux_libcxx(),
+          [] { return pf::provide_format("zip", [](auto const&, mcpp::action&) { return true; }) ? 0 : 1; },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code != 0, "the provider fails");
+              c.expect(!r.has_line("mcpp:pack-format="), "nothing is declared");
+              c.expect(r.has_line("mcpp:warning=", {"'zip' is a format mcpp writes itself"}), "the refusal names it");
+          } },
+
+        // ── the platform's fields (mcpp.plugins.platform) ───────────────────
+        { "platform: the link, the names, the seal and the runner's host are stated as directives",
+          t::row::linux_libcxx().phase("platform"),
+          [] {
+              bool ok = pf::link::driver("lld") && pf::link::start("ok_main")
+                     && pf::link::input_from("ok-notes.S", {"okld", "note-source"})
+                     && pf::link::input_file("link/startup.S")
+                     && pf::artifact_names("{name}.oke", "lib{name}.okso")
+                     && pf::seal({ { "okld", "note", "{}" }, { "okld", "check", "{}", "--with", "{needed}" } })
+                     && pf::run_host("same-arch");
+              return ok ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "every builder states its field");
+              c.expect(r.has_line("mcpp:link-driver=lld"), "the driver");
+              c.expect(r.has_line("mcpp:link-start=ok_main"), "the entry");
+              c.expect(r.has_line("mcpp:link-input=from:ok-notes.S:okld")
+                       && r.has_line("mcpp:link-input=from:ok-notes.S:note-source"), "a program's output, word by word");
+              c.expect(r.has_line("mcpp:link-input=file:", {"/pkg/link/startup.S"}),
+                       "a relative input is the package's own, made absolute");
+              c.expect(r.has_line("mcpp:artifact-name=exe:{name}.oke")
+                       && r.has_line("mcpp:artifact-name=shared:lib{name}.okso"), "both names");
+              c.expect(r.has_line("mcpp:seal=0:okld") && r.has_line("mcpp:seal=1:{needed}")
+                       && r.count("mcpp:seal=") == 8, "two steps, every word in order");
+              c.expect(r.has_line("mcpp:run-host=same-arch"), "the runner's host");
+          } },
+
+        { "platform: a malformed field is refused at the builder, and nothing is stated",
+          t::row::linux_libcxx().phase("platform"),
+          [] {
+              int refused = 0;
+              refused += !pf::link::driver("gold");
+              refused += !pf::link::start("9lives");
+              refused += !pf::link::input_from("a:b", {"okld"});
+              refused += !pf::link::input_from("notes.S", std::span<const std::string>{});
+              refused += !pf::artifact_names("app-{name}");
+              refused += !pf::artifact_names("{name}", "lib{name}{name}.so");
+              refused += !pf::seal(std::span<const std::vector<std::string>>{});
+              refused += !pf::run_host("sometimes");
+              std::printf("refused=%d\n", refused);
+              return refused == 8 ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("refused=8"), "every malformed value is refused");
+              c.expect(!r.has_line("mcpp:link-driver=") && !r.has_line("mcpp:link-start=")
+                       && !r.has_line("mcpp:link-input=") && !r.has_line("mcpp:artifact-name=")
+                       && !r.has_line("mcpp:seal=") && !r.has_line("mcpp:run-host="),
+                       "no directive is stated for a refused value");
+              c.expect(r.has_line("mcpp:warning=", {"link::driver", "\"lld\" and \"compiler\""}),
+                       "a refusal names the call and the values it takes");
+              c.expect(r.has_line("mcpp:warning=", {"artifact_names", "at its start"}),
+                       "an executable's pattern begins with {name}");
           } },
 
         // ── compatibility ───────────────────────────────────────────────────

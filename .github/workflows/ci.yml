@@ -76,7 +76,14 @@ env:
   # 2026.10.26.2 writes a WebAssembly link in place again: 2026.10.26.1 linked
   # every POSIX output through `$out.tmp`, Emscripten named its `.wasm` after
   # that, and `dist-web` found no stem family (mcpp#844, found by this CI).
-  MCPP_VERSION: 2026.10.26.2
+  #
+  # 2026.10.27.1 IS WHAT 0.20.0's `plugins-platform` NEEDS, and the package
+  # floor states it (mcpp#847, SPEC-013, SPEC-014): protocol 17 -- the
+  # platform's directives `mcpp.plugins.platform` states, and the `platform`
+  # phase -- and `mcpp-package.json` beside every staged tree, which
+  # `mcpp::plugins::package` reads. Until that release exists the jobs build it
+  # from `MCPP_SOURCE_REF` (the repository variable names the branch).
+  MCPP_VERSION: 2026.10.27.1
   # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
   #
   # `MCPP_VERSION` states the engine this collection needs -- the package floor
@@ -90,23 +97,27 @@ env:
   MCPP_BOOTSTRAP: 2026.10.26.2
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
-  # Empty on every push and pull request, so the steps run the release above.
-  # A dispatch that names a branch or tag of mcpp-community/mcpp through the
-  # `mcpp_source_ref` input has `.github/scripts/mcpp-under-review.sh` build
+  # Empty on every push and pull request, so the steps run the release above,
+  # unless the repository variable `MCPP_SOURCE_REF` names the engine a pending
+  # release of this collection is written against (it is removed once that
+  # engine is released). A dispatch that names a branch or tag of
+  # mcpp-community/mcpp through the `mcpp_source_ref` input, or the variable,
+  # has `.github/scripts/mcpp-under-review.sh` build
   # that reference with the release above and point `$MCPP` at the result, in
   # each job that fetches mcpp, and the step after it checks that the steps run
   # what it built. This is how a change to the engine is measured against this
   # collection before either is released.
-  MCPP_SOURCE_REF: ${{ inputs.mcpp_source_ref || '' }}
+  MCPP_SOURCE_REF: ${{ inputs.mcpp_source_ref || vars.MCPP_SOURCE_REF || '' }}
   # THE EDITOR LANE'S TWO PROGRAMS (0.19.1), PINNED. mcppls reads a fixture's
   # `build.mcpp` as an editor does, with its own clangd over the GCC
   # toolchain's libstdc++ -- the one combination no build compiles. The mcpp it
   # runs is the first release that describes build programs in the build
   # database (2026.10.11.1); under an older one mcppls reads no build program
   # and says so, which the lane counts as a failure. Raising either is a
-  # one-line change here.
+  # one-line change here. The mcpp is the bootstrap release, which also builds
+  # the engine under review when `MCPP_SOURCE_REF` names one.
   MCPPLS_VERSION: 0.0.15
-  MCPP_EDITOR_VERSION: 2026.10.26.1
+  MCPP_EDITOR_VERSION: 2026.10.26.2
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1837,7 +1848,22 @@ jobs:
           "$MCPP_EDITOR" --version
           "$MCPP_EDITOR" self config --mirror GLOBAL
           echo "MCPP_EDITOR=$MCPP_EDITOR" >> "$GITHUB_ENV"
+          echo "MCPP=$MCPP_EDITOR" >> "$GITHUB_ENV"
           echo "MCPP_VENDORED_XLINGS=$MCPP_VENDORED_XLINGS" >> "$GITHUB_ENV"
+
+      # THE EDITOR READS WITH THE ENGINE UNDER REVIEW WHEN ONE IS NAMED: a
+      # fixture whose package floor is that engine is refused by the release.
+      - name: the mcpp under review, built from MCPP_SOURCE_REF when it is set
+        timeout-minutes: 45
+        run: bash .github/scripts/mcpp-under-review.sh
+
+      - name: the editor runs the mcpp under review
+        if: env.MCPP_SOURCE_REF != ''
+        timeout-minutes: 5
+        run: |
+          set -eu
+          echo "MCPP_EDITOR=$MCPP_UNDER_REVIEW" >> "$GITHUB_ENV"
+          echo "ok: the editor runs $MCPP_UNDER_REVIEW_VERSION, built from $MCPP_SOURCE_REF"
 
       - name: Fetch the mcppls release payload, checked against its SHA256SUMS
         run: |
