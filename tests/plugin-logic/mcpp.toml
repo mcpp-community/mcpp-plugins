@@ -1,7 +1,8 @@
-# Fixture: the logic of the deps members and the files rules-qt reads by
-# default, tested with `mcpp.plugins.testing` against stated build contexts --
-# a Visual Studio row, a managed MSVC row, a Linux GCC row and a Linux libc++
-# row -- on every host, with no foreign tool installed or run. The build
+# Fixture: the logic of the deps members, the files rules-qt reads by
+# default, and what a platform's plugin states (mcpp.plugins.platform, the
+# package reader), tested with `mcpp.plugins.testing` against stated build
+# contexts -- a Visual Studio row, a managed MSVC row, a Linux GCC row and a
+# Linux libc++ row -- on every host, with no foreign tool installed or run. The build
 # program is the test: a failed case fails the build and prints the report;
 # `target/**/plugins-testing/results.txt` holds one verdict per case.
 [package]
@@ -17,7 +18,7 @@ modules    = true
 import_std = true
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["deps-vcpkg", "deps-cmake", "rules-qt", "plugins-testing"], host-module = true }
+plugins = { path = "../..", features = ["deps-vcpkg", "deps-cmake", "rules-qt", "plugins-platform", "plugins-testing"], host-module = true }
 
 [targets.plugin-logic]
 kind = "bin"

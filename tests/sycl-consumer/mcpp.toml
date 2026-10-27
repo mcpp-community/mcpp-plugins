@@ -26,7 +26,7 @@ default = "llvm@22.1.8"
 [build-dependencies.mcpp]
 plugins = { path = "../..", features = ["rules-sycl"], host-module = true }
 
-# The SYCL runtime, on the artifact's runtime search path. mcpp's private
+# The SYCL runtime, on the artifact's runtime search path, for a SYCL build. mcpp's private
 # loader does not consult /usr/lib, so `libsycl.so.9` -- which the rule
 # satisfied at LINK time from the payload -- would not be found at run time.
 #
@@ -34,8 +34,16 @@ plugins = { path = "../..", features = ["rules-sycl"], host-module = true }
 # where the boundary was drawn: the runtime's CUDA back end dlopens the
 # driver, so the adapter carries that hop. A project that writes SYCL does not
 # have to know CUDA is underneath it.
-[dependencies.compat]
+[target.'cfg(accelerator = "sycl")'.dependencies.compat]
 sycl-runtime = "2026.09.07"
+
+# THE C++ LIBRARY OF A SYCL BUILD IS libstdc++ (0.20.0; mcpp 2026.10.26.1+).
+# `libsycl.so` throws `sycl::exception` on libstdc++, and a typed catch does not
+# match across two C++ runtimes in one process (mcpp-community/mcpp#838), so
+# the compiler stays llvm and the C++ library comes from the graph. Both edges
+# are under the accelerator: the CPU variant (`--no-accel`) keeps llvm's libc++.
+[target.'cfg(accelerator = "sycl")'.dependencies.gcc]
+libstdcxx = "16.1.0.1"
 
 # NO [xlings.workspace]. The rule declares the payloads it drives, under the
 # feature that selects it and the accelerator it serves, so this project names

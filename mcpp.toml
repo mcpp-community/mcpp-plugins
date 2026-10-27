@@ -1,12 +1,15 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.19.1"
-# The first mcpp release that states where each tool and payload comes from
-# (protocol 15, mcpp#755): `xpkg_source`, `xpkg_program`, `xpkg_request`,
-# `mcpp::decision`, `mcpp::toolchain`, `mcpp::phase`, and the
+version     = "0.20.0"
+# The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
+# platform's directives `mcpp.plugins.platform` states (`link_driver`,
+# `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and
+# `mcpp-package.json` beside every staged tree, which `mcpp::plugins::package`
+# reads. It carries protocol 15 (mcpp#755): `xpkg_source`, `xpkg_program`,
+# `xpkg_request`, `mcpp::decision`, `mcpp::toolchain`, `mcpp::phase`, and the
 # `provision = "on-request"` entries below.
-mcpp        = ">=2026.10.1.3"
+mcpp        = ">=2026.10.27.1"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]
@@ -98,6 +101,16 @@ sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm
 # of `plugins-core`: a project that states no toolchain compiles nothing of it.
 [features.plugins-toolchain]
 sources = ["src/toolchain.cppm"]
+implies = ["plugins-core"]
+
+# `mcpp.plugins.platform` -- what a platform's plugin (mcpp SPEC-013 §12) and a
+# package format's provider (SPEC-014 §6) state: the link's driver and inputs,
+# the artifacts' names, the seal, where the runner runs, and `provide_format`,
+# which declares a format on every pass and makes its action from the staged
+# package's `mcpp-package.json` in the pass that asks for it. Its own feature:
+# a project that provides no platform and no format compiles nothing of it.
+[features.plugins-platform]
+sources = ["src/platform.cppm"]
 implies = ["plugins-core"]
 
 # The test kit: a plugin function runs against a stated build context, and its

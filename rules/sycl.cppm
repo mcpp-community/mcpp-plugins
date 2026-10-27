@@ -40,30 +40,25 @@
 //                  measured: without it, clang finds the host's CUDA
 //                  installation and says nothing.
 //
-// WHY THE LINK CARRIES `-l:libstdc++.so.6` AND NOT `-lstdc++`
+// ONE C++ RUNTIME, AND IT IS libstdc++ (0.20.0; mcpp 2026.10.26.1+).
 //
-// The SYCL unit and `libsycl.so` are compiled against libstdc++; mcpp's own
-// clang toolchain uses libc++. Both may be in one process because the seam is
-// `extern "C"` and no C++ type crosses it -- but the libstdc++ half must
-// actually be linked. `-lstdc++` does not do that: clang's driver treats it
-// as a selector for the C++ standard library and REWRITES it to `-lc++`
-// under `-stdlib=libc++`, so the flag disappears from the link line with no
-// diagnostic and `std::cerr` comes back undefined from inside a SYCL header.
-// `-l:<soname>` names a file and is not rewritten.
+// `libsycl.so` is compiled against libstdc++ and throws `sycl::exception` on
+// it, and the device units catch that type. Two Itanium C++ runtimes in one
+// process share the ABI names -- `__cxa_throw`, the personality routine, the
+// type information of `std::exception` -- so a typed `catch` across them does
+// not match (mcpp-community/mcpp#838: only `catch (...)` caught what the
+// runtime threw). Until 0.19 this rule put `-l:libstdc++.so.6` beside the
+// libc++ an llvm build links and called the seam safe; it was not.
 //
-// AND THE BUILD SAYS SO, WHICH IS CORRECT AND EXPECTED.
-//
-// Two C++ runtimes in one image means two sets of unwinder symbols, and mcpp's
-// duplicate-symbol check reports it:
-//
-//   warning: 68 symbols in this image are also provided by a library it loads
-//     _Unwind_DeleteException() ... also provided by libgcc_s.so.1
-//
-// That warning is accurate and is the reason the seam discipline is not
-// optional here: a SYCL exception must be caught inside the device translation
-// unit and turned into a return code, because the runtime that threw it is not
-// the one the caller would unwind with. The fixture in tests/sycl-consumer
-// does exactly that, and its comment says why.
+// So the build's own C++ library is libstdc++ (mcpp SPEC-002 §7): with a gcc
+// toolchain, or with llvm and `gcc.libstdcxx` in the graph. The rule reads the
+// resolved library (`mcpp::cxx_stdlib()`) and refuses anything else before a
+// unit is compiled, naming both remedies; `compat.sycl-runtime` states the same
+// requirement, so the engine refuses it at planning as well. The C++ library
+// is the engine's to link, so this rule names none, and `--gcc-install-dir`
+// points the device compiler at the same GCC the program uses: the graph's
+// supplier (`MCPP_CXX_ABI_ROOT`), else the gcc toolchain's own payload,
+// else the `xim:gcc` this rule declares.
 module;
 #include <cstdlib>
 #include <cstdio>
@@ -228,6 +223,25 @@ inline std::string gcc_install_dir(const std::string& gcc_root) {
     return {};
 }
 
+// The GCC whose libstdc++ this build uses: the graph's supplier, whose `cxx`
+// links the payload's include/c++/<version> (so the GCC root is three levels
+// above it); else the gcc toolchain's own payload; else the `xim:gcc` this rule
+// declares.
+inline std::string cxx_gcc_root() {
+    std::error_code ec;
+    // Read from the environment rather than through `mcpp::cxx_abi_root()`,
+    // which an engine before 2026.10.26.1 does not have: with a gcc toolchain
+    // this rule still compiles and works there.
+    const char* abiRoot = std::getenv("MCPP_CXX_ABI_ROOT");
+    if (const std::string root = abiRoot ? abiRoot : ""; !root.empty()) {
+        const auto cxx = std::filesystem::canonical(std::filesystem::path(root) / "cxx", ec);
+        if (!ec) return cxx.parent_path().parent_path().parent_path().string();
+    }
+    if (std::string_view(mcpp::compiler()) == "gcc")
+        if (const std::string dir = mcpp::toolchain_dir(); !dir.empty()) return dir;
+    return payload("gcc");
+}
+
 // `dpcpp --version` states the release and the intel/llvm revision it was
 // built from. Stated as a fact so a build log answers "which SYCL compiler"
 // without anyone reproducing the build.
@@ -352,6 +366,21 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     const auto dpcppTool = mcpp::plugins::tool::resolve(dpcppSpec, opt.compiler);
     // Asked for: the engine installs `xim:dpcpp` and runs this program again.
     if (dpcppTool.pending()) return out;
+    // One C++ runtime per process (file header). On Windows both halves use
+    // MSVC's, so there is nothing to choose.
+    if constexpr (!kWindows) {
+        if (std::string_view(mcpp::cxx_stdlib()) != "libstdc++") {
+            std::cerr << std::format("mcpp.rules.sycl: SYCL needs this build's C++ library to be libstdc++, and it is {}.\n"
+                "  libsycl.so throws sycl::exception on libstdc++, and a typed catch does not match\n"
+                "  across two C++ runtimes in one process.\n"
+                "  help: add a libstdc++ supplier beside the llvm toolchain:\n"
+                "          [target.'cfg(accelerator = \"sycl\")'.dependencies]\n"
+                "          gcc.libstdcxx = \"16.1.0.1\"\n"
+                "  help: or build with a gcc toolchain:  [toolchain] default = \"gcc@16.1.0\"",
+                *mcpp::cxx_stdlib() ? mcpp::cxx_stdlib() : "unknown") << '\n';
+            return out;
+        }
+    }
     // TWO VALUES, NOT ONE: the compiler to run, and the root its libraries sit
     // under. They were one string while this rule took the payload directory and
     // appended `/bin/clang++`; a resolver answers the program, and `-L` still
@@ -359,7 +388,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // `unable to find library -lsycl` when the root was the program's path).
     const std::string dpcpp     = dpcppTool.program;
     const std::string dpcppRoot = dpcppTool.root;
-    const std::string gcc   = payload("gcc");
+    const std::string gcc   = cxx_gcc_root();
     const std::string cuda  = tg.cuda_archs.empty() ? std::string{} : payload("cuda-nvcc");
     // THE C LIBRARY IS THE SAME QUESTION AS THE C++ ONE, ONE LAYER DOWN.
     //
@@ -474,10 +503,6 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // rule resolved the payload, so the rule names where its libraries are.
     mcpp::link_search((dpcppRoot + "/lib").c_str());
     mcpp::link_lib("sycl");
-    // See the file header for why this is not `-lstdc++`. The reason is a
-    // Linux one: two C++ runtimes cannot share a process, and on Windows there
-    // is one -- MSVC's, which both this payload and mcpp's own compiler use.
-    if constexpr (!kWindows) mcpp::link_lib(":libstdc++.so.6");
 
     // SPIR-V IS NOT A DEVICE, AND A BUILD THAT NAMES NO DEVICE SHOULD BE TOLD.
     //

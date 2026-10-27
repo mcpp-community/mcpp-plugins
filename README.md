@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.19.1", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.20.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -51,9 +51,11 @@ naming it to avoid a download, and the scenarios on both sides -- is in
 
 ## Members
 
-From 0.19.0 the package as a whole needs mcpp 2026.10.1.3 (`[package] mcpp`),
-whose protocol 15 states where each tool and payload comes from; the column
-states the release each member's behaviour first needed.
+From 0.20.0 the package as a whole needs mcpp 2026.10.27.1 (`[package] mcpp`),
+whose protocol 17 states a platform's fields and whose `mcpp pack` writes
+`mcpp-package.json` beside every staged tree (0.19.0 needed 2026.10.1.3, whose
+protocol 15 states where each tool and payload comes from); the column states
+the release each member's behaviour first needed.
 
 | feature | module | mcpp floor | what it does | doc |
 |---|---|---|---|---|
@@ -91,7 +93,12 @@ dependency edge. `plugins-testing` adds `mcpp.plugins.testing`, which runs a
 plugin function against a stated build context and compares what it declared.
 `plugins-toolchain` adds `mcpp.plugins.toolchain`, the builders a root build
 program states the build toolchain with (0.19.0).
-All three need mcpp 2026.10.1.3. `surface`, the name of `plugins-core` before
+`plugins-platform` adds `mcpp.plugins.platform`, what a platform's plugin and a
+package format's provider state -- the link, the artifacts' names, the seal,
+where the runner runs, and `provide_format` -- and `mcpp.plugins` reads a staged
+package's `mcpp-package.json` (`mcpp::plugins::package`), 0.20.0, mcpp
+2026.10.27.1 ([plugin-development](docs/plugin-development.md#3-layers-names-and-the-engine-floor)).
+The first three need mcpp 2026.10.1.3. `surface`, the name of `plugins-core` before
 0.17.0, is kept until 2027-03-28. A feature states a mechanism and the tools that
 mechanism runs; the libraries and SDKs a program links are the project's
 declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
@@ -101,11 +108,13 @@ declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
 ```
 mcpp.toml            the package: one feature per member
 src/plugins.cppm     export module mcpp.plugins;  the version, mcpp::plugins::surface
-                     (the declarations a consumer names) and mcpp::plugins::xml
+                     (the declarations a consumer names), mcpp::plugins::xml and
+                     mcpp::plugins::package (a staged package's metadata)
 src/declare.cppm,    the general library for build programs (`plugins-core`):
 src/toolset.cppm,    mcpp.plugins.declare, mcpp.plugins.toolset, mcpp.plugins.fs
 src/fs.cppm
 src/testing.cppm     mcpp.plugins.testing (`plugins-testing`)
+src/platform.cppm    mcpp.plugins.platform (`plugins-platform`)
 src/compat/, deps/compat/
                      compatibility units, each retired on the date its header states
 rules/<x>.cppm       export module mcpp.rules.<x>;

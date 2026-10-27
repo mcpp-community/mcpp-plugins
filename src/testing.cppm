@@ -74,6 +74,7 @@ inline constexpr std::string_view kKeys[] = {
     "MCPP_PROFILE", "MCPP_ACCEL", "MCPP_OUT_DIR", "MCPP_MANIFEST_DIR", "MCPP_TOOLCHAIN_DIR",
     "MCPP_TOOLCHAIN_SYSROOT", "MCPP_COMPILER", "MCPP_CXX_STDLIB", "MCPP_TARGET_SYSROOT",
     "MCPP_PKG_NAME", "MCPP_PKG_NAMESPACE", "MCPP_PKG_VERSION", "MCPP_PACK_FORMAT",
+    "MCPP_PACK_STAGE_DIR",
     "MCPP_TOOL_CC", "MCPP_TOOL_CXX", "MCPP_TOOL_LD", "MCPP_TOOL_AR", "MCPP_TOOL_RC",
     "MCPP_TOOL_AS", "MCPP_TOOL_MT",
     "MCPP_ABI_TOOL_CC", "MCPP_ABI_TOOL_CXX", "MCPP_ABI_TOOL_LD", "MCPP_ABI_TOOL_AR",
@@ -170,8 +171,14 @@ struct context {
     context& xpkg_program(std::string_view ns, std::string_view name, std::string program) {
         return set(xpkg_key(ns, name, "PROGRAM"), std::move(program));
     }
-    // The phase a case runs in (0.19.0): "toolchain" for a toolchain phase.
+    // The phase a case runs in (0.19.0): "toolchain" for a toolchain phase,
+    // "platform" for a platform's plugin (0.20.0).
     context& phase(std::string name) { return set("MCPP_PHASE", std::move(name)); }
+    // A packaging pass (0.20.0): the format `mcpp pack --pkg-format` asked
+    // for, and the staged tree it hands the provider.
+    context& pack(std::string format, std::string stage_dir) {
+        return set("MCPP_PACK_FORMAT", std::move(format)).set("MCPP_PACK_STAGE_DIR", std::move(stage_dir));
+    }
 };
 
 // Contexts that describe the rows a plugin meets. Paths are under `{root}`,
