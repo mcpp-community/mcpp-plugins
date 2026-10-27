@@ -72,7 +72,11 @@ env:
   # libstdc++ under clang (`gcc.libstdcxx`) and `MCPP_CXX_ABI_ROOT`. The package
   # floor stays 2026.10.1.3: the rule reads the variable from the environment,
   # so a gcc SYCL build still works on the older engine.
-  MCPP_VERSION: 2026.10.26.1
+  #
+  # 2026.10.26.2 writes a WebAssembly link in place again: 2026.10.26.1 linked
+  # every POSIX output through `$out.tmp`, Emscripten named its `.wasm` after
+  # that, and `dist-web` found no stem family (mcpp#844, found by this CI).
+  MCPP_VERSION: 2026.10.26.2
   # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
   #
   # `MCPP_VERSION` states the engine this collection needs -- the package floor
@@ -83,7 +87,7 @@ env:
   #
   # It moves to `MCPP_VERSION` once that release exists, so the ordinary path
   # runs the engine this collection states.
-  MCPP_BOOTSTRAP: 2026.10.26.1
+  MCPP_BOOTSTRAP: 2026.10.26.2
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above.
