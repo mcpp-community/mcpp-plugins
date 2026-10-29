@@ -1,0 +1,22 @@
+# Fixture: a CMake subproject built for ANOTHER TARGET (0.21.0). Built with
+# `--target x86_64-linux-musl` on a glibc machine, the subproject is compiled
+# with the compilers and words of the engine's contract for that target, not
+# with the machine's toolset, and linked into the static program.
+[package]
+name        = "cmake-cross"
+version     = "0.1.0"
+description = "Fixture: a CMake subproject compiled for the build's target from the engine's contract"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["deps-cmake"], host-module = true }
+
+[targets.cmake-cross]
+kind = "bin"
+main = "src/main.cpp"

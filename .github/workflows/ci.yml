@@ -1206,7 +1206,7 @@ jobs:
           set -e
           [ "$rc" = 2 ] || { echo "FAIL: --format bogus exited $rc, expected 2"; exit 1; }
           [ -z "$so" ] || { echo "FAIL: the refusal wrote to stdout"; exit 1; }
-          grep -q 'available in this build: tar, dir, appimage' <<<"$se" \
+          grep -qE 'available in this build: .*\bappimage\b' <<<"$se" \
             || { echo "FAIL: the refusal does not name appimage"; echo "$se"; exit 1; }
 
           "$MCPP" pack --format appimage | tee pack.log
@@ -1755,6 +1755,11 @@ jobs:
       # prefix are not taken.
       - name: deps-cmake keeps an installation and takes it for the same key
         run: bash .github/scripts/check-deps-and-qt.sh cmake-cache
+
+      # 0.21.0: a subproject of a build for another target is compiled from the
+      # engine's contract for it (mcpp 2026.10.30.1+): musl from a glibc machine.
+      - name: deps-cmake compiles a cross build's subproject from the engine's contract
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-cross
 
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer

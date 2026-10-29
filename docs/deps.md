@@ -256,6 +256,27 @@ Each toolset statement configures its own build directory, because CMake
 refuses a cache made with another generator or instance; the directory 0.16.0
 configured stays `build/`.
 
+**A build for another target (0.21.0, mcpp 2026.10.30.1+).** When the build's
+target is not the machine (`mcpp build --target x86_64-linux-musl`, an ok image
+`--target x86_64-openkal`), the toolset above is the machine's and is not used.
+The subproject is compiled as the engine compiles the target: the action reads
+the engine's contract for the configuration (`${mcpp.contract}`, see mcpp's
+docs/30) when it runs, and configures with its compilers
+(`CMAKE_<LANG>_COMPILER`), its words (`CMAKE_<LANG>_FLAGS`: target, sysroot,
+target-side headers, platform and profile flags), its link words and its
+archiver, under Ninja. `CMAKE_SYSTEM_NAME` is the target's system (Linux,
+Android, Darwin, iOS, Windows, Emscripten, `Generic` for bare metal, and Linux
+for an ok image, whose C library is POSIX at the source level), or
+`options::system_name`; `CMAKE_TRY_COMPILE_TARGET_TYPE` is `STATIC_LIBRARY`,
+because a program reaches the target's startup files and C library only through
+the engine's link. The libraries the subproject installs are linked into the
+program by that link. A tool the subproject runs at build time for the machine
+(LLVM's `llvm-tblgen`) is built in the host graph, as a build dependency's tool,
+and named to the subproject with a `cache_args` entry. An installation of a
+cross build is not kept in the cache below: its compilers are named by the
+contract when the action runs, after the key is written. Compilers or a
+toolchain file in `cache_args` decide here too.
+
 ### An installation is built once (0.18.0)
 
 The action keeps what it installed in a cache outside the package, and a later
