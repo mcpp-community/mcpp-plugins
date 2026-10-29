@@ -139,7 +139,8 @@ inline std::string cmake_system_name(std::string_view os) {
 // The CMake code that reads the engine's contract for this configuration
 // (`${mcpp.contract}`, mcpp 2026.10.30.1+) into variables when the action
 // runs: `_mcpp_<c|cxx|asm>` and `_mcpp_ld` the programs, `_mcpp_<...>_flags`
-// their words joined, `_mcpp_ar` the archiver. Read then and not when this
+// their words joined (a word with a space quoted, as CMake splits a flags
+// string), `_mcpp_ar` the archiver. Read then and not when this
 // program plans: the engine writes the file after build programs have run.
 inline std::string contract_reader() {
     return R"(if(NOT EXISTS "${MCPP_CONTRACT}")
@@ -154,6 +155,9 @@ function(_mcpp_words out)
     math(EXPR _last "${_n} - 1")
     foreach(_i RANGE ${_last})
       string(JSON _a GET "${_mcpp_contract}" ${ARGN} ${_i})
+      if(_a MATCHES " ")
+        set(_a "\"${_a}\"")
+      endif()
       string(APPEND _w " ${_a}")
     endforeach()
   endif()
