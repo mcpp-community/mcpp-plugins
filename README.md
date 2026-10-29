@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.20.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.21.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -51,9 +51,11 @@ naming it to avoid a download, and the scenarios on both sides -- is in
 
 ## Members
 
-From 0.20.0 the package as a whole needs mcpp 2026.10.27.1 (`[package] mcpp`),
-whose protocol 17 states a platform's fields and whose `mcpp pack` writes
-`mcpp-package.json` beside every staged tree (0.19.0 needed 2026.10.1.3, whose
+From 0.21.0 the package as a whole needs mcpp 2026.10.30.1 (`[package] mcpp`),
+which writes the configuration's contract that `deps-cmake` compiles a cross
+build from (0.20.0 needed 2026.10.27.1, whose protocol 17 states a platform's
+fields and whose `mcpp pack` writes `mcpp-package.json` beside every staged
+tree; 0.19.0 needed 2026.10.1.3, whose
 protocol 15 states where each tool and payload comes from); the column states
 the release each member's behaviour first needed.
 
@@ -76,7 +78,7 @@ the release each member's behaviour first needed.
 | `dist-web` | `mcpp.dist.web` | 2026.9.13.1 | Copies a `wasm32-emscripten` program and its files into a web directory with an `index.html`. | [dist](docs/dist.md#dist-web) |
 | `dist-apk` | `mcpp.dist.apk` | 2026.10.1.3 | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [dist-apk](docs/dist-apk.md) |
 | `deps-vcpkg` | `mcpp.deps.vcpkg` | 2026.10.1.3 | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [deps](docs/deps.md#deps-vcpkg) |
-| `deps-cmake` | `mcpp.deps.cmake` | 2026.10.1.3 | Builds and installs a CMake subproject as an action with Ninja and the toolset mcpp resolved, keeps the installation for any build with the same key, and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
+| `deps-cmake` | `mcpp.deps.cmake` | 2026.10.1.3; a cross build 2026.10.30.1 | Builds and installs a CMake subproject as an action with Ninja and the toolset mcpp resolved -- for another target, the compilers and words of the engine's contract -- keeps the installation for any build with the same key, and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
 | `deps-archive` | `mcpp.deps.archive` | 2026.10.1.3 | Extracts a zip archive the project keeps and places its tree beside the program. | [deps](docs/deps.md#deps-archive) |
 
 Some features add a sub-capability to a member: `dist-apk-kotlin` and

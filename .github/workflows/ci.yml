@@ -1756,6 +1756,11 @@ jobs:
       - name: deps-cmake keeps an installation and takes it for the same key
         run: bash .github/scripts/check-deps-and-qt.sh cmake-cache
 
+      # 0.21.0: a subproject of a build for another target is compiled from the
+      # engine's contract for it (mcpp 2026.10.30.1+): musl from a glibc machine.
+      - name: deps-cmake compiles a cross build's subproject from the engine's contract
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-cross
+
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 

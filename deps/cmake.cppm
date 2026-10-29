@@ -118,7 +118,57 @@ struct options {
     // `~/.cache/mcpp-plugins/deps-cmake`). Read when the action runs; the place
     // is no part of what is built. See docs/deps.md.
     std::string cache;
+    // `CMAKE_SYSTEM_NAME` of a build for another target (0.21.0). Empty
+    // derives it from the target's system: Linux, Android, Darwin, iOS,
+    // Windows, Emscripten, Generic for bare metal, and Linux for an ok image,
+    // whose C library is POSIX at the source level.
+    std::string system_name;
 };
+
+// The `CMAKE_SYSTEM_NAME` of a target system (`mcpp::target_os()`).
+inline std::string cmake_system_name(std::string_view os) {
+    if (os == "linux" || os == "openkal") return "Linux";
+    if (os == "android")    return "Android";
+    if (os == "macos")      return "Darwin";
+    if (os == "ios")        return "iOS";
+    if (os == "windows")    return "Windows";
+    if (os == "emscripten") return "Emscripten";
+    return "Generic";
+}
+
+// The CMake code that reads the engine's contract for this configuration
+// (`${mcpp.contract}`, mcpp 2026.10.30.1+) into variables when the action
+// runs: `_mcpp_<c|cxx|asm>` and `_mcpp_ld` the programs, `_mcpp_<...>_flags`
+// their words joined, `_mcpp_ar` the archiver. Read then and not when this
+// program plans: the engine writes the file after build programs have run.
+inline std::string contract_reader() {
+    return R"(if(NOT EXISTS "${MCPP_CONTRACT}")
+  message(FATAL_ERROR "mcpp.deps.cmake: a build for another target reads the engine's contract, "
+    "and '${MCPP_CONTRACT}' does not exist; it is written by mcpp 2026.10.30.1 and later")
+endif()
+file(READ "${MCPP_CONTRACT}" _mcpp_contract)
+function(_mcpp_words out)
+  string(JSON _n LENGTH "${_mcpp_contract}" ${ARGN})
+  set(_w "")
+  if(_n GREATER 0)
+    math(EXPR _last "${_n} - 1")
+    foreach(_i RANGE ${_last})
+      string(JSON _a GET "${_mcpp_contract}" ${ARGN} ${_i})
+      string(APPEND _w " ${_a}")
+    endforeach()
+  endif()
+  string(STRIP "${_w}" _w)
+  set(${out} "${_w}" PARENT_SCOPE)
+endfunction()
+foreach(_lang c cxx asm)
+  string(JSON _mcpp_${_lang} GET "${_mcpp_contract}" compile ${_lang} program)
+  _mcpp_words(_mcpp_${_lang}_flags compile ${_lang} args)
+endforeach()
+string(JSON _mcpp_ld GET "${_mcpp_contract}" link program)
+string(JSON _mcpp_ar GET "${_mcpp_contract}" link archiver)
+_mcpp_words(_mcpp_ld_flags link args)
+)";
+}
 
 // The variable a `-D<name>[:<type>]=<value>` argument defines; empty for any
 // other argument.
@@ -376,11 +426,20 @@ inline prefix use(const options& opt) {
     const bool chosen          = chooses_compiler(opt.cache_args);
     const bool generatorChosen = chooses_generator(opt.cache_args);
     const bool visualStudio    = opt.generator == options::generator_kind::visual_studio;
-    auto tools = visualStudio ? ts::resolve(opt.toolset) : ts::resolve_named(opt.toolset);
-    if (!tools) {
-        std::cerr << std::format("{}: {}\n", who, tools.error());
+    // A BUILD FOR ANOTHER TARGET IS COMPILED AS THE ENGINE COMPILES IT (0.21.0):
+    // the compilers, target words and archiver of the engine's contract, which
+    // the action reads when it runs. The toolset this program resolves is the
+    // machine's, and a cross build linked with it would not be the target's.
+    const std::string targetTriple = mcpp::target(), hostTriple = mcpp::host();
+    const bool contract = !chosen && !targetTriple.empty() && !hostTriple.empty()
+                          && targetTriple != hostTriple;
+    auto resolvedTools = visualStudio ? ts::resolve(opt.toolset) : ts::resolve_named(opt.toolset);
+    if (!resolvedTools && !contract) {
+        std::cerr << std::format("{}: {}\n", who, resolvedTools.error());
         return {};
     }
+    const ts::resolved_tools noTools{};
+    const ts::resolved_tools* tools = resolvedTools ? &*resolvedTools : &noTools;
     const std::string crt = opt.crt_linkage.empty() ? tools->crt : opt.crt_linkage;
     if (!crt.empty() && crt != "static" && crt != "dynamic") {
         std::cerr << std::format("{}: options::crt_linkage is '{}'; it is \"static\" or \"dynamic\".\n",
@@ -388,15 +447,16 @@ inline prefix use(const options& opt) {
         return {};
     }
     const std::string ninja = mcpp::ninja_program();
-    const bool named    = !chosen && tools->how == ts::mechanism::chain && !tools->cxx.empty();
-    const bool useNinja = named && !generatorChosen && !ninja.empty();
-    const bool instance = !chosen && !generatorChosen && tools->how == ts::mechanism::instance;
+    const bool named    = !contract && !chosen && tools->how == ts::mechanism::chain && !tools->cxx.empty();
+    const bool useNinja = (named || contract) && !generatorChosen && !ninja.empty();
+    const bool instance = !contract && !chosen && !generatorChosen && tools->how == ts::mechanism::instance;
 
     // One build directory per toolset statement: CMake refuses a cache made
     // with another generator or instance. What 0.16.0 configured stays in
     // `build/`.
     std::string key;
-    if (useNinja) key = "ninja;" + tools->identity + ";" + tools->cxx;
+    if (contract) key = "contract;" + targetTriple;
+    else if (useNinja) key = "ninja;" + tools->identity + ";" + tools->cxx;
     else if (named) key = "named;" + tools->identity + ";" + tools->cxx;
     else if (instance) key = "instance;" + tools->instance_dir + ";" + tools->toolset_version;
     const std::string name = opt.name.empty() ? source.filename().string() : opt.name;
@@ -409,8 +469,9 @@ inline prefix use(const options& opt) {
     p.include   = mcpp::deps::generic(root / opt.dirs.include);
     p.lib       = mcpp::deps::generic(root / opt.dirs.lib);
     p.bin       = mcpp::deps::generic(root / opt.dirs.bin);
-    p.mechanism = std::string(ts::name(named ? ts::mechanism::chain
-                                       : instance ? ts::mechanism::instance : ts::mechanism::detected));
+    p.mechanism = contract ? std::string("contract")
+                           : std::string(ts::name(named ? ts::mechanism::chain
+                                                  : instance ? ts::mechanism::instance : ts::mechanism::detected));
 
     const auto tool = cmake_exe(opt);
     const std::string cmake = tool.program;
@@ -486,21 +547,41 @@ inline prefix use(const options& opt) {
                  + (crt == "dynamic" ? "DLL" : ""));
         }
         for (auto const& x : opt.cache_args) same(x);
+        if (contract) {
+            same("-DCMAKE_SYSTEM_NAME=" + (opt.system_name.empty() ? cmake_system_name(mcpp::target_os())
+                                                                   : opt.system_name));
+            // A try-compile links nothing: the target's startup files and C
+            // library reach a program only through the engine's link.
+            same("-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY");
+            keyed.push_back("contract " + targetTriple);
+        }
 
-        std::string steps = "execute_process(COMMAND ${CMAKE_COMMAND}";
+        std::string steps = contract ? contract_reader() : std::string();
+        steps += "execute_process(COMMAND ${CMAKE_COMMAND}";
         for (auto const& x : configure) steps += "\n    " + bracket(x);
+        if (contract)
+            steps += "\n    \"-DCMAKE_C_COMPILER=${_mcpp_c}\" \"-DCMAKE_CXX_COMPILER=${_mcpp_cxx}\""
+                     "\n    \"-DCMAKE_ASM_COMPILER=${_mcpp_asm}\" \"-DCMAKE_AR=${_mcpp_ar}\""
+                     "\n    \"-DCMAKE_C_FLAGS=${_mcpp_c_flags}\" \"-DCMAKE_CXX_FLAGS=${_mcpp_cxx_flags}\""
+                     "\n    \"-DCMAKE_ASM_FLAGS=${_mcpp_asm_flags}\""
+                     "\n    \"-DCMAKE_EXE_LINKER_FLAGS=${_mcpp_ld_flags}\""
+                     "\n    \"-DCMAKE_SHARED_LINKER_FLAGS=${_mcpp_ld_flags}\"";
         steps += "\n    RESULT_VARIABLE rc)\n"
                  "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"configure exited ${rc}\")\nendif()\n"
                  "execute_process(COMMAND ${CMAKE_COMMAND} --build " + bracket(buildS) +
                  " --config " + bracket(opt.config) + " --target install --parallel\n    RESULT_VARIABLE rc)\n"
                  "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"build and install exited ${rc}\")\nendif()\n";
         std::string text = "# Written by mcpp.deps.cmake: configure, build and install " + name + ".\n"
-                           "# toolset: " + ts::describe(*tools) + "\n";
+                           "# toolset: " + (contract ? std::string("the engine's contract for ") + targetTriple
+                                                     : ts::describe(*tools)) + "\n";
         const auto files = mcpp::deps::files_under(source);
         // A key states the compilers through the toolset's identity. On the
         // MSVC ABI that is the MSVC toolset, which a row compiler (clang-cl,
         // `compiler::row`) is not, so such an installation is not kept.
-        const bool identified = instance || (named && (!tools->msvc_abi || opt.toolset.cc == ts::compiler::abi_native));
+        // A contract build is not kept either: its compilers are named by the
+        // contract when the action runs, after this key is written.
+        const bool identified = !contract
+            && (instance || (named && (!tools->msvc_abi || opt.toolset.cc == ts::compiler::abi_native)));
         if (!identified || opt.cache == "off") {
             text += steps;
         } else {
@@ -520,7 +601,9 @@ inline prefix use(const options& opt) {
         a.id          = id.c_str();
         a.role        = mcpp::roles::prepare;
         a.description = desc.c_str();
-        a.arg(cmake.c_str()).arg("-P").arg(scriptS.c_str());
+        a.arg(cmake.c_str());
+        if (contract) a.arg("-DMCPP_CONTRACT=${mcpp.contract}");
+        a.arg("-P").arg(scriptS.c_str());
         // Named tools run with the environment the engine runs them with, and
         // their directories first on PATH.
         if (named) {
