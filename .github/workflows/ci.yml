@@ -1206,7 +1206,7 @@ jobs:
           set -e
           [ "$rc" = 2 ] || { echo "FAIL: --format bogus exited $rc, expected 2"; exit 1; }
           [ -z "$so" ] || { echo "FAIL: the refusal wrote to stdout"; exit 1; }
-          grep -q 'available in this build: tar, dir, appimage' <<<"$se" \
+          grep -qE 'available in this build: .*\bappimage\b' <<<"$se" \
             || { echo "FAIL: the refusal does not name appimage"; echo "$se"; exit 1; }
 
           "$MCPP" pack --format appimage | tee pack.log
