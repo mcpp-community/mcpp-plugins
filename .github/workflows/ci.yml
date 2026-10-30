@@ -94,7 +94,7 @@ env:
   #
   # It moves to `MCPP_VERSION` once that release exists, so the ordinary path
   # runs the engine this collection states.
-  MCPP_BOOTSTRAP: 2026.10.26.2
+  MCPP_BOOTSTRAP: 2026.10.27.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above,
@@ -117,7 +117,7 @@ env:
   # one-line change here. The mcpp is the bootstrap release, which also builds
   # the engine under review when `MCPP_SOURCE_REF` names one.
   MCPPLS_VERSION: 0.0.15
-  MCPP_EDITOR_VERSION: 2026.10.26.2
+  MCPP_EDITOR_VERSION: 2026.10.27.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1206,7 +1206,7 @@ jobs:
           set -e
           [ "$rc" = 2 ] || { echo "FAIL: --format bogus exited $rc, expected 2"; exit 1; }
           [ -z "$so" ] || { echo "FAIL: the refusal wrote to stdout"; exit 1; }
-          grep -q 'available in this build: tar, dir, appimage' <<<"$se" \
+          grep -qE 'available in this build: .*\bappimage\b' <<<"$se" \
             || { echo "FAIL: the refusal does not name appimage"; echo "$se"; exit 1; }
 
           "$MCPP" pack --format appimage | tee pack.log
@@ -1918,8 +1918,9 @@ jobs:
           #
           # Recorded rather than worked around here: the engine-side half is
           # `host_link_tokens` returning before it adds the payload's runtime
-          # directories on macOS. Once a release carries that, this moves back
-          # to macos-14, which is the floor mcpp's README states.
+          # directories on macOS. GitHub retired macos-14 on 2026-11-02, so
+          # macos-15 is also the oldest image there is; the floor mcpp's README
+          # states (macOS 14) is the minos its released binaries declare.
           - name: macos arm64
             runs-on: macos-15
             asset: macosx-arm64.tar.gz
