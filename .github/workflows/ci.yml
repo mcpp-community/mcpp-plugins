@@ -1918,8 +1918,9 @@ jobs:
           #
           # Recorded rather than worked around here: the engine-side half is
           # `host_link_tokens` returning before it adds the payload's runtime
-          # directories on macOS. Once a release carries that, this moves back
-          # to macos-14, which is the floor mcpp's README states.
+          # directories on macOS. GitHub retired macos-14 on 2026-11-02, so
+          # macos-15 is also the oldest image there is; the floor mcpp's README
+          # states (macOS 14) is the minos its released binaries declare.
           - name: macos arm64
             runs-on: macos-15
             asset: macosx-arm64.tar.gz
