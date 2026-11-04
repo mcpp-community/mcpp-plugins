@@ -14,6 +14,8 @@ Module `mcpp.rules.cuda`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.
 
 **Needs and behaviour.** `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one
 
+The rule supplies toolkit search directories. The consumer selects the CUDA runtime link policy; for the Linux static-runtime arrangement used by the fixtures, the CUDA configuration states `ldflags = ["-lcudart_static", "-lrt", "-lpthread", "-ldl"]`.
+
 ## `rules-hip`
 
 Module `mcpp.rules.hip`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
@@ -58,3 +60,6 @@ Module `mcpp.rules.sycl`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.
 Each selected implementation owns its targets. A repository may retain CUDA and SYCL source groups while selecting only `sycl+{nvptx64-sm_89}`; the CUDA group is excluded by its source constraint and the CUDA rule need not be imported. Selecting `cuda+{sm_90},sycl+{nvptx64-sm_89}` selects both implementations with different targets. The rule passes the same target vector to compilation and device linking. Its CUDA compiler payload is requested only for a SYCL NVIDIA target; `options::cuda` accepts the same explicit choice as other rule tools.
 
 The older `sycl,cuda+{sm_89}` form still inherits CUDA targets when the SYCL member has no targets, with a migration warning. Both named implementations remain selected. Explicit SYCL targets are never replaced by a CUDA member. Move the device target to the SYCL member to select only SYCL. GPU execution still requires a compatible device and driver; CI verifies the emitted images and the CPU fallback separately.
+
+
+The `tests/multi-accel-consumer` fixture selects `cuda+{sm_90},sycl+{nvptx64-sm_89}` and imports both rules. CI inspects each rule's actual image target and runs both host objects without submitting GPU work. This establishes build/link coexistence with one C++ runtime; device execution, interoperation and synchronization require their own runtime checks.

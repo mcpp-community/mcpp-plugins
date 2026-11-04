@@ -1479,6 +1479,14 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
+      - name: CUDA and SYCL coexist with independent code targets
+        working-directory: tests/multi-accel-consumer
+        run: |
+          "$MCPP" build
+          python3 ../sycl-consumer/verify-images.py sm_89 --cuda-target=sm_90
+          # Both host objects execute; this does not submit work to a GPU.
+          "$MCPP" run
+
       # EVERY RULE COMPILED FOR THIS HOST, which is a different claim from any
       # step above. Each of those exercises one rule and needs that rule's
       # payload, so a rule is only ever compiled on the platforms its payload

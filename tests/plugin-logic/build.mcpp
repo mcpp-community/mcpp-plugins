@@ -146,6 +146,31 @@ mcpp::plugins::tool::found tool_resolve(mcpp::plugins::tool::choice c = {}) {
 
 int main(int argc, char** argv) {
     return t::run(argc, argv, {
+        { "surface: equal-size payload changes reach assembly and identical bytes keep its timestamp",
+          t::row::linux_gcc().file("pkg/payload.bin", "abcd"),
+          [] {
+              namespace sf = mcpp::plugins::surface;
+              const auto root=std::filesystem::path(mcpp::manifest_dir());
+              sf::options options;
+              options.module_name="fixture.embed";
+              options.out_dir=mcpp::out_dir();
+              options.store=sf::storage::object;
+              options.target_os="linux";
+              options.has_gas_assembler=true;
+              const std::vector<sf::item> items{{.identifier="data",.payload_path=(root/"payload.bin").string()}};
+              if (!sf::write(items,options,sf::half::body)) return 1;
+              const auto file=sf::outputs(options).assembly_file;
+              auto read=[&]{std::ifstream in(file);return std::string(std::istreambuf_iterator<char>(in),{});};
+              const auto before=read();
+              std::ofstream(root/"payload.bin",std::ios::binary|std::ios::trunc)<<"abce";
+              if (!sf::write(items,options,sf::half::body) || read()==before) return 2;
+              const auto sentinel=std::filesystem::file_time_type::clock::now()-std::chrono::hours(1);
+              std::filesystem::last_write_time(file,sentinel);
+              if (!sf::write(items,options,sf::half::body)) return 3;
+              return std::filesystem::last_write_time(file)==sentinel ? 0 : 4;
+          },
+          [](const t::result& r,t::checker& c){c.expect(r.exit_code==0,"the body tracks payload content without rewriting unchanged source");} },
+
         { "progress: no channel leaves work independent of telemetry",
           t::row::linux_gcc(),
           [] {

@@ -1,0 +1,5 @@
+import mcpp.rules.cuda;
+import mcpp.rules.sycl;
+int main() {
+    return mcpp::rules::cuda::compile() && mcpp::rules::sycl::compile() ? 0 : 1;
+}
