@@ -52,6 +52,7 @@ export module mcpp.deps.cmake;
 
 import std;
 import mcpp;
+import mcpp.plugins.progress;
 import mcpp.plugins;
 import mcpp.deps;
 import mcpp.plugins.fs;
@@ -69,6 +70,7 @@ struct layout {
 };
 
 struct options {
+    bool progress = false; // optional configure/build/install stage telemetry
     // The subproject's source directory, relative to the package root.
     std::string source;
     // Names the action and the prefix. Empty takes the source directory's name.
@@ -228,6 +230,42 @@ inline mcpp::plugins::tool::found cmake_exe(const options& opt) {
 }
 
 namespace detail {
+
+// Stage telemetry is interpreted here, at the adapter that owns CMake.
+// The helper invocation isolates optional I/O errors from the actual build.
+inline std::string progress_prelude() {
+    return R"cmake(
+if(DEFINED MCPP_PROGRESS_PHASE)
+  set(_file "$ENV{MCPP_ACTION_PROGRESS_FILE}")
+  if(NOT _file STREQUAL "")
+    file(WRITE "${_file}.tmp" "{\"v\":1,\"seq\":${MCPP_PROGRESS_SEQ},\"phase\":\"${MCPP_PROGRESS_PHASE}\"}")
+    file(RENAME "${_file}.tmp" "${_file}" RESULT _ignored)
+  endif()
+  return()
+endif()
+function(mcpp_progress phase)
+  if("$ENV{MCPP_ACTION_PROGRESS_FILE}" STREQUAL "")
+    return()
+  endif()
+  string(TIMESTAMP _now "%s" UTC)
+  get_property(_last GLOBAL PROPERTY _mcpp_progress_time)
+  # At most one snapshot per second: short stages may finish between reports.
+  if(_last STREQUAL _now)
+    return()
+  endif()
+  get_property(_seq GLOBAL PROPERTY _mcpp_progress_seq)
+  if(NOT _seq)
+    set(_seq 0)
+  endif()
+  math(EXPR _seq "${_seq}+1")
+  set_property(GLOBAL PROPERTY _mcpp_progress_seq "${_seq}")
+  set_property(GLOBAL PROPERTY _mcpp_progress_time "${_now}")
+  execute_process(COMMAND "${CMAKE_COMMAND}" "-DMCPP_PROGRESS_PHASE=${phase}"
+    "-DMCPP_PROGRESS_SEQ=${_seq}" -P "${CMAKE_CURRENT_LIST_FILE}"
+    OUTPUT_QUIET ERROR_QUIET RESULT_VARIABLE _ignored)
+endfunction()
+)cmake";
+}
 
 // The script of a keyed installation: `steps` (configure, build, install) runs
 // only when the cache holds no installation with the key. The key is
@@ -561,6 +599,7 @@ inline prefix use(const options& opt) {
         }
 
         std::string steps = contract ? contract_reader() : std::string();
+        if (opt.progress) steps += "mcpp_progress(configure)\n";
         steps += "execute_process(COMMAND ${CMAKE_COMMAND}";
         for (auto const& x : configure) steps += "\n    " + bracket(x);
         if (contract)
@@ -572,12 +611,14 @@ inline prefix use(const options& opt) {
                      "\n    \"-DCMAKE_SHARED_LINKER_FLAGS=${_mcpp_ld_flags}\"";
         steps += "\n    RESULT_VARIABLE rc)\n"
                  "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"configure exited ${rc}\")\nendif()\n"
+                 + (opt.progress ? std::string("mcpp_progress(build-install)\n") : std::string{}) +
                  "execute_process(COMMAND ${CMAKE_COMMAND} --build " + bracket(buildS) +
                  " --config " + bracket(opt.config) + " --target install --parallel\n    RESULT_VARIABLE rc)\n"
                  "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"build and install exited ${rc}\")\nendif()\n";
         std::string text = "# Written by mcpp.deps.cmake: configure, build and install " + name + ".\n"
                            "# toolset: " + (contract ? std::string("the engine's contract for ") + targetTriple
                                                      : ts::describe(*tools)) + "\n";
+        if (opt.progress) text = detail::progress_prelude() + text;
         const auto files = mcpp::deps::files_under(source);
         // A key states the compilers through the toolset's identity. On the
         // MSVC ABI that is the MSVC toolset, which a row compiler (clang-cl,
@@ -602,6 +643,7 @@ inline prefix use(const options& opt) {
         mcpp::plugins::fs::write_if_changed(script, text);
         const std::string scriptS = mcpp::deps::generic(script);
         mcpp::action a;
+        mcpp::plugins::progress::enable(a, opt.progress);
         a.id          = id.c_str();
         a.role        = mcpp::roles::prepare;
         a.description = desc.c_str();

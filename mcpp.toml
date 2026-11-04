@@ -92,7 +92,7 @@ default = []
 #                          build system (`instance`, `chain`, `detected`)
 #   mcpp.plugins.fs        deterministic file generation and placement
 [features.plugins-core]
-sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm", "src/accel.cppm",
+sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm", "src/accel.cppm", "src/progress.cppm",
            "src/compat/detected_toolset.cppm"]
 
 # `mcpp.plugins.toolchain` -- the builders a root build program states its
@@ -307,6 +307,13 @@ implies = ["plugins-core"]
 [features.deps-vcpkg]
 sources = ["deps/vcpkg.cppm"]
 implies = ["deps"]
+
+[features.plugins-progress]
+sources = ["src/progress_writer.cppm"]
+implies = ["plugins-core"]
+
+[feature-deps.plugins-progress.mcpplibs]
+os = ">=0.2.3"
 
 [features.deps-cmake]
 sources = ["deps/cmake.cppm"]

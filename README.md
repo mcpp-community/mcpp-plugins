@@ -105,6 +105,8 @@ The first three need mcpp 2026.10.1.3. `surface`, the name of `plugins-core` bef
 mechanism runs; the libraries and SDKs a program links are the project's
 declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
 
+`mcpp.plugins.accel` reads complete implementation-owned target requests; `mcpp.plugins.progress` enables optional action telemetry. Worker programs can select `plugins-progress` for `mcpp.plugins.progress.writer`, the atomic snapshot writer. See [plugin-development](docs/plugin-development.md#optional-action-progress).
+
 ## Layout
 
 ```

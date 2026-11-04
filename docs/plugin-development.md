@@ -215,3 +215,9 @@ A plugin in this package consists of:
 - a version bump.
 
 A project's own plugin is a module in the project (a path dependency with `host-module = true`) and follows §2 in the same way.
+
+## Optional action progress
+
+`mcpp.plugins.progress` is part of `plugins-core`. `enable(action, requested)` sets the optional action flag when the engine API provides it. With older APIs it reports that telemetry is unavailable and leaves the action usable. Engine support starts at mcpp 2026.11.5.1 (protocol 18); this optional path does not raise the package's 2026.10.30.1 floor.
+
+Worker programs select `plugins-progress` and import `mcpp.plugins.progress.writer`. `writer` reads `MCPP_ACTION_PROGRESS_FILE`; an absent channel is a no-op. `report({.phase="compile", .done=3, .total=9})` atomically replaces the latest schema-1 snapshot, assigns increasing sequence numbers and publishes at most five times per second. Omit counts when the total is unknown. `report()` returns whether it published; this result does not determine whether the worker's actual task succeeded. The optional writer feature uses `mcpplibs.os.fs` for portable atomic replacement. The general helper and CMake adapter do not add this dependency to ordinary consumers.

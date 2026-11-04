@@ -188,6 +188,9 @@ Not supported: vcpkg's classic mode; the debug libraries under `debug/lib`.
 
 ## `deps-cmake`: a CMake subproject
 
+Set `options::progress = true` to report the configure and build-install stages when running with mcpp 2026.11.5.1 or later. The default is false. Older engine APIs continue without telemetry. Counts are omitted because this adapter does not know the number of compiler tasks; a restored cached installation need not run either stage. Optional snapshot I/O errors do not fail configure/build/install. The CMake snapshot helper uses `file(RENAME ... RESULT ...)` (CMake 3.21+); older tools can still build while telemetry remains unavailable.
+
+
 ```cpp
 import mcpp.deps.cmake;
 

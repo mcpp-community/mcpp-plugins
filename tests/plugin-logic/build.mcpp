@@ -15,6 +15,8 @@ import mcpp.plugins.tool;
 import mcpp.plugins.platform;
 import mcpp.plugins;
 import mcpp.plugins.accel;
+import mcpp.plugins.progress;
+import mcpp.plugins.progress.writer;
 import mcpp.rules.cuda;
 import mcpp.rules.sycl;
 import mcpp.rules.hip;
@@ -144,6 +146,43 @@ mcpp::plugins::tool::found tool_resolve(mcpp::plugins::tool::choice c = {}) {
 
 int main(int argc, char** argv) {
     return t::run(argc, argv, {
+        { "progress: no channel leaves work independent of telemetry",
+          t::row::linux_gcc(),
+          [] {
+              mcpp::plugins::progress::writer writer;
+              return !writer.enabled() && !writer.report({.phase="configure"}) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "absence is a no-op"); } },
+        { "progress: snapshots replace atomically and publishing is rate limited",
+          t::row::linux_gcc().set("MCPP_ACTION_PROGRESS_FILE", "{root}/telemetry/state.json")
+              .file("telemetry/keep"),
+          [] {
+              mcpp::plugins::progress::writer writer;
+              if (!writer.enabled() || !writer.report({.phase="configure"})) return 1;
+              if (writer.report({.phase="too-soon"})) return 2;
+              std::this_thread::sleep_for(std::chrono::milliseconds(210));
+              return writer.report({.phase="build",.done=3,.total=9}) ? 0 : 3;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "two bounded reports succeeded");
+              const auto text=r.file("telemetry/state.json");
+              c.expect(text.find("\"seq\":1") != std::string::npos
+                  && text.find("\"phase\":\"build\"") != std::string::npos
+                  && text.find("configure") == std::string::npos, "only the latest snapshot remains");
+          } },
+        { "progress: invalid counts and terminal controls are refused",
+          t::row::linux_gcc().set("MCPP_ACTION_PROGRESS_FILE", "{root}/telemetry/state.json")
+              .file("telemetry/keep"),
+          [] {
+              mcpp::plugins::progress::writer writer;
+              return !writer.report({.phase="bad\nphase"})
+                  && !writer.report({.phase="build",.done=4,.total=3}) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "invalid optional data was refused");
+              c.expect(r.file("telemetry/state.json").empty(), "invalid telemetry wrote no document");
+          } },
+
         { "accel: targets stay on their implementation across internal commas",
           t::row::linux_gcc(),
           [] {
