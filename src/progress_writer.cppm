@@ -1,7 +1,7 @@
 // Atomic latest-state writer for action worker programs.
 export module mcpp.plugins.progress.writer;
 import std;
-import mcpp.plugins.progress;
+export import mcpp.plugins.progress;
 import mcpplibs.os.fs;
 export namespace mcpp::plugins::progress {
 class writer {

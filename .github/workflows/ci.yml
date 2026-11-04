@@ -1479,6 +1479,18 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
+      - name: an ordinary worker imports the progress writer without build-program modules
+        working-directory: tests/progress-worker
+        run: |
+          "$MCPP" run
+          MCPP_ACTION_PROGRESS_FILE="$PWD/target/snapshot.json" "$MCPP" run
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          snapshot = json.loads(Path("target/snapshot.json").read_text())
+          assert snapshot == dict(v=1, seq=1, phase="compile", done=1, total=1), snapshot
+          PYCODE
+
       - name: CUDA and SYCL coexist with independent code targets
         working-directory: tests/multi-accel-consumer
         run: |

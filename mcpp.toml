@@ -309,8 +309,8 @@ sources = ["deps/vcpkg.cppm"]
 implies = ["deps"]
 
 [features.plugins-progress]
-sources = ["src/progress_writer.cppm"]
-implies = ["plugins-core"]
+# Standalone workers need no build-program-only mcpp module.
+sources = ["src/progress.cppm", "src/progress_writer.cppm"]
 
 [feature-deps.plugins-progress.mcpplibs]
 os = ">=0.2.3"

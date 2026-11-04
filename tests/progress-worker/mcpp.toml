@@ -1,0 +1,8 @@
+[package]
+name = "progress-worker"
+version = "0.1.0"
+[dependencies.mcpp]
+plugins = { path = "../..", features = ["plugins-progress"] }
+[targets.progress-worker]
+kind = "bin"
+main = "src/main.cpp"
