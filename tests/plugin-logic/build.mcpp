@@ -14,6 +14,11 @@ import mcpp.rules.qt;
 import mcpp.plugins.tool;
 import mcpp.plugins.platform;
 import mcpp.plugins;
+import mcpp.plugins.accel;
+import mcpp.rules.cuda;
+import mcpp.rules.sycl;
+import mcpp.rules.hip;
+import mcpp.rules.spirv;
 
 namespace t  = mcpp::plugins::testing;
 namespace ts = mcpp::plugins::toolset;
@@ -139,6 +144,86 @@ mcpp::plugins::tool::found tool_resolve(mcpp::plugins::tool::choice c = {}) {
 
 int main(int argc, char** argv) {
     return t::run(argc, argv, {
+        { "accel: targets stay on their implementation across internal commas",
+          t::row::linux_gcc(),
+          [] {
+              const auto parsed = mcpp::plugins::accel::parse(
+                  "sycl+{spir64,nvptx64-sm_90,nvptx64-sm_89},cuda12.9+{sm_90,sm_89}");
+              return parsed && parsed->size() == 2 && (*parsed)[0].backend == "cuda"
+                  && (*parsed)[0].archs.size() == 2 && (*parsed)[1].backend == "sycl"
+                  && (*parsed)[1].archs.size() == 3 ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "member ownership survives set commas"); } },
+
+        { "accel: implementation membership is exact rather than a prefix",
+          t::row::linux_gcc(),
+          [] {
+              const char* text = "cudaextra+{x},syclish+{y},hipster+{z},vulkanother1.0";
+              return !mcpp::rules::cuda::parse_target(text).present
+                  && !mcpp::rules::sycl::parse_target(text).sycl
+                  && !mcpp::rules::hip::parse_target(text).hip
+                  && !mcpp::rules::spirv::parse_target(text).present ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "no rule takes another implementation's prefix"); } },
+
+        { "sycl: multiple NVIDIA targets do not select a CUDA implementation",
+          t::row::linux_gcc(),
+          [] {
+              const auto a = mcpp::rules::sycl::parse_target("sycl+{nvptx64-sm_90,nvptx64-sm_89}");
+              return a.error.empty() && a.sycl && !a.portable && !a.legacy_targets
+                  && a.cuda_archs == std::vector<std::string>{"sm_89", "sm_90"}
+                  && !mcpp::rules::cuda::parse_target("sycl+{nvptx64-sm_90,nvptx64-sm_89}").present ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "the NVIDIA target belongs to SYCL"); } },
+
+        { "sycl: generic and NVIDIA forms coexist in one request",
+          t::row::linux_gcc(),
+          [] {
+              const auto a = mcpp::rules::sycl::parse_target("sycl+{spir64,nvptx64-sm_89}");
+              return a.error.empty() && a.portable && a.cuda_archs.size() == 1 ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "both forms are preserved"); } },
+
+        { "sycl: explicit targets are not replaced by a coexisting CUDA request",
+          t::row::linux_gcc(),
+          [] {
+              const auto a = mcpp::rules::sycl::parse_target("cuda12.9+{sm_90},sycl+{nvptx64-sm_89}");
+              return a.error.empty() && !a.legacy_targets
+                  && a.cuda_archs == std::vector<std::string>{"sm_89"} ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "each implementation keeps its targets"); } },
+
+        { "sycl: the old explicit two-member spelling retains its migration boundary",
+          t::row::linux_gcc(),
+          [] {
+              const auto a = mcpp::rules::sycl::parse_target("sycl,cuda12.9+{sm_89,sm_90}");
+              return a.error.empty() && a.legacy_targets && a.cuda_archs.size() == 2
+                  && mcpp::rules::cuda::parse_target("sycl,cuda12.9+{sm_89,sm_90}").present ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "CUDA remains selected in the legacy spelling"); } },
+
+        { "sycl: an unknown target is refused instead of defaulting to SPIR-V",
+          t::row::linux_gcc(),
+          [] { return mcpp::rules::sycl::parse_target("sycl+{unknown-device}").error.empty() ? 1 : 0; },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "unknown target has a diagnostic"); } },
+
+        { "hip: AMD target sets retain all targets",
+          t::row::linux_gcc(),
+          [] {
+              const auto a = mcpp::rules::hip::parse_target("hip6.4+{gfx942,gfx1100}");
+              return a.error.empty() && a.hip && a.amd_archs.size() == 2 ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "HIP does not split the set into members"); } },
+
+        { "accel: malformed and duplicate requests are diagnosed before a rule can no-op",
+          t::row::linux_gcc(),
+          [] {
+              for (auto text : {"sycl+{sm_89", "sycl+{sm_89}junk", "sycl+{a,,b}", "sycl,sycl"})
+                  if (mcpp::plugins::accel::parse(text)) return 1;
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) { c.expect(r.exit_code == 0, "all malformed requests have an error"); } },
+
         // ── deps-vcpkg ──────────────────────────────────────────────────────
         { "vcpkg: a Visual Studio toolset is selected through its instance",
           with_vcpkg(t::row::windows_visual_studio()),

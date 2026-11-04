@@ -18,7 +18,7 @@ modules    = true
 import_std = true
 
 [build-dependencies.mcpp]
-plugins = { path = "../..", features = ["deps-vcpkg", "deps-cmake", "rules-qt", "plugins-platform", "plugins-testing"], host-module = true }
+plugins = { path = "../..", features = ["deps-vcpkg", "deps-cmake", "rules-qt", "plugins-platform", "plugins-testing", "rules-cuda", "rules-sycl", "rules-hip", "rules-spirv"], host-module = true }
 
 [targets.plugin-logic]
 kind = "bin"

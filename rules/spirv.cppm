@@ -59,6 +59,7 @@ export module mcpp.rules.spirv;
 
 import std;
 import mcpp;
+import mcpp.plugins.accel;
 // The lib root, which carries `mcpp::plugins::surface` -- the declarations a
 // consumer names, written once for every member that embeds a payload.
 import mcpp.plugins;
@@ -161,6 +162,7 @@ inline std::string include_dir(const options& opt) {
 struct target {
     std::string version;      // "1.2", from `vulkan1.2`
     bool present = false;
+    std::string error;
 };
 
 inline std::string_view trim(std::string_view s) {
@@ -184,21 +186,14 @@ inline std::vector<std::string_view> split(std::string_view s, char sep) {
     return out;
 }
 
-inline target parse_target(std::string_view accel) {
+inline target parse_target(std::string_view text) {
     target t;
-    for (std::size_t i = 0; i <= accel.size();) {
-        auto comma = accel.find(',', i);
-        auto chunk = trim(comma == std::string_view::npos ? accel.substr(i)
-                                                          : accel.substr(i, comma - i));
-        i = comma == std::string_view::npos ? accel.size() + 1 : comma + 1;
-        if (!chunk.starts_with("vulkan")) continue;
+    const auto parsed = mcpp::plugins::accel::parse(text);
+    if (!parsed) { t.error = parsed.error(); return t; }
+    for (const auto& entry : *parsed) {
+        if (entry.backend != "vulkan") continue;
         t.present = true;
-        auto rest = chunk.substr(std::string_view("vulkan").size());
-        // A bare `vulkan` is legitimate and means "whatever the loader offers";
-        // the target environment then falls back to the default below.
-        auto plus = rest.find('+');
-        t.version = std::string(trim(plus == std::string_view::npos ? rest
-                                                                   : rest.substr(0, plus)));
+        t.version = entry.version;
     }
     return t;
 }
@@ -600,6 +595,8 @@ inline bool write_header(const std::string& header, const std::string& inc,
 
 inline bool compile(std::span<const std::string> shaders, options opt = {}) {
     if (shaders.empty()) return true;
+    const auto requested = parse_target(mcpp::accel());
+    if (!requested.error.empty()) { std::cerr << "mcpp.rules.spirv: " << requested.error << '\n'; return false; }
 
     const auto cc = find_compiler(opt);
     // Asked for: the engine installs the payload and runs this program again.
@@ -921,7 +918,9 @@ inline bool compile(options opt = {}) {
     // `accel` itself, which is what the rule already does. A rule whose
     // backend this build does not name has nothing to do, and that is not a
     // mistake and must not be reported as one.
-    if (!parse_target(mcpp::accel()).present) return true;
+    const auto requested = parse_target(mcpp::accel());
+    if (!requested.error.empty()) { std::cerr << "mcpp.rules.spirv: " << requested.error << '\n'; return false; }
+    if (!requested.present) return true;
     const auto shaders = device_shaders();
     if (shaders.empty()) {
         mcpp::warning("[build] accel names vulkan but no constrained glob matched a "

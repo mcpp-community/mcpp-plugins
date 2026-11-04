@@ -44,6 +44,7 @@ export module mcpp.rules.cuda;
 
 import std;
 import mcpp;
+import mcpp.plugins.accel;
 import mcpp.plugins.tool;
 
 
@@ -127,6 +128,7 @@ struct target {
     std::vector<std::string> archs;      // {"sm_89"}
     std::string ptx;                     // "89" when a portable form is embedded
     bool present = false;
+    std::string error;
 };
 
 // Split on one character. Written out rather than taken from <ranges>: GCC 16
@@ -150,32 +152,16 @@ inline std::string_view trim(std::string_view s) {
     return s;
 }
 
-inline target parse_target(std::string_view accel) {
+inline target parse_target(std::string_view text) {
     target t;
-    for (std::size_t i = 0; i <= accel.size();) {
-        auto comma = accel.find(',', i);
-        auto open = accel.find('{', i), close = accel.find('}', i);
-        if (open != std::string_view::npos && close != std::string_view::npos
-            && comma != std::string_view::npos && comma > open && comma < close)
-            comma = accel.find(',', close);
-        auto chunk = trim(comma == std::string_view::npos ? accel.substr(i)
-                                                          : accel.substr(i, comma - i));
-        i = comma == std::string_view::npos ? accel.size() + 1 : comma + 1;
-        if (!chunk.starts_with("cuda")) continue;
+    const auto parsed = mcpp::plugins::accel::parse(text);
+    if (!parsed) { t.error = parsed.error(); return t; }
+    for (const auto& entry : *parsed) {
+        if (entry.backend != "cuda") continue;
         t.present = true;
-        auto plus = chunk.find('+');
-        t.version = std::string(trim(chunk.substr(4, plus == std::string_view::npos
-                                                       ? chunk.size() - 4 : plus - 4)));
-        if (plus != std::string_view::npos) {
-            auto o = chunk.find('{', plus), c = chunk.find('}', plus);
-            if (o != std::string_view::npos && c != std::string_view::npos)
-                for (auto part : split(chunk.substr(o + 1, c - o - 1), ','))
-                    if (auto a = trim(part); !a.empty()) t.archs.emplace_back(a);
-            auto tail = chunk.substr(c == std::string_view::npos ? chunk.size() : c + 1);
-            for (auto key : {"ptx>=", "floor>="})
-                if (auto p = tail.find(key); p != std::string_view::npos)
-                    t.ptx = std::string(trim(tail.substr(p + std::string_view(key).size())));
-        }
+        t.version = entry.version;
+        t.archs = entry.archs;
+        t.ptx = entry.portable_floor;
     }
     return t;
 }
@@ -586,6 +572,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         return out;
     }
     const auto tg = parse_target(mcpp::accel());
+    if (!tg.error.empty()) { std::cerr << "mcpp.rules.cuda: " << tg.error << '\n'; return {}; }
     if (!tg.present || tg.archs.empty()) {
         // C19: a device build that names no device is refused HERE, not at
         // run time as `no kernel image is available for execution`.
@@ -841,7 +828,9 @@ inline bool compile(options opt = {}) {
     // `accel` itself, which is what the rule already does. A rule whose
     // backend this build does not name has nothing to do, and that is not a
     // mistake and must not be reported as one.
-    if (!parse_target(mcpp::accel()).present) return true;
+    const auto requested = parse_target(mcpp::accel());
+    if (!requested.error.empty()) { std::cerr << "mcpp.rules.cuda: " << requested.error << '\n'; return false; }
+    if (!requested.present) return true;
     const auto sources = device_sources();
     if (sources.empty()) {
         mcpp::warning("[build] accel names cuda but no constrained glob matched a `.cu`; "

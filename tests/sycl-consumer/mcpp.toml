@@ -3,9 +3,8 @@ name         = "sycl-consumer"
 namespace    = "example"
 version      = "0.1.0"
 description  = "A SYCL kernel behind a seam module, reaching an NVIDIA device, with a CPU fallback"
-# BOTH, for the reason the HIP consumer records: the glob below names the
-# NVIDIA target the SYCL unit is compiled for, so `cuda` is a backend this
-# package's sources are written for.
+# The repository keeps a CUDA source group, but this build selects SYCL.
+# The NVIDIA code target belongs to the SYCL request.
 accelerators = ["sycl", "cuda"]
 
 [language]
@@ -55,18 +54,17 @@ libstdcxx = "16.1.0.1"
 # and C libraries the SYCL unit compiles against -- dpcpp's clang is not the
 # clang mcpp resolved and is configured with neither, so left alone its search
 # list reaches /usr/include with no ecosystem glibc on it); and cuda-nvcc,
-# whose libdevice the NVIDIA back end needs -- declared only when the accel
-# actually names cuda, so a SYCL build for another target does not pay for it.
+# whose libdevice the NVIDIA back end needs -- requested only by a SYCL NVIDIA
+# target, so a different SYCL target does not pay for it.
 
 [build]
-# Two chunks: the programming model, and the device. Written `sycl` alone, the
-# unit is compiled to SPIR-V and the runtime picks a device at run time; with
-# the second chunk it is compiled ahead of time for that architecture.
-accel = "sycl, cuda12.9+{sm_89}"
+# One selected implementation, with its own NVIDIA device-code target.
+accel = "sycl+{nvptx64-sm_89}"
 sources = [
   "src/*.cppm",
   "src/*.cpp",
-  { glob = "src/kernels/**/*.sycl", accel = "sycl, cuda12.9+{sm_89}" },
+  { glob = "src/kernels/**/*.sycl", accel = "sycl" },
+  { glob = "src/cuda/**/*.cu", accel = "cuda" },
 ]
 include_dirs = ["include"]
 
