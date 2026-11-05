@@ -1481,15 +1481,7 @@ jobs:
 
       - name: an ordinary worker imports the progress writer without build-program modules
         working-directory: tests/progress-worker
-        run: |
-          "$MCPP" run
-          MCPP_ACTION_PROGRESS_FILE="$PWD/target/snapshot.json" "$MCPP" run
-          python3 - <<'PYCODE'
-          import json
-          from pathlib import Path
-          snapshot = json.loads(Path("target/snapshot.json").read_text())
-          assert snapshot == dict(v=1, seq=1, phase="compile", done=1, total=1), snapshot
-          PYCODE
+        run: python3 verify.py "$MCPP"
 
       - name: CUDA and SYCL coexist with independent code targets
         working-directory: tests/multi-accel-consumer
@@ -2558,6 +2550,10 @@ jobs:
 
       # The test kit on this host: the same stated contexts, so a decision that
       # depends on the host the build program runs on is caught here.
+      - name: standalone progress uses Unicode channels on this host
+        working-directory: tests/progress-worker
+        run: python3 verify.py "$MCPP"
+
       - name: the deps members' decisions hold against stated build contexts (mcpp.plugins.testing)
         run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
 

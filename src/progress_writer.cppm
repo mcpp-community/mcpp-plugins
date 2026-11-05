@@ -3,12 +3,13 @@ export module mcpp.plugins.progress.writer;
 import std;
 export import mcpp.plugins.progress;
 import mcpplibs.os.fs;
+import mcpplibs.os.env;
 export namespace mcpp::plugins::progress {
 class writer {
 public:
     writer() {
-        if (const auto* file = std::getenv("MCPP_ACTION_PROGRESS_FILE"); file && *file)
-            file_ = mcpplibs::os::fs::from_utf8(file);
+        if (auto file = mcpplibs::os::env::get("MCPP_ACTION_PROGRESS_FILE"); file && !file->empty())
+            file_ = mcpplibs::os::fs::from_utf8(*file);
     }
     bool enabled() const { return !file_.empty(); }
     // At most five atomic latest-state replacements per second. Reporting
