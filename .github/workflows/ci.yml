@@ -1778,6 +1778,19 @@ jobs:
       - name: deps-cmake compiles a cross build's subproject from the engine's contract
         run: bash .github/scripts/check-deps-and-qt.sh cmake-cross
 
+      - name: CMake contract argv survives both generators and compiler dialects
+        run: |
+          helper=$(find tests/cmake-cross/target -name answer-contract.cmake | head -1)
+          test -n "$helper"
+          llvm="${MCPP_HOME:-$HOME/.mcpp}/registry/data/xpkgs/xim-x-llvm/22.1.8/bin"
+          test -x "$llvm/clang-cl"
+          python3 .github/scripts/check-cmake-contract-argv.py "$helper" \
+            --cc /usr/bin/cc --cxx /usr/bin/c++ --msvc-preprocessor "$llvm/clang-cl" \
+            --target-clang "$llvm/clang"
+          python3 .github/scripts/check-cmake-contract-argv.py "$helper" \
+            --cc "$llvm/clang" --cxx "$llvm/clang++"
+          python3 .github/scripts/check-cmake-cache-identity.py "$MCPP"
+
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 

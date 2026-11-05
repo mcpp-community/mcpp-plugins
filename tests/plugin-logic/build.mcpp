@@ -439,6 +439,45 @@ int main(int argc, char** argv) {
           } },
 
         // ── deps-cmake ──────────────────────────────────────────────────────
+        { "cmake: immutable generator selections have distinct cache identities",
+          t::row::linux_gcc(),
+          [] {
+              using mcpp::deps::cmake::generator_key;
+              const auto key = [](std::initializer_list<std::string> args) {
+                  return generator_key(std::span<const std::string>(args.begin(), args.size()));
+              };
+              std::printf("generator-diff=%d\n", key({"-G", "Ninja"}) != key({"-G", "Unix Makefiles"}));
+              std::printf("joined-same=%d\n", key({"-GNinja", "-Ax64"}) == key({"-G", "Ninja", "-A", "x64"}));
+              std::printf("typed-same=%d\n", key({"-DCMAKE_GENERATOR:STRING=Ninja"}) == key({"-D", "CMAKE_GENERATOR=Ninja"}));
+              std::printf("instance-diff=%d\n", key({"-DCMAKE_GENERATOR_INSTANCE=one"}) != key({"-DCMAKE_GENERATOR_INSTANCE=two"}));
+              std::printf("ordinary-same=%d\n", key({"-DBUILD_TESTING=ON"}) == key({"-DBUILD_TESTING=OFF"}));
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              for (const auto* name : {"generator-diff=", "joined-same=", "typed-same=", "instance-diff=", "ordinary-same="})
+                  c.expect(r.has_line(name, {"1"}), name);
+          } },
+
+        { "cmake: another target uses a contract toolchain without flattening argv",
+          with_subproject(t::row::linux_gcc().set("MCPP_TARGET", "aarch64-linux-gnu")
+                                             .set("MCPP_TARGET_ARCH", "aarch64")),
+          [] { return cmake_use(); },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const auto script = r.file("out/deps-cmake/greet/greet.cmake");
+              const auto toolchain = r.file("out/deps-cmake/greet/greet-contract.cmake");
+              c.expect(script.find("-DCMAKE_TOOLCHAIN_FILE=") != std::string::npos,
+                       "CMake and its probes load the same contract toolchain");
+              c.expect(script.find("-DCMAKE_C_FLAGS=") == std::string::npos,
+                       "contract arguments are not flattened into a native flags string");
+              c.expect(toolchain.find("add_compile_options") != std::string::npos
+                       && toolchain.find("add_link_options") != std::string::npos,
+                       "native CMake options carry response-file references");
+              c.expect(r.line("mcpp:action=", {"deps-cmake:greet"}).find("greet-contract.cmake")
+                           != std::string::npos,
+                       "the generated toolchain is an action input");
+          } },
+
         { "cmake: a Visual Studio toolset is named, with Ninja, by default",
           with_subproject(t::row::windows_visual_studio("14.43.34808", "14.44.35207")),
           [] { return cmake_use(); },

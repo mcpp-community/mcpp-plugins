@@ -138,42 +138,122 @@ inline std::string cmake_system_name(std::string_view os) {
     return "Generic";
 }
 
-// The CMake code that reads the engine's contract for this configuration
-// (`${mcpp.contract}`, mcpp 2026.10.30.1+) into variables when the action
-// runs: `_mcpp_<c|cxx|asm>` and `_mcpp_ld` the programs, `_mcpp_<...>_flags`
-// their words joined (a word with a space quoted, as CMake splits a flags
-// string), `_mcpp_ar` the archiver. Read then and not when this
-// program plans: the engine writes the file after build programs have run.
+// The target toolchain, evaluated by CMake and its try_compile projects when
+// the action runs. Compiler response files retain the contract's argv words;
+// CMake's native option handling escapes each response-file reference for the
+// selected generator. A content-derived file name also invalidates commands
+// when the arguments change, without rewriting unchanged response files.
 inline std::string contract_reader() {
-    return R"(if(NOT EXISTS "${MCPP_CONTRACT}")
-  message(FATAL_ERROR "mcpp.deps.cmake: a build for another target reads the engine's contract, "
-    "and '${MCPP_CONTRACT}' does not exist; it is written by mcpp 2026.10.30.1 and later")
+    return R"cmake(include_guard(GLOBAL)
+if(CMAKE_VERSION VERSION_LESS 3.19)
+ message(FATAL_ERROR "mcpp.deps.cmake: target contracts require CMake 3.19 or later")
 endif()
+if(NOT EXISTS "${MCPP_CONTRACT}")
+ message(FATAL_ERROR "mcpp.deps.cmake: missing target build contract '${MCPP_CONTRACT}'; mcpp 2026.10.30.1 and later write it when the action runs")
+endif()
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES MCPP_CONTRACT)
 file(READ "${MCPP_CONTRACT}" _mcpp_contract)
-function(_mcpp_words out)
-  string(JSON _n LENGTH "${_mcpp_contract}" ${ARGN})
-  set(_w "")
-  if(_n GREATER 0)
-    math(EXPR _last "${_n} - 1")
-    foreach(_i RANGE ${_last})
-      string(JSON _a GET "${_mcpp_contract}" ${ARGN} ${_i})
-      if(_a MATCHES " ")
-        set(_a "\"${_a}\"")
+string(JSON _mcpp_dialect GET "${_mcpp_contract}" dialect)
+if(NOT _mcpp_dialect MATCHES "^(gnu|msvc)$")
+ message(FATAL_ERROR "mcpp.deps.cmake: unsupported command dialect '${_mcpp_dialect}'")
+endif()
+function(_mcpp_rsp out)
+ string(JSON _args GET "${_mcpp_contract}" ${ARGN})
+ string(JSON _n LENGTH "${_args}")
+ set(_content "")
+ if(_n GREATER 0)
+  math(EXPR _last "${_n} - 1")
+  foreach(_i RANGE ${_last})
+   string(JSON _word GET "${_args}" ${_i})
+   if(_mcpp_dialect STREQUAL "gnu" AND _word STREQUAL "")
+    message(FATAL_ERROR "mcpp.deps.cmake: an empty GNU argument cannot be represented portably in a compiler response file")
+   endif()
+   if(_mcpp_dialect STREQUAL "msvc")
+    set(_encoded "\"")
+    set(_slashes "")
+    string(LENGTH "${_word}" _length)
+    if(_length GREATER 0)
+     math(EXPR _end "${_length} - 1")
+     foreach(_j RANGE ${_end})
+      string(SUBSTRING "${_word}" ${_j} 1 _char)
+      if(_char STREQUAL [[\]])
+       string(APPEND _slashes [[\]])
+      else()
+       if(_char STREQUAL [["]])
+        string(APPEND _encoded "${_slashes}${_slashes}" [[\"]])
+       else()
+        string(APPEND _encoded "${_slashes}${_char}")
+       endif()
+       set(_slashes "")
       endif()
-      string(APPEND _w " ${_a}")
-    endforeach()
-  endif()
-  string(STRIP "${_w}" _w)
-  set(${out} "${_w}" PARENT_SCOPE)
+     endforeach()
+    endif()
+    string(APPEND _encoded "${_slashes}${_slashes}\"")
+   else()
+    string(REPLACE [[\]] [[\\]] _encoded "${_word}")
+    string(REPLACE [["]] [[\"]] _encoded "${_encoded}")
+    set(_encoded "\"${_encoded}\"")
+   endif()
+   string(APPEND _content "${_encoded}\n")
+  endforeach()
+ endif()
+ if(_mcpp_dialect STREQUAL "msvc")
+  string(ASCII 239 187 191 _bom)
+  string(PREPEND _content "${_bom}")
+ endif()
+ string(SHA256 _digest "${_mcpp_dialect}:${_content}")
+ set(_file "${CMAKE_CURRENT_LIST_DIR}/mcpp-contract-${_digest}.rsp")
+ set(_old "")
+ if(EXISTS "${_file}")
+  file(READ "${_file}" _old)
+ endif()
+ if(NOT EXISTS "${_file}" OR NOT _old STREQUAL _content)
+  file(WRITE "${_file}" "${_content}")
+ endif()
+ # SHELL uses CMake's UNIX parser on every host; the generator then owns
+ # escaping this one argument for its actual native command representation.
+ string(REPLACE "'" "'\\''" _quoted "${_file}")
+ set(${out} "SHELL:@'${_quoted}'" PARENT_SCOPE)
+endfunction()
+function(_mcpp_compiler_target out)
+ string(JSON _args GET "${_mcpp_contract}" ${ARGN})
+ string(JSON _n LENGTH "${_args}")
+ set(_target "")
+ set(_next FALSE)
+ if(_n GREATER 0)
+  math(EXPR _last "${_n} - 1")
+  foreach(_i RANGE ${_last})
+   string(JSON _word GET "${_args}" ${_i})
+   if(_next)
+    set(_target "${_word}")
+    set(_next FALSE)
+   elseif(_word STREQUAL "--")
+    break()
+   elseif(_word STREQUAL "--target" OR _word STREQUAL "-target")
+    set(_next TRUE)
+   elseif(_word MATCHES "^--?target=(.*)$")
+    set(_target "${CMAKE_MATCH_1}")
+   endif()
+  endforeach()
+ endif()
+ set(${out} "${_target}" PARENT_SCOPE)
 endfunction()
 foreach(_lang c cxx asm)
-  string(JSON _mcpp_${_lang} GET "${_mcpp_contract}" compile ${_lang} program)
-  _mcpp_words(_mcpp_${_lang}_flags compile ${_lang} args)
+ string(TOUPPER "${_lang}" _upper)
+ string(JSON CMAKE_${_upper}_COMPILER GET "${_mcpp_contract}" compile ${_lang} program)
+ # Compiler-ID probing does not consume directory compile options. Use the
+ # actual compiler argument, not the contract's logical platform alias.
+ _mcpp_compiler_target(_target compile ${_lang} args)
+ if(NOT _target STREQUAL "")
+  set(CMAKE_${_upper}_COMPILER_TARGET "${_target}")
+ endif()
+ _mcpp_rsp(_option compile ${_lang} args)
+ add_compile_options("$<$<COMPILE_LANGUAGE:${_upper}>:${_option}>")
 endforeach()
-string(JSON _mcpp_ld GET "${_mcpp_contract}" link program)
-string(JSON _mcpp_ar GET "${_mcpp_contract}" link archiver)
-_mcpp_words(_mcpp_ld_flags link args)
-)";
+string(JSON CMAKE_AR GET "${_mcpp_contract}" link archiver)
+_mcpp_rsp(_option link args)
+add_link_options("${_option}")
+)cmake";
 }
 
 // The variable a `-D<name>[:<type>]=<value>` argument defines; empty for any
@@ -213,6 +293,35 @@ inline bool chooses_generator(std::span<const std::string> args) {
     for (std::size_t i = 0; i < args.size(); ++i)
         if (args[i].starts_with("-G")) return true;
     return defines(args, "CMAKE_GENERATOR");
+}
+
+// Generator, architecture, toolset and instance cannot share a CMake cache
+// with another selection. Ordinary -D options can change by reconfiguration.
+inline std::string generator_key(std::span<const std::string> args) {
+    std::string key;
+    auto add = [&](std::string_view word) {
+        key += std::to_string(word.size()) + ":" + std::string(word);
+    };
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string_view arg = args[i];
+        if (arg.starts_with("-G") || arg.starts_with("-A") || arg.starts_with("-T")) {
+            add(arg.substr(0, 2));
+            auto value = arg.substr(2);
+            if (arg.size() == 2 && i + 1 < args.size()) value = args[++i];
+            add(value);
+            continue;
+        }
+        std::string_view definition;
+        if (arg == "-D" && i + 1 < args.size()) definition = args[i + 1];
+        else if (arg.starts_with("-D")) definition = arg.substr(2);
+        const auto name = definition.substr(0, definition.find_first_of(":="));
+        if (name != "CMAKE_GENERATOR" && !name.starts_with("CMAKE_GENERATOR_")) continue;
+        add(name);
+        const auto equals = definition.find('=');
+        add(equals == std::string_view::npos ? std::string_view{} : definition.substr(equals + 1));
+        if (arg == "-D") ++i;
+    }
+    return key;
 }
 
 // The prefix, by name (SPEC-007 R1.3).
@@ -492,15 +601,22 @@ inline prefix use(const options& opt) {
     const bool named    = !contract && !chosen && tools->how == ts::mechanism::chain && !tools->cxx.empty();
     const bool useNinja = (named || contract) && !generatorChosen && !ninja.empty();
     const bool instance = !contract && !chosen && !generatorChosen && tools->how == ts::mechanism::instance;
+    const std::string systemName = opt.system_name.empty()
+        ? cmake_system_name(mcpp::target_os()) : opt.system_name;
 
     // One build directory per toolset statement: CMake refuses a cache made
     // with another generator or instance. What 0.16.0 configured stays in
     // `build/`.
     std::string key;
-    if (contract) key = "contract;" + targetTriple;
+    // A CMake cache configured without a toolchain does not begin loading a
+    // newly supplied toolchain on reconfigure. Give this representation its
+    // own build directory instead of retaining legacy flattened CMAKE_*_FLAGS.
+    if (contract) key = "contract-rsp1;" + targetTriple + ";system;" + systemName;
     else if (useNinja) key = "ninja;" + tools->identity + ";" + tools->cxx;
     else if (named) key = "named;" + tools->identity + ";" + tools->cxx;
     else if (instance) key = "instance;" + tools->instance_dir + ";" + tools->toolset_version;
+    if (const auto generator = generator_key(opt.cache_args); !generator.empty())
+        key += ";generator;" + generator;
     const std::string name = opt.name.empty() ? source.filename().string() : opt.name;
     const fs::path base   = fs::path(mcpp::out_dir()) / "deps-cmake" / name;
     const fs::path build  = base / (key.empty() ? std::string("build") : "build-" + mcpp::deps::short_name(key));
@@ -533,6 +649,7 @@ inline prefix use(const options& opt) {
         const std::string id     = "deps-cmake:" + name;
         const std::string desc   = "CMAKE " + name;
         const fs::path    script = base / (name + ".cmake");
+        const fs::path contractScript = base / (name + "-contract.cmake");
         using mcpp::deps::bracket;
         // Each configure argument, and the same argument as the cache key
         // states it: with no path of this machine. The subproject's three
@@ -590,25 +707,21 @@ inline prefix use(const options& opt) {
         }
         for (auto const& x : opt.cache_args) same(x);
         if (contract) {
-            same("-DCMAKE_SYSTEM_NAME=" + (opt.system_name.empty() ? cmake_system_name(mcpp::target_os())
-                                                                   : opt.system_name));
-            // A try-compile links nothing: the target's startup files and C
-            // library reach a program only through the engine's link.
+            same("-DCMAKE_SYSTEM_NAME=" + systemName);
+            // Compiler probes need no executable startup files or link
+            // runtime; subproject targets retain their actual target kind.
             same("-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY");
+            arg("-DCMAKE_TOOLCHAIN_FILE=" + mcpp::deps::generic(contractScript),
+                "-DCMAKE_TOOLCHAIN_FILE=<contract>");
+            mcpp::plugins::fs::write_if_changed(contractScript, contract_reader());
             keyed.push_back("contract " + targetTriple);
         }
 
-        std::string steps = contract ? contract_reader() : std::string();
+        std::string steps;
         if (opt.progress) steps += "mcpp_progress(configure)\n";
         steps += "execute_process(COMMAND ${CMAKE_COMMAND}";
         for (auto const& x : configure) steps += "\n    " + bracket(x);
-        if (contract)
-            steps += "\n    \"-DCMAKE_C_COMPILER=${_mcpp_c}\" \"-DCMAKE_CXX_COMPILER=${_mcpp_cxx}\""
-                     "\n    \"-DCMAKE_ASM_COMPILER=${_mcpp_asm}\" \"-DCMAKE_AR=${_mcpp_ar}\""
-                     "\n    \"-DCMAKE_C_FLAGS=${_mcpp_c_flags}\" \"-DCMAKE_CXX_FLAGS=${_mcpp_cxx_flags}\""
-                     "\n    \"-DCMAKE_ASM_FLAGS=${_mcpp_asm_flags}\""
-                     "\n    \"-DCMAKE_EXE_LINKER_FLAGS=${_mcpp_ld_flags}\""
-                     "\n    \"-DCMAKE_SHARED_LINKER_FLAGS=${_mcpp_ld_flags}\"";
+        if (contract) steps += "\n    \"-DMCPP_CONTRACT:FILEPATH=${MCPP_CONTRACT}\"";
         steps += "\n    RESULT_VARIABLE rc)\n"
                  "if(NOT rc EQUAL 0)\n  message(FATAL_ERROR \"configure exited ${rc}\")\nendif()\n"
                  + (opt.progress ? std::string("mcpp_progress(build-install)\n") : std::string{}) +
@@ -671,6 +784,7 @@ inline prefix use(const options& opt) {
         }
         a.input(cmake.c_str());
         a.input(scriptS.c_str());
+        if (contract) a.input(mcpp::deps::generic(contractScript).c_str());
         for (auto const& f : files) a.input(f.c_str());
         mcpp::deps::watch_tree(source);
         a.output(stamp.c_str());

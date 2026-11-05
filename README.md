@@ -59,6 +59,9 @@ tree; 0.19.0 needed 2026.10.1.3, whose
 protocol 15 states where each tool and payload comes from); the column states
 the release each member's behaviour first needed.
 
+Cross CMake subprojects that link executables or shared libraries require
+mcpp 2026.11.5.2 or later; cross configuration requires CMake 3.19 or later.
+
 | feature | module | mcpp floor | what it does | doc |
 |---|---|---|---|---|
 | `rules-ascendc` | `mcpp.rules.ascendc` | 2026.10.1.3 | Compiles Ascend C (`*.asc`) with BiSheng in mixed mode, so the object joins the ordinary link. | [rules](docs/rules.md#rules-ascendc) |
