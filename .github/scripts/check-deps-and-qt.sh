@@ -228,7 +228,18 @@ cmake_cross() {
     "$MCPP" run --target x86_64-linux-musl | tee target/ci/run.log
     grep -q '^cmake-cross: the subproject was compiled against not glibc$' target/ci/run.log ||
         fail "the subproject was compiled with the machine's C library"
-    echo "ok: a subproject of a cross build is compiled from the engine's contract"
+    sidecar=$(find target -path '*deps-cmake/answer/install/bin/answer-sidecar' -type f | head -1)
+    [ -n "$sidecar" ] || fail "the CMake subproject did not install its own executable"
+    "$sidecar" | tee target/ci/sidecar-run.log
+    grep -q '^cmake-sidecar: the subproject was compiled against not glibc$' target/ci/sidecar-run.log ||
+        fail "the independent CMake executable did not use the target runtime"
+    # The contract excludes consumer libraries, but the consumer still links
+    # the installation. Inspect its own rule, not a reference elsewhere.
+    graph=$(find target -path '*/build.ninja' ! -path '*/.build-mcpp/*' | head -1)
+    [ -n "$graph" ] || fail "the consumer Ninja graph is missing"
+    grep -q '^ldflags[[:space:]]*=.*libanswer\.a' "$graph" ||
+        fail "the consuming program lost the subproject archive from its link flags"
+    echo "ok: the target CMake library, independent executable and consumer link all work"
 }
 
 # AN INSTALLATION IS BUILT ONCE (0.18.0). deps-cmake keeps what a subproject

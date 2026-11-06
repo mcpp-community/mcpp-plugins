@@ -7,3 +7,9 @@ target_include_directories(answer PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURC
 
 install(TARGETS answer ARCHIVE DESTINATION lib)
 install(FILES include/answer.h DESTINATION include)
+
+# This executable belongs to the subproject. Its link must use this build's
+# archive, without depending on the consumer's future installation prefix.
+add_executable(answer-sidecar sidecar.c)
+target_link_libraries(answer-sidecar PRIVATE answer)
+install(TARGETS answer-sidecar RUNTIME DESTINATION bin)
