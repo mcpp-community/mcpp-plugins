@@ -270,7 +270,7 @@ inline std::string cxx_gcc_root() {
 // `dpcpp --version` states the release and the intel/llvm revision it was
 // built from. Stated as a fact so a build log answers "which SYCL compiler"
 // without anyone reproducing the build.
-inline std::string compiler_version(const std::string& exe) {
+std::string compiler_version(const std::string& exe) {
     const std::string text = mcpp::plugins::tool::capture({exe, "--version"}).out;
     for (auto line : split(text, '\n')) {
         auto at = line.find("DPC++ compiler ");

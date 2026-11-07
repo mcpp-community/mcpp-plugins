@@ -167,14 +167,14 @@ inline std::vector<std::string> device_swift_sources() {
 
 // ─── The toolchain ─────────────────────────────────────────────────────────
 
-inline std::string sdk_path(const std::string& sdk) {
+std::string sdk_path(const std::string& sdk) {
     if constexpr (mcpplibs::os::is_windows) return {};
     const std::string path = mcpp::plugins::tool::first_line({"/usr/bin/xcrun", "--sdk", sdk, "--show-sdk-path"});
     std::error_code ec;
     return !path.empty() && std::filesystem::is_directory(path, ec) ? path : std::string();
 }
 
-inline std::string find_swiftc(const std::string& sdk) {
+std::string find_swiftc(const std::string& sdk) {
     if constexpr (mcpplibs::os::is_windows) return {};
     const std::string path = mcpp::plugins::tool::first_line({"/usr/bin/xcrun", "--sdk", sdk, "--find", "swiftc"});
     std::error_code ec;

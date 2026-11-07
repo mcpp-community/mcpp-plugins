@@ -788,7 +788,7 @@ inline std::string sha256_file(const std::string& path) {
 // `mcpp::plugins::tool::capture`: no shell between, so no argument is quoted.
 // Only the explicit Maven modes and AAR extraction call it; an ordinary build
 // of an unchanged project runs nothing here.
-inline int run_capture(const std::vector<std::string>& argv, std::string& output,
+int run_capture(const std::vector<std::string>& argv, std::string& output,
                        const std::filesystem::path& cwd = {}) {
     auto r = mcpp::plugins::tool::capture(argv, /*with_errors=*/true, cwd);
     output = std::move(r.out);

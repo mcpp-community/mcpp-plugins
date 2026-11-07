@@ -318,7 +318,7 @@ inline std::optional<toolkit> find_toolkit(const options& opt, bool& pending) {
 // The driver's version through the driver's own library, reached through the
 // sentinel package rather than /usr/lib. "" when there is no driver here,
 // which is a fact about the machine and not a failure of the build.
-inline std::string driver_version(const toolkit& t) {
+std::string driver_version(const toolkit& t) {
     if constexpr (kWindows) return {};
     if (t.driver_dir.empty()) return {};
     const auto lib = t.driver_dir + "/lib/libcuda.so.1";
@@ -443,7 +443,7 @@ inline bool libc_declares_c23_pi_math(std::string_view sysroot) {
 
 // `<compiler> -dumpversion` → major. The host compiler is the toolchain mcpp
 // resolved for this build, so its version is a fact of the build, not a guess.
-inline int compiler_major(const std::string& cc) {
+int compiler_major(const std::string& cc) {
     if constexpr (kWindows) return 0;
     return major_of(mcpp::plugins::tool::first_line({cc, "-dumpversion"}));
 }
@@ -452,7 +452,7 @@ inline int compiler_major(const std::string& cc) {
 // nvcc invokes cicc, cudafe++, ptxas and fatbinary by bare name on a PATH it
 // states in the plan; a stage that does not resolve there fails the compile
 // with `sh: 1: cicc: not found`, naming nothing that helps.
-inline std::optional<std::string> unreachable_stage(const toolkit& t, const std::string& ccbin) {
+std::optional<std::string> unreachable_stage(const toolkit& t, const std::string& ccbin) {
     if constexpr (kWindows) return std::nullopt;
     const auto probe = std::filesystem::temp_directory_path() / "mcpp-rules-cuda-dryrun.cu";
     { std::ofstream(probe) << "__global__ void k() {}\n"; }

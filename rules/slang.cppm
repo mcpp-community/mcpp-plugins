@@ -232,7 +232,7 @@ inline mcpp::plugins::tool::found find_compiler(const options& opt) {
 }
 
 // `slangc -v` prints the release on its own, e.g. `2026.14.1`.
-inline std::string compiler_version(const std::string& exe) {
+std::string compiler_version(const std::string& exe) {
     auto text = mcpp::plugins::tool::capture({exe, "-v"}, /*with_errors=*/true).out;
     for (auto& c : text) if (c == '\r') c = '\n';
     auto nl = text.find('\n');

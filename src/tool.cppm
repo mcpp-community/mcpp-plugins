@@ -353,12 +353,19 @@ inline std::string describe_missing(const spec& s, const found& f) {
 // error is dropped, or appended to the output when `with_errors`. A program that
 // does not end within a minute is ended; `status` is then the shell's code for
 // it, and -1 when the program could not be started at all.
+//
+// NOT INLINE: the two are compiled once, in this unit, and an importer sees
+// only their declarations. GCC 16 fails an importer that instantiates
+// mcpplibs.os's types from another module's inline body: it cannot read the
+// module back ("failed to read compiled module cluster: Bad file data") or
+// leaves `std::optional<std::vector<grant>>` unresolved at the link
+// (`tests/metal-consumer`; docs/plugin-development.md §4).
 struct printed {
     int         status = -1;
     std::string out;
 };
 
-inline printed capture(const std::vector<std::string>& argv, bool with_errors = false,
+printed capture(const std::vector<std::string>& argv, bool with_errors = false,
                        const std::filesystem::path& cwd = {}) {
     namespace process = mcpplibs::os::process;
     if (argv.empty()) return {};
@@ -377,7 +384,7 @@ inline printed capture(const std::vector<std::string>& argv, bool with_errors = 
 
 // The first line a program prints, without its line end; empty when it prints
 // nothing or cannot be started.
-inline std::string first_line(const std::vector<std::string>& argv) {
+std::string first_line(const std::vector<std::string>& argv) {
     auto text = capture(argv).out;
     if (auto nl = text.find('\n'); nl != std::string::npos) text.resize(nl);
     while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) text.pop_back();

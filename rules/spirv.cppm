@@ -368,12 +368,12 @@ inline compiler find_compiler(const options& opt) {
 // says so once — refusing would make an optional pass a requirement, and
 // passing it silently would let the manifest claim an optimisation that did
 // not happen.
-inline bool has_optimizer(const std::string& exe) {
+bool has_optimizer(const std::string& exe) {
     const auto out = mcpp::plugins::tool::capture({exe, "-Os", "--version"}, /*with_errors=*/true).out;
     return out.find("optimizer not linked") == std::string::npos;
 }
 
-inline std::string compiler_version(const compiler& cc) {
+std::string compiler_version(const compiler& cc) {
     const std::string text = mcpp::plugins::tool::capture({cc.path, "--version"}).out;
     // glslc: `shaderc v2026.3 2fbab05...` on the first line. glslang:
     // `Glslang Version: 11:15.1.0`, whose first field is the SPIR-V generator
