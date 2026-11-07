@@ -222,6 +222,16 @@ jobs:
           fi
           echo "ok: one version, two files agreeing"
 
+      # NO HEADER AND NO PREPROCESSOR BRANCH (0.21.0, docs/plugin-development.md
+      # §4): the operating system is mcpplibs.os's, the C library std's, and a
+      # platform difference of the building machine is `if constexpr`.
+      - name: no unit includes a header or branches in the preprocessor
+        run: |
+          found=$(grep -nE '^[[:space:]]*#[[:space:]]*(include|if|ifdef|ifndef|elif)\b' \
+                    src/*.cppm src/*/*.cppm rules/*.cppm dist/*.cppm deps/*.cppm deps/*/*.cppm tools/*.cppm 2>/dev/null || true)
+          [ -z "$found" ] || { echo "FAIL: a unit includes a header or branches in the preprocessor"; echo "$found"; exit 1; }
+          echo "ok: every unit reaches the system through modules"
+
       # ONE DERIVATION, AND THE CHECK THAT KEEPS IT ONE.
       #
       # `common_base_dir` and `namespace_of` were written in `rules/spirv.cppm`

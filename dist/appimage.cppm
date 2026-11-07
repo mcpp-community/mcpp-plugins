@@ -36,9 +36,6 @@
 // the edge depends only on the program binary, and a metadata-only change would
 // leave the previous AppImage in place, reported as up to date.
 
-module;
-#include <cstdio>
-
 export module mcpp.dist.appimage;
 
 import std;

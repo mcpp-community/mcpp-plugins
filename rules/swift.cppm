@@ -60,16 +60,13 @@
 //   - Swift Package Manager dependencies. A SwiftPM package is not a package in
 //     the mcpp graph.
 
-module;
-// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
-// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
-#include <cstdio>
-
 export module mcpp.rules.swift;
 
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
+import mcpplibs.os;
 
 // Nothing here uses `std::println`, for the reason `rules/metal.cppm` gives.
 
@@ -170,49 +167,18 @@ inline std::vector<std::string> device_swift_sources() {
 
 // ─── The toolchain ─────────────────────────────────────────────────────────
 
-// The first line a command prints, or empty. `popen` is POSIX; this module is
-// compiled on every host (`tests/all-rules-compile`), so Windows is spelled.
-inline std::string first_line_of(const std::string& cmd) {
-#if defined(_WIN32)
-    FILE* p = ::_popen(cmd.c_str(), "r");
-#else
-    FILE* p = ::popen(cmd.c_str(), "r");
-#endif
-    if (!p) return {};
-    char buf[1024];
-    std::string line;
-    if (std::fgets(buf, sizeof buf, p)) line = buf;
-#if defined(_WIN32)
-    ::_pclose(p);
-#else
-    ::pclose(p);
-#endif
-    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
-    return line;
-}
-
 inline std::string sdk_path(const std::string& sdk) {
-#if defined(_WIN32)
-    (void)sdk;
-    return {};
-#else
-    const std::string path = first_line_of(
-        "/usr/bin/xcrun --sdk " + sdk + " --show-sdk-path 2>/dev/null");
+    if constexpr (mcpplibs::os::is_windows) return {};
+    const std::string path = mcpp::plugins::tool::first_line({"/usr/bin/xcrun", "--sdk", sdk, "--show-sdk-path"});
     std::error_code ec;
     return !path.empty() && std::filesystem::is_directory(path, ec) ? path : std::string();
-#endif
 }
 
 inline std::string find_swiftc(const std::string& sdk) {
-#if defined(_WIN32)
-    (void)sdk;
-    return {};
-#else
-    const std::string path = first_line_of(
-        "/usr/bin/xcrun --sdk " + sdk + " --find swiftc 2>/dev/null");
+    if constexpr (mcpplibs::os::is_windows) return {};
+    const std::string path = mcpp::plugins::tool::first_line({"/usr/bin/xcrun", "--sdk", sdk, "--find", "swiftc"});
     std::error_code ec;
     return !path.empty() && std::filesystem::is_regular_file(path, ec) ? path : std::string();
-#endif
 }
 
 // ─── The rule ──────────────────────────────────────────────────────────────

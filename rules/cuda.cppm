@@ -33,20 +33,13 @@
 //   - whether the embedded PTX can be JIT-compiled by this driver, as an
 //     advisory, because the SASS for the named architectures still runs.
 
-module;
-// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
-// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
-#include <cstdio>
-#if !defined(_WIN32)
-#include <dlfcn.h>
-#endif
-
 export module mcpp.rules.cuda;
 
 import std;
 import mcpp;
 import mcpp.plugins.accel;
 import mcpp.plugins.tool;
+import mcpplibs.os;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -78,13 +71,8 @@ export namespace mcpp::rules::cuda {
 // from those two facts, so both are stated once here rather than at each site
 // -- a `std::filesystem::exists` against the wrong spelling does not fail, it
 // answers false, and this rule reads several such answers as decisions.
-#if defined(_WIN32)
-inline constexpr bool kWindows = true;
-inline constexpr const char* kExe = ".exe";
-#else
-inline constexpr bool kWindows = false;
-inline constexpr const char* kExe = "";
-#endif
+inline constexpr bool kWindows = mcpplibs::os::is_windows;
+inline constexpr const char* kExe = kWindows ? ".exe" : "";
 
 enum class route { automatic, clang, nvcc };
 
@@ -331,29 +319,21 @@ inline std::optional<toolkit> find_toolkit(const options& opt, bool& pending) {
 // sentinel package rather than /usr/lib. "" when there is no driver here,
 // which is a fact about the machine and not a failure of the build.
 inline std::string driver_version(const toolkit& t) {
-#if defined(_WIN32)
-    return {};
-#else
+    if constexpr (kWindows) return {};
     if (t.driver_dir.empty()) return {};
     const auto lib = t.driver_dir + "/lib/libcuda.so.1";
     if (!std::filesystem::exists(lib)) return {};
     // What would change the answer is the library the answer was read from.
     mcpp::rerun_if_changed(lib.c_str());
-    void* h = ::dlopen(lib.c_str(), RTLD_LAZY | RTLD_LOCAL);
+    auto h = mcpplibs::os::library::open(lib);
     if (!h) {
-        const char* why = ::dlerror();
-        mcpp::warning(std::format("could not open the driver library {}: {}", lib,
-                                  why ? why : "(no reason given)").c_str());
+        mcpp::warning(std::format("could not open the driver library {}: {}", lib, h.error().message()).c_str());
         return {};
     }
-    using fn = int (*)(int*);
-    auto get = reinterpret_cast<fn>(::dlsym(h, "cuDriverGetVersion"));
+    auto get = h->function<int(int*)>("cuDriverGetVersion");
     int v = 0;
-    std::string out;
-    if (get && get(&v) == 0 && v > 0) out = std::format("{}.{}", v / 1000, (v % 1000) / 10);
-    ::dlclose(h);
-    return out;
-#endif
+    if (get && get(&v) == 0 && v > 0) return std::format("{}.{}", v / 1000, (v % 1000) / 10);
+    return {};
 }
 
 inline int major_of(std::string_view v) {
@@ -464,19 +444,8 @@ inline bool libc_declares_c23_pi_math(std::string_view sysroot) {
 // `<compiler> -dumpversion` → major. The host compiler is the toolchain mcpp
 // resolved for this build, so its version is a fact of the build, not a guess.
 inline int compiler_major(const std::string& cc) {
-#if defined(_WIN32)
-    (void)cc; return 0;
-#else
-    std::string cmd = cc + " -dumpversion 2>/dev/null";
-    if (FILE* p = ::popen(cmd.c_str(), "r")) {
-        char buf[64] = {};
-        std::string s;
-        if (std::fgets(buf, sizeof buf, p)) s = buf;
-        ::pclose(p);
-        return major_of(s);
-    }
-    return 0;
-#endif
+    if constexpr (kWindows) return 0;
+    return major_of(mcpp::plugins::tool::first_line({cc, "-dumpversion"}));
 }
 
 // The first back-end stage nvcc names but cannot resolve, from its own plan.
@@ -484,19 +453,12 @@ inline int compiler_major(const std::string& cc) {
 // states in the plan; a stage that does not resolve there fails the compile
 // with `sh: 1: cicc: not found`, naming nothing that helps.
 inline std::optional<std::string> unreachable_stage(const toolkit& t, const std::string& ccbin) {
-#if defined(_WIN32)
-    (void)t; (void)ccbin; return std::nullopt;
-#else
+    if constexpr (kWindows) return std::nullopt;
     const auto probe = std::filesystem::temp_directory_path() / "mcpp-rules-cuda-dryrun.cu";
     { std::ofstream(probe) << "__global__ void k() {}\n"; }
-    std::string cmd = std::format("{} --dryrun -ccbin {} -c {} -o /dev/null 2>&1",
-                                  t.nvcc(), ccbin, probe.string());
-    std::string text;
-    if (FILE* p = ::popen(cmd.c_str(), "r")) {
-        char buf[4096];
-        while (std::fgets(buf, sizeof buf, p)) text += buf;
-        ::pclose(p);
-    }
+    const std::string text = mcpp::plugins::tool::capture(
+        {t.nvcc(), "--dryrun", "-ccbin", ccbin, "-c", probe.string(), "-o", "/dev/null"},
+        /*with_errors=*/true).out;
     std::filesystem::remove(probe);
     std::string path;
     std::vector<std::string> stages;
@@ -520,7 +482,6 @@ inline std::optional<std::string> unreachable_stage(const toolkit& t, const std:
         if (!found) return stage;
     }
     return std::nullopt;
-#endif
 }
 
 // ─── Planning ──────────────────────────────────────────────────────────────
@@ -558,11 +519,8 @@ struct edge {
 // the same way it does for every ordinary C++ translation unit on this host.
 inline route decide(route asked) {
     if (asked != route::automatic) return asked;
-#if defined(_WIN32)
-    return route::clang;
-#else
+    if constexpr (kWindows) return route::clang;
     return std::string_view(mcpp::compiler()) == "clang" ? route::clang : route::nvcc;
-#endif
 }
 
 inline std::vector<edge> plan(std::span<const std::string> sources, options opt = {}) {

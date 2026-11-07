@@ -10,14 +10,13 @@
 # of a rule that are written for a host are exactly the halves that host never
 # compiles.
 #
-# A rule's host-dependent code is `#if defined(_WIN32)`, a `.exe` suffix, a
-# directory named `lib/x64`, a listing command. None of it is compiled by a
-# Linux build, so a Windows branch can be syntactically wrong for as long as
-# nobody builds on Windows -- and the first person to do so gets a compile
-# error out of a package they only wanted to use. A dist member's host-
-# dependent code is the same shape -- `dist-wix`'s tool discovery carries its
-# own `#if defined(_WIN32)` -- so it belongs in this fixture for the same
-# reason a rule does.
+# A rule's host-dependent code is an `if constexpr (mcpplibs::os::is_windows)`,
+# a `.exe` suffix, a directory named `lib/x64`, a listing command. Since 0.21.0
+# no unit branches in the preprocessor, so every host compiles every branch;
+# what only one host can show is whether that host's half links and behaves,
+# and a library or a tool named for one host is still met only there. A dist
+# member's host-dependent code is the same shape, so it belongs in this fixture
+# for the same reason a rule does.
 #
 # This fixture names no accelerator and packages nothing (`mcpp build`, never
 # `mcpp pack`). Every rule's `compile()` and every dist member's `plan_for()`

@@ -187,9 +187,6 @@
 // reaches the device through the runner named `app` this member supplies,
 // `devicectl-run` (`xim:apple-device-tools`), as `macapp-run` serves macOS.
 
-module;
-#include <cstdio>
-
 export module mcpp.dist.apple;
 
 import std;

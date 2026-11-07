@@ -96,12 +96,6 @@
 // caller's configuration, not this member's (rule 4, 2026-09-12 design
 // record: "a name is cache-safe, a path is not").
 
-module;
-#include <cstdio>
-#if !defined(_WIN32)
-#include <sys/wait.h>
-#endif
-
 export module mcpp.dist.apk;
 
 import std;
@@ -790,47 +784,15 @@ inline std::string sha256_file(const std::string& path) {
 
 // ─── Running a tool at plan time ─────────────────────────────────────────
 
-// POSIX single quotes: the only character that needs care inside them is the
-// quote itself. This member runs on the hosts that build Android rows, which
-// are Linux and macOS (xim:android-ndk publishes no Windows table).
-inline std::string shell_quote(const std::string& s) {
-    std::string out = "'";
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\'') out += "'\\''";
-        else out += s[i];
-    }
-    return out + "'";
-}
-
-// Runs `argv` through `/bin/sh`, returning its exit status and its combined
-// output -- the same `popen` the rules members use to probe a tool at plan
-// time. Only the explicit Maven modes and AAR extraction call it; an ordinary
-// build of an unchanged project runs nothing here.
-inline int run_capture(const std::vector<std::string>& argv, std::string& output) {
-    std::string cmd;
-    for (std::size_t i = 0; i < argv.size(); ++i) {
-        if (i) cmd += ' ';
-        cmd += shell_quote(argv[i]);
-    }
-    cmd += " 2>&1";
-    output.clear();
-#if defined(_WIN32)
-    FILE* p = ::_popen(cmd.c_str(), "r");
-#else
-    FILE* p = ::popen(cmd.c_str(), "r");
-#endif
-    if (!p) return -1;
-    char buf[4096];
-    std::size_t n;
-    while ((n = std::fread(buf, 1, sizeof buf, p)) > 0) output.append(buf, n);
-#if defined(_WIN32)
-    // Compiled on every host (`tests/all-rules-compile`); an Android row is
-    // never packed on Windows, so this branch only has to be well-formed.
-    return ::_pclose(p);
-#else
-    const int status = ::pclose(p);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-#endif
+// Runs `argv`, returning its exit status and its combined output, through
+// `mcpp::plugins::tool::capture`: no shell between, so no argument is quoted.
+// Only the explicit Maven modes and AAR extraction call it; an ordinary build
+// of an unchanged project runs nothing here.
+inline int run_capture(const std::vector<std::string>& argv, std::string& output,
+                       const std::filesystem::path& cwd = {}) {
+    auto r = mcpp::plugins::tool::capture(argv, /*with_errors=*/true, cwd);
+    output = std::move(r.out);
+    return r.status;
 }
 
 // ─── Merging library manifests into the application's ────────────────────
@@ -1196,8 +1158,7 @@ inline bool unpack_aar(const std::string& aar, const fs::path& dest, const std::
         fs::remove_all(dest, ec);
         fs::create_directories(dest, ec);
         std::string output;
-        const int rc = run_capture({"/bin/sh", "-c", "cd \"$1\" && \"$2\" xf \"$3\"", "unpack-aar",
-                                    dest.string(), jarTool, aar}, output);
+        const int rc = run_capture({jarTool, "xf", aar}, output, dest);
         if (rc != 0) {
             message = std::format("mcpp.dist.apk: unpacking {} with {} failed ({}): {}", aar, jarTool, rc, output);
             return false;

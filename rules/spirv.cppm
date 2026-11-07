@@ -51,11 +51,6 @@
 // two compilers that produce an equivalent header from one shader are still
 // two different answers to "what compiled this".
 
-module;
-// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
-// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
-#include <cstdio>
-
 export module mcpp.rules.spirv;
 
 import std;
@@ -66,6 +61,7 @@ import mcpp.plugins.accel;
 import mcpp.plugins;
 import mcpp.plugins.declare;
 import mcpp.plugins.tool;
+import mcpplibs.os;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -245,13 +241,8 @@ inline flavour classify(const std::string& path) {
 // properties of the HOST and not of the target being compiled for -- a cross
 // build from Linux to Windows still looks for `glslc`, because that is the
 // binary about to be executed.
-#if defined(_WIN32)
-inline constexpr std::string_view kExeSuffix = ".exe";
-inline constexpr char             kPathSep   = ';';
-#else
-inline constexpr std::string_view kExeSuffix = "";
-inline constexpr char             kPathSep   = ':';
-#endif
+inline constexpr std::string_view kExeSuffix = mcpplibs::os::is_windows ? ".exe" : "";
+inline constexpr char             kPathSep   = mcpplibs::os::is_windows ? ';' : ':';
 
 // The first of `<dir>/<name>` and `<dir>/<name>.exe` that exists. Both are
 // tried on every host rather than only the one whose suffix matches: a payload
@@ -362,40 +353,8 @@ inline compiler find_compiler(const options& opt) {
 // magic, the second is the release. The release is what a floor compares, and
 // stating it as a fact is what makes a build log answer "which compiler
 // produced this SPIR-V" without anyone having to reproduce the build.
-// `popen` is POSIX and Windows spells it `_popen`; the null device differs
-// too. Both are named here so the call sites below read the same on every
-// host -- the alternative is a `#if` around each one, and the one that gets
-// forgotten is the one nobody compiles.
-inline FILE* open_pipe(const std::string& cmd) {
-#if defined(_WIN32)
-    return ::_popen(cmd.c_str(), "r");
-#else
-    return ::popen(cmd.c_str(), "r");
-#endif
-}
-inline void close_pipe(FILE* p) {
-#if defined(_WIN32)
-    ::_pclose(p);
-#else
-    ::pclose(p);
-#endif
-}
-inline constexpr const char* kNullDevice =
-#if defined(_WIN32)
-    "NUL";
-#else
-    "/dev/null";
-#endif
-
-inline std::string run_and_capture(const std::string& cmd) {
-    FILE* p = open_pipe(cmd);
-    if (!p) return {};
-    std::string text;
-    char buf[512];
-    while (std::fgets(buf, sizeof buf, p)) text += buf;
-    close_pipe(p);
-    return text;
-}
+// The compiler is asked through `mcpp::plugins::tool::capture`: its arguments
+// as a vector, so the call reads the same on every host.
 
 // THE OPTIMISER IS OPTIONAL AND ITS ABSENCE IS NOT A BUILD ERROR.
 //
@@ -410,13 +369,12 @@ inline std::string run_and_capture(const std::string& cmd) {
 // passing it silently would let the manifest claim an optimisation that did
 // not happen.
 inline bool has_optimizer(const std::string& exe) {
-    const auto out = run_and_capture("\"" + exe + "\" -Os --version 2>&1");
+    const auto out = mcpp::plugins::tool::capture({exe, "-Os", "--version"}, /*with_errors=*/true).out;
     return out.find("optimizer not linked") == std::string::npos;
 }
 
 inline std::string compiler_version(const compiler& cc) {
-    const std::string text = run_and_capture("\"" + cc.path + "\" --version 2>"
-                                             + std::string(kNullDevice));
+    const std::string text = mcpp::plugins::tool::capture({cc.path, "--version"}).out;
     // glslc: `shaderc v2026.3 2fbab05...` on the first line. glslang:
     // `Glslang Version: 11:15.1.0`, whose first field is the SPIR-V generator
     // magic and whose second is the release.

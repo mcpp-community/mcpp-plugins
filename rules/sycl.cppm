@@ -59,17 +59,13 @@
 // points the device compiler at the same GCC the program uses: the graph's
 // supplier (`MCPP_CXX_ABI_ROOT`), else the gcc toolchain's own payload,
 // else the `xim:gcc` this rule declares.
-module;
-// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
-// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
-#include <cstdio>
-
 export module mcpp.rules.sycl;
 
 import std;
 import mcpp;
 import mcpp.plugins.accel;
 import mcpp.plugins.tool;
+import mcpplibs.os;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -144,13 +140,8 @@ struct options {
 // plugins are not built for Windows, and the asset agrees -- it carries
 // Level Zero and OpenCL adapters and no others. An ahead-of-time NVIDIA
 // build is therefore refused there rather than attempted.
-#if defined(_WIN32)
-inline constexpr bool kWindows = true;
-inline constexpr const char* kExe = ".exe";
-#else
-inline constexpr bool kWindows = false;
-inline constexpr const char* kExe = "";
-#endif
+inline constexpr bool kWindows = mcpplibs::os::is_windows;
+inline constexpr const char* kExe = kWindows ? ".exe" : "";
 
 struct target {
     bool sycl = false;
@@ -279,29 +270,8 @@ inline std::string cxx_gcc_root() {
 // `dpcpp --version` states the release and the intel/llvm revision it was
 // built from. Stated as a fact so a build log answers "which SYCL compiler"
 // without anyone reproducing the build.
-inline FILE* open_pipe(const std::string& cmd) {
-#if defined(_WIN32)
-    return ::_popen(cmd.c_str(), "r");
-#else
-    return ::popen(cmd.c_str(), "r");
-#endif
-}
-inline void close_pipe(FILE* p) {
-#if defined(_WIN32)
-    ::_pclose(p);
-#else
-    ::pclose(p);
-#endif
-}
-
 inline std::string compiler_version(const std::string& exe) {
-    FILE* p = open_pipe("\"" + exe + "\" --version 2>"
-                        + (kWindows ? std::string("NUL") : std::string("/dev/null")));
-    if (!p) return {};
-    std::string text;
-    char buf[512];
-    while (std::fgets(buf, sizeof buf, p)) text += buf;
-    close_pipe(p);
+    const std::string text = mcpp::plugins::tool::capture({exe, "--version"}).out;
     for (auto line : split(text, '\n')) {
         auto at = line.find("DPC++ compiler ");
         if (at == std::string_view::npos) continue;

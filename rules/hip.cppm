@@ -35,6 +35,7 @@ import std;
 import mcpp;
 import mcpp.plugins.accel;
 import mcpp.plugins.tool;
+import mcpplibs.os;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -392,11 +393,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // because the alternative is a path that is wrong on a host this rule
     // will one day be asked about, and a wrong path reports itself as a
     // missing toolchain.
-#if defined(_WIN32)
-    const std::string cc = tcdir + "/bin/clang++.exe";
-#else
-    const std::string cc = tcdir + "/bin/clang++";
-#endif
+    const std::string cc = tcdir + (mcpplibs::os::is_windows ? "/bin/clang++.exe" : "/bin/clang++");
     if (tcdir.empty() || !std::filesystem::exists(cc)) {
         std::cerr << std::format("mcpp.rules.hip: the NVIDIA platform compiles through clang, and this "
             "project's\n  toolchain has no clang++ at {}.\n"

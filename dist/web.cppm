@@ -85,9 +85,6 @@
 // the side file as the copy action's input is what makes an edit reach
 // `<out_dir>/web/index.html`.
 
-module;
-#include <cstdio>
-
 export module mcpp.dist.web;
 
 import std;

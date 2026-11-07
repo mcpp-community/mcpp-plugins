@@ -95,6 +95,13 @@ default = []
 sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm", "src/accel.cppm", "src/progress.cppm",
            "src/compat/detected_toolset.cppm"]
 
+# The operating system of every member: the programs a member asks for a fact
+# (`mcpp.plugins.tool::capture`), the libraries it opens and the platform it
+# builds on, through mcpplibs.os. No unit includes a system header (0.21.0,
+# docs/plugin-development.md §4).
+[feature-deps.plugins-core]
+mcpplibs.os = "0.3.1"
+
 # `mcpp.plugins.toolchain` -- the builders a root build program states its
 # build toolchain with, in the toolchain phase of a project whose `[toolchain]`
 # says `configure = "build.mcpp"` (mcpp#755). Its own feature rather than part
