@@ -23,10 +23,6 @@
 // large file across several arrays, and does not emit a `std::span` accessor.
 // Each is reachable from what it emits, and a tool in this collection earns a
 // feature by being needed by more than one consumer.
-module;
-#include <cctype>
-#include <cstdio>
-
 export module mcpp.tools.embed;
 
 import std;

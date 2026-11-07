@@ -61,6 +61,8 @@
 //     the mcpp graph.
 
 module;
+// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
+// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
 #include <cstdio>
 
 export module mcpp.rules.swift;

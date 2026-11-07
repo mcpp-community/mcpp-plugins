@@ -47,9 +47,6 @@
 // `lrelease` reads that file, the order Qt's Visual Studio integration runs
 // them in.
 
-module;
-#include <cctype>
-
 export module mcpp.rules.qt;
 
 import std;

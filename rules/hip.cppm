@@ -29,10 +29,6 @@
 // directories, through `mcpp::link_search`; and the HIP version it compiled
 // against, through `mcpp::fact`, so a build log answers "which HIP" without
 // anyone reproducing the build.
-module;
-#include <cstdlib>
-#include <cstdio>
-
 export module mcpp.rules.hip;
 
 import std;

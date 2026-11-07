@@ -50,10 +50,6 @@
 // own -- and it is stated here so the boundary is not mistaken for an
 // oversight.
 
-module;
-
-#include <cstdlib>
-
 export module mcpp.rules.ascendc;
 
 import std;

@@ -28,9 +28,6 @@
 // reports `Using cmake (mcpp.deps.cmake) ← /usr/bin/cmake [program ·
 // build.mcpp:9]` and `mcpp why tool cmake` answers from the same record.
 
-module;
-#include <cstdlib>
-
 export module mcpp.plugins.tool;
 
 import std;

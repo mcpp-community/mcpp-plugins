@@ -1,7 +1,5 @@
 // Shared reading of the engine's accelerator requests. Targets are opaque;
 // each rule interprets only the member whose backend name it owns.
-module;
-#include <cctype>
 export module mcpp.plugins.accel;
 import std;
 

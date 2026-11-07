@@ -60,7 +60,8 @@
 // supplier (`MCPP_CXX_ABI_ROOT`), else the gcc toolchain's own payload,
 // else the `xim:gcc` this rule declares.
 module;
-#include <cstdlib>
+// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
+// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
 #include <cstdio>
 
 export module mcpp.rules.sycl;

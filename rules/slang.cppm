@@ -39,7 +39,8 @@
 // so the generated accessor uses what the compiler stated rather than a
 // coincidence that holds today.
 module;
-#include <cctype>
+// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
+// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
 #include <cstdio>
 
 export module mcpp.rules.slang;

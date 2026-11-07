@@ -34,7 +34,8 @@
 //     advisory, because the SASS for the named architectures still runs.
 
 module;
-#include <cstdlib>
+// `popen` and `pclose` (`_popen` and `_pclose` on Windows), which POSIX and the
+// CRT declare in <stdio.h> and the `std` module, being ISO C++, does not export.
 #include <cstdio>
 #if !defined(_WIN32)
 #include <dlfcn.h>

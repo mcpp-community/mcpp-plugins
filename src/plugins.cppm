@@ -17,9 +17,6 @@
 // because only the lib root is built first. So shared code lives here rather
 // than in a file of its own, and a member that needs it writes
 // `import mcpp.plugins;`.
-module;
-#include <cctype>
-
 export module mcpp.plugins;
 
 import std;

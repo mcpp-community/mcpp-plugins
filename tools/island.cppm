@@ -8,9 +8,6 @@
 // project does, directly from its own `build.mcpp`, exactly as it uses
 // `mcpp.tools.embed`. Leaving it in the lib root gave it to every consumer
 // whether or not they asked, while `tools-embed` next to it required a feature.
-module;
-#include <cctype>
-
 export module mcpp.tools.island;
 
 import std;
