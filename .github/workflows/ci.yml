@@ -83,11 +83,20 @@ env:
   # phase -- and `mcpp-package.json` beside every staged tree, which
   # `mcpp::plugins::package` reads. Until that release exists the jobs build it
   # from `MCPP_SOURCE_REF` (the repository variable names the branch).
+  #
+  # 2026.11.7.1 IS WHAT 0.21.0'S CMAKE CROSS LANE NEEDS (mcpp#885): the engine
+  # completes a cross subproject's contract (its compilers, archiver and target)
+  # when the action runs, which a subproject that links an executable or a
+  # shared library needs. The package floor stays 2026.10.30.1: every other
+  # member, and a cross subproject that only builds archives, works on the
+  # older engine, and docs/deps.md states the requirement where cross builds
+  # are described. So here, as for 0.20.0's SYCL lane, `MCPP_VERSION` is the
+  # newest engine a lane needs and the floor the oldest the collection loads on.
   MCPP_VERSION: 2026.11.7.1
   # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
   #
-  # `MCPP_VERSION` states the engine this collection needs -- the package floor
-  # (`[package] mcpp`) is the same statement -- and a release of it may not exist
+  # `MCPP_VERSION` states the engine this collection's lanes need -- the package
+  # floor (`[package] mcpp`) the oldest it loads on -- and a release of it may not exist
   # yet: 0.19.0 was written against mcpp#755 and pinned 2026.10.1.3 before that
   # release was published. Every fetch therefore names this variable instead, and
   # the dispatch input `mcpp_source_ref` builds the engine under review with it.
