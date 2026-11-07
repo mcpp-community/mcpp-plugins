@@ -1479,6 +1479,18 @@ jobs:
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
 
+      # A SYCL library of two NVIDIA architectures and a program that links it (mcpp#899): the library's
+      # device link reads its own objects, so the SDK never unbundles an archive of several architectures,
+      # and each image is its architecture's.
+      - name: rules-sycl through a library of two NVIDIA architectures
+        working-directory: tests/sycl-library-consumer/app
+        run: |
+          "$MCPP" build
+          python3 ../../sycl-consumer/verify-images.py sm_89,sm_90
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
+
       - name: an ordinary worker imports the progress writer without build-program modules
         working-directory: tests/progress-worker
         run: python3 verify.py "$MCPP"
