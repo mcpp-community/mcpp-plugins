@@ -313,9 +313,9 @@ implies = ["deps"]
 sources = ["src/progress.cppm", "src/progress_writer.cppm"]
 
 # 0.3.1: a name in Windows' long spelling is the name it spells (the progress channel's path may be
-# one); a compatible range, so the consumer's graph chooses the release.
-[feature-deps.plugins-progress.mcpplibs]
-os = "^0.3.1"
+# one). One release, as mcpp's own modules name it, so a build is the same at any later time.
+[feature-deps.plugins-progress]
+mcpplibs.os = "0.3.1"
 
 [features.deps-cmake]
 sources = ["deps/cmake.cppm"]
