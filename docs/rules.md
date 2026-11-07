@@ -61,5 +61,7 @@ Each selected implementation owns its targets. A repository may retain CUDA and 
 
 The older `sycl,cuda+{sm_89}` form still inherits CUDA targets when the SYCL member has no targets, with a migration warning. Both named implementations remain selected. Explicit SYCL targets are never replaced by a CUDA member. Move the device target to the SYCL member to select only SYCL. GPU execution still requires a compatible device and driver; CI verifies the emitted images and the CPU fallback separately.
 
+**A static library of several NVIDIA architectures is not supported.** DPC++ 7.1.0's `clang-offload-bundler` matches the five-part bundle IDs its driver writes (`sycl-nvptx64-nvidia-cuda-sm_89`) to every NVPTX request, so unbundling an archive for one architecture yields the members of all of them and the device link reports duplicate definitions (intel/llvm#23767, mcpp#899). Objects of several architectures, a library of one architecture, and SPIR-V beside one NVIDIA architecture link. The rule keeps every requested architecture; it neither drops one nor reuses one architecture's code for another.
+
 
 The `tests/multi-accel-consumer` fixture selects `cuda+{sm_90},sycl+{nvptx64-sm_89}` and imports both rules. CI inspects each rule's actual image target and runs both host objects without submitting GPU work. This establishes build/link coexistence with one C++ runtime; device execution, interoperation and synchronization require their own runtime checks.
