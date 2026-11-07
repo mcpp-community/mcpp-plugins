@@ -350,7 +350,7 @@ inline std::string describe_missing(const spec& s, const found& f) {
 // --show-sdk-path`, a compiler's version, a dry run's plan -- through
 // mcpplibs.os: the program and its arguments as a vector, with no shell between,
 // so nothing is quoted and no null device is named on any host. The standard
-// error is dropped, or merged into the output when `with_errors`. A program that
+// error is dropped, or appended to the output when `with_errors`. A program that
 // does not end within a minute is ended; `status` is then the shell's code for
 // it, and -1 when the program could not be started at all.
 struct printed {
@@ -367,9 +367,11 @@ inline printed capture(const std::vector<std::string>& argv, bool with_errors = 
     o.args.assign(argv.begin() + 1, argv.end());
     o.cwd = cwd;
     o.in = process::stdio::null;
-    o.err = with_errors ? process::stdio::output : process::stdio::null;
+    o.err = with_errors ? process::stdio::pipe : process::stdio::null;
     auto r = process::run(std::move(o), process::bounds{});
     if (!r) return {};
+    // The standard error after the output, as a reader of either finds it.
+    if (with_errors) r->out += r->err;
     return {r->status.shell_code(), std::move(r->out)};
 }
 
