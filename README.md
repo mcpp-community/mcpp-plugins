@@ -60,7 +60,7 @@ protocol 15 states where each tool and payload comes from); the column states
 the release each member's behaviour first needed.
 
 Cross CMake subprojects that link executables or shared libraries require
-mcpp 2026.11.5.2 or later; cross configuration requires CMake 3.19 or later.
+mcpp 2026.11.7.1 or later; cross configuration requires CMake 3.19 or later.
 
 | feature | module | mcpp floor | what it does | doc |
 |---|---|---|---|---|

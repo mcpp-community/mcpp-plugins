@@ -287,7 +287,7 @@ contract when the action runs, after the key is written. Compilers or a
 toolchain file in `cache_args` decide here too.
 
 Cross subprojects that link executables or shared libraries require mcpp
-2026.11.5.2 or later. Contract profile options follow CMake's configuration
+2026.11.7.1 or later. Contract profile options follow CMake's configuration
 flags; `options::config` still selects the CMake configuration.
 
 ### An installation is built once (0.18.0)
