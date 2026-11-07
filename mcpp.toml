@@ -100,7 +100,7 @@ sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm
 # builds on, through mcpplibs.os. No unit includes a system header (0.21.0,
 # docs/plugin-development.md §4).
 [feature-deps.plugins-core]
-mcpplibs.os = "0.3.1"
+mcpplibs.os = "0.4.0"
 
 # `mcpp.plugins.toolchain` -- the builders a root build program states its
 # build toolchain with, in the toolchain phase of a project whose `[toolchain]`
@@ -319,10 +319,10 @@ implies = ["deps"]
 # Standalone workers need no build-program-only mcpp module.
 sources = ["src/progress.cppm", "src/progress_writer.cppm"]
 
-# 0.3.1: a name in Windows' long spelling is the name it spells (the progress channel's path may be
-# one). One release, as mcpp's own modules name it, so a build is the same at any later time.
+# Since 0.3.1 a name in Windows' long spelling is the name it spells (the progress channel's path may
+# be one). One release, the one mcpp's own modules name, so a build is the same at any later time.
 [feature-deps.plugins-progress]
-mcpplibs.os = "0.3.1"
+mcpplibs.os = "0.4.0"
 
 [features.deps-cmake]
 sources = ["deps/cmake.cppm"]
