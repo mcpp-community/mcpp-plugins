@@ -210,6 +210,38 @@ cmake_consumer() {
     echo "ok: a file added to the subproject re-ran its installation"
 }
 
+# A BUILD FOR ANOTHER TARGET (0.21.0): the subproject is compiled with the
+# compilers and words of the engine's contract for the target, read when the
+# action runs, and not with the machine's toolset. On a glibc machine,
+# `--target x86_64-linux-musl` must give a subproject compiled against musl.
+cmake_cross() {
+    cd "$ROOT/tests/cmake-cross"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build --target x86_64-linux-musl > target/ci/build.log 2>&1 || { cat target/ci/build.log; fail "the cross build failed"; }
+    script=$(find target -path '*deps-cmake/answer/answer.cmake' | head -1)
+    [ -n "$script" ] || fail "no deps-cmake script was written"
+    grep -q "the engine's contract for x86_64-linux-musl" "$script" || { cat "$script"; fail "the script does not read the contract"; }
+    cache=$(find target -path '*deps-cmake/answer/build-*/CMakeCache.txt' | head -1)
+    grep -q '^CMAKE_SYSTEM_NAME:.*=Linux' "$cache" || { grep CMAKE_SYSTEM_NAME "$cache"; fail "CMAKE_SYSTEM_NAME is not Linux"; }
+    grep -q '^CMAKE_TRY_COMPILE_TARGET_TYPE:.*=STATIC_LIBRARY' "$cache" || fail "the try-compile links"
+    "$MCPP" run --target x86_64-linux-musl | tee target/ci/run.log
+    grep -q '^cmake-cross: the subproject was compiled against not glibc$' target/ci/run.log ||
+        fail "the subproject was compiled with the machine's C library"
+    sidecar=$(find target -path '*deps-cmake/answer/install/bin/answer-sidecar' -type f | head -1)
+    [ -n "$sidecar" ] || fail "the CMake subproject did not install its own executable"
+    "$sidecar" | tee target/ci/sidecar-run.log
+    grep -q '^cmake-sidecar: the subproject was compiled against not glibc$' target/ci/sidecar-run.log ||
+        fail "the independent CMake executable did not use the target runtime"
+    # The contract excludes consumer libraries, but the consumer still links
+    # the installation. Inspect its own rule, not a reference elsewhere.
+    graph=$(find target -path '*/build.ninja' ! -path '*/.build-mcpp/*' | head -1)
+    [ -n "$graph" ] || fail "the consumer Ninja graph is missing"
+    grep -q '^ldflags[[:space:]]*=.*libanswer\.a' "$graph" ||
+        fail "the consuming program lost the subproject archive from its link flags"
+    echo "ok: the target CMake library, independent executable and consumer link all work"
+}
+
 # AN INSTALLATION IS BUILT ONCE (0.18.0). deps-cmake keeps what a subproject
 # installed under a key that holds no path of the machine, and copies it into
 # the prefix of any later build with the same key. Only a toolset the engine
@@ -673,6 +705,7 @@ case "${1:-}" in
     vcpkg-workspace)     vcpkg_workspace ;;
     cmake-consumer)      cmake_consumer ;;
     cmake-cache)         cmake_cache ;;
+    cmake-cross)         cmake_cross ;;
     qt-consumer)         qt_consumer ;;
     qt-widgets-consumer) qt_widgets_consumer ;;
     qt-sdk-consumer)     qt_sdk_consumer ;;
@@ -682,5 +715,5 @@ case "${1:-}" in
     vcpkg-managed)       vcpkg_managed ;;
     vcpkg-msbuild-refused) vcpkg_msbuild_refused ;;
     vcpkg-make-port)     vcpkg_make_port ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|cmake-cross|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
 esac

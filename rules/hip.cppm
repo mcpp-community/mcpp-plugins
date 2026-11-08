@@ -29,15 +29,13 @@
 // directories, through `mcpp::link_search`; and the HIP version it compiled
 // against, through `mcpp::fact`, so a build log answers "which HIP" without
 // anyone reproducing the build.
-module;
-#include <cstdlib>
-#include <cstdio>
-
 export module mcpp.rules.hip;
 
 import std;
 import mcpp;
+import mcpp.plugins.accel;
 import mcpp.plugins.tool;
+import mcpplibs.os;
 
 
 // WHY NOTHING HERE USES `std::println`, AND WHY THAT IS NOT A STYLE CHOICE.
@@ -98,6 +96,7 @@ struct options {
 // many programming models reach it, so `sm_89` does not acquire a second
 // spelling because the source file says `hip` instead of `cu`.
 struct target {
+    std::string error;
     bool hip = false;                    // the `hip` chunk is present
     std::string cuda_version;            // "12.9", from a `cuda12.9` chunk
     std::vector<std::string> cuda_archs; // {"sm_89"}
@@ -135,25 +134,25 @@ inline std::vector<std::string> parse_arch_set(std::string_view chunk) {
     return archs;
 }
 
-inline target parse_target(std::string_view accel) {
+inline target parse_target(std::string_view text) {
     target t;
-    for (auto raw : split(accel, ',')) {
-        auto chunk = trim(raw);
-        if (chunk.starts_with("hip")) {
+    const auto parsed = mcpp::plugins::accel::parse(text);
+    if (!parsed) { t.error = parsed.error(); return t; }
+    for (const auto& entry : *parsed) {
+        if (entry.backend == "hip") {
             t.hip = true;
-            t.amd_archs = parse_arch_set(chunk);
-        } else if (chunk.starts_with("cuda")) {
-            auto rest = chunk.substr(std::string_view("cuda").size());
-            auto plus = rest.find('+');
-            t.cuda_version = std::string(trim(
-                plus == std::string_view::npos ? rest : rest.substr(0, plus)));
-            // A version may be followed by a space-separated clause such as
-            // `ptx>=89`; the version is the leading numeric run.
-            if (auto sp = t.cuda_version.find(' '); sp != std::string::npos)
-                t.cuda_version.resize(sp);
-            t.cuda_archs = parse_arch_set(chunk);
+            for (const auto& arch : entry.archs) {
+                if (arch.starts_with("sm_")) t.cuda_archs.push_back(arch);
+                else if (arch.starts_with("gfx")) t.amd_archs.push_back(arch);
+                else { t.error = "unsupported HIP target '" + arch + "'"; return t; }
+            }
         }
     }
+    for (const auto& entry : *parsed)
+        if (entry.backend == "cuda") {
+            t.cuda_version = entry.version;
+            if (t.cuda_archs.empty() && t.amd_archs.empty()) t.cuda_archs = entry.archs;
+        }
     return t;
 }
 
@@ -276,12 +275,13 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     }
 
     const auto tg = parse_target(mcpp::accel());
+    if (!tg.error.empty()) { std::cerr << "mcpp.rules.hip: " << tg.error << '\n'; return out; }
     auto which = opt.which;
     if (which == platform::automatic)
         which = tg.cuda_archs.empty() && !tg.amd_archs.empty() ? platform::amd
                                                                : platform::nvidia;
 
-    if (which == platform::amd) {
+    if (which == platform::amd || !tg.amd_archs.empty()) {
         // Stated rather than approximated. The AMD platform needs a ROCm
         // runtime and device library, and this ecosystem publishes neither
         // yet; compiling for it would produce an object nothing on this
@@ -289,7 +289,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         std::cerr << std::format("mcpp.rules.hip: [build] accel names AMD architectures ({}) and no ROCm\n"
             "  payload is published in this ecosystem yet, so nothing could link or run\n"
             "  the result. The NVIDIA platform is available today:\n"
-            "    accel = \"hip, cuda12.9+{{sm_89}}\"\n"
+            "    accel = \"hip+{{sm_89}}\"\n"
             "  which reaches the device through the CUDA runtime, with HIP as the API.",
             tg.amd_archs.empty() ? std::string("none") : tg.amd_archs.front()) << '\n';
         return out;
@@ -301,7 +301,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
         std::cerr << std::format("mcpp.rules.hip: [build] accel names no device architecture (accel = \"{}\").\n"
             "  On the NVIDIA platform HIP compiles through the CUDA back end, and the\n"
             "  device is spelled the way every other rule in this ecosystem spells it:\n"
-            "    accel = \"hip, cuda12.9+{{sm_89}}\"\n"
+            "    accel = \"hip+{{sm_89}}\"\n"
             "  The set a build compiles for is a decision; the machine's own hardware is\n"
             "  a poor default for it.",
             mcpp::accel()) << '\n';
@@ -393,11 +393,7 @@ inline std::vector<edge> plan(std::span<const std::string> sources, options opt 
     // because the alternative is a path that is wrong on a host this rule
     // will one day be asked about, and a wrong path reports itself as a
     // missing toolchain.
-#if defined(_WIN32)
-    const std::string cc = tcdir + "/bin/clang++.exe";
-#else
-    const std::string cc = tcdir + "/bin/clang++";
-#endif
+    const std::string cc = tcdir + (mcpplibs::os::is_windows ? "/bin/clang++.exe" : "/bin/clang++");
     if (tcdir.empty() || !std::filesystem::exists(cc)) {
         std::cerr << std::format("mcpp.rules.hip: the NVIDIA platform compiles through clang, and this "
             "project's\n  toolchain has no clang++ at {}.\n"
@@ -523,7 +519,9 @@ inline bool compile(options opt = {}) {
     // `accel` itself, which is what the rule already does. A rule whose
     // backend this build does not name has nothing to do, and that is not a
     // mistake and must not be reported as one.
-    if (!parse_target(mcpp::accel()).hip) return true;
+    const auto requested = parse_target(mcpp::accel());
+    if (!requested.error.empty()) { std::cerr << "mcpp.rules.hip: " << requested.error << '\n'; return false; }
+    if (!requested.hip) return true;
     const auto sources = device_sources();
     if (sources.empty()) {
         mcpp::warning("[build] accel names hip but no constrained glob matched a `.hip`; "
@@ -531,7 +529,7 @@ inline bool compile(options opt = {}) {
         return true;
     }
     auto edges = plan(sources, std::move(opt));
-    if (edges.empty()) return false;
+    if (edges.empty()) return mcpp::xpkg_pending();
     return submit(edges);
 }
 

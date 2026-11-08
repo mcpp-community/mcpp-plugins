@@ -52,7 +52,7 @@ mcpp-index refuses such a package.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.20.0", features = ["plugins-core"], host-module = true, reexport = true }
+plugins = { version = "0.21.0", features = ["plugins-core"], host-module = true, reexport = true }
 ```
 
 `reexport = true` is needed when the plugin's consumers import L2 modules in
@@ -202,6 +202,8 @@ Known differences, each one met in this package:
 - **A type that holds a container of itself does not use `std::pair` or `std::tuple` for the element.** Under clang with libstdc++'s `std` module, `std::vector<std::pair<std::string, value>>` inside `value` instantiates the pair while `value` is incomplete and fails with "incomplete type used in type trait expression"; GCC and clang with libc++ accept it. The element is a plain struct, and a member function that walks the container is defined after both types are complete (`mcpp::plugins::json::member`, 0.19.1).
 - **No compiler's leniency is relied on.** An extension, a missing `typename`, or a template accepted only because one compiler instantiates it later is a failure in another lane.
 - **A build program does not use `std::println`.** On macOS 14 the build program links the system libc++, which lacks a symbol it needs; `std::format` into a string and `std::cout` work everywhere.
+- **No unit includes a header or branches on the platform in the preprocessor.** The C library comes from `std`, which exports the functions and types of ISO C (`std::isalnum`, `std::getenv`, `std::FILE`) but no macro; a macro of ISO C (`stdout`, `errno`, `SEEK_SET`) comes from `mcpplibs.mwrap.libc` under its own name (`mcpplibs::mwrap::libc::macros::stdout()`). The operating system comes from `mcpplibs.os`: a program a member asks for a fact runs through `mcpp::plugins::tool::capture` (its arguments as a vector, no shell, so nothing is quoted and no null device is named), a library opens through `mcpplibs::os::library::open`, and a child's environment is stated in its spawn options rather than written into this process's. A build program runs on the machine that builds, so a platform difference is a compile-time question of that machine: `if constexpr (mcpplibs::os::is_windows)`. CI refuses an `#include`, `#if` or `#ifdef` in a unit (0.21.0).
+- **A function that reaches mcpplibs.os is not `inline`.** A rule's helper that runs a program (`mcpp::plugins::tool::capture`) or opens a library is defined without `inline`, so it is compiled once in its module and an importer sees its declaration only. Under GCC 16 an importer that reads such a body from an inline function fails: "failed to read compiled module cluster: Bad file data", or an unresolved `std::optional<std::vector<grant>>` at the link (`tests/metal-consumer`, 0.21.0).
 - **A module does not instantiate `std::filesystem::path`'s iterator.** Under MSVC 14.52 every importer that then touches `std::filesystem` fails inside the STL; `mcpp::plugins::names::components` splits a path as a string instead.
 
 ## 5. A new plugin
@@ -215,3 +217,11 @@ A plugin in this package consists of:
 - a version bump.
 
 A project's own plugin is a module in the project (a path dependency with `host-module = true`) and follows §2 in the same way.
+
+## Optional action progress
+
+`mcpp.plugins.progress` is part of `plugins-core`. `enable(action, requested)` sets the optional action flag when the engine API provides it. With older APIs it reports that telemetry is unavailable and leaves the action usable. Engine support starts at mcpp 2026.11.5.1 (protocol 18); this optional path does not raise the package's 2026.10.30.1 floor.
+
+Worker programs select `plugins-progress` and import `mcpp.plugins.progress.writer`. `writer` reads `MCPP_ACTION_PROGRESS_FILE`; an absent channel is a no-op. `report({.phase="compile", .done=3, .total=9})` atomically replaces the latest schema-1 snapshot, assigns increasing sequence numbers and publishes at most five times per second. Omit counts when the total is unknown. `report()` returns whether it published; this result does not determine whether the worker's actual task succeeded. The optional writer feature uses `mcpplibs.os.fs` for portable atomic replacement; `plugins-core` depends on `mcpplibs.os` as well (§4).
+
+The writer feature is usable by an ordinary standalone worker with an ordinary dependency; it imports no build-program-only `mcpp` module. Importing `mcpp.plugins.progress.writer` also exposes the `snapshot` type. Channel paths preserve UTF-8 on every host, including Windows with a non-UTF-8 ANSI code page. `tests/progress-worker` checks disabled channels, Unicode paths and optional write failure on Linux, macOS and Windows.

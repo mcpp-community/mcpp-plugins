@@ -27,8 +27,6 @@
 // own: `mcpp.plugins.surface` decides every name, and this reads what the rule
 // wrote down and calls it. The two forms cannot drift, because they are the
 // same code -- which is why that module imports only `std`.
-#include <cstdio>
-#include <cstdlib>
 
 import std;
 import mcpp.plugins;

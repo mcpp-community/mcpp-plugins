@@ -38,10 +38,6 @@
 // `sizeof` for this style and would not for a style that terminates its output,
 // so the generated accessor uses what the compiler stated rather than a
 // coincidence that holds today.
-module;
-#include <cctype>
-#include <cstdio>
-
 export module mcpp.rules.slang;
 
 import std;
@@ -52,6 +48,7 @@ import mcpp;
 import mcpp.plugins;
 import mcpp.plugins.declare;
 import mcpp.plugins.tool;
+import mcpplibs.os;
 
 // `std::println` is avoided here for the reason every file in this package
 // records: it is not header-only, and the symbols its overloads reach for were
@@ -189,13 +186,8 @@ inline bool is_file(const std::string& p) {
 
 // Windows spells the separator differently and its paths contain the character
 // the other platforms separate on, so this is not one constant used twice.
-#if defined(_WIN32)
-inline constexpr char kPathSep = ';';
-inline constexpr const char* kExeSuffix = ".exe";
-#else
-inline constexpr char kPathSep = ':';
-inline constexpr const char* kExeSuffix = "";
-#endif
+inline constexpr char kPathSep = mcpplibs::os::is_windows ? ';' : ':';
+inline constexpr const char* kExeSuffix = mcpplibs::os::is_windows ? ".exe" : "";
 
 inline std::string first_on_path(const char* exe) {
     const char* path = std::getenv("PATH");
@@ -239,27 +231,9 @@ inline mcpp::plugins::tool::found find_compiler(const options& opt) {
     return f;
 }
 
-inline std::string run_and_capture(const std::string& cmd) {
-#if defined(_WIN32)
-    FILE* p = ::_popen(cmd.c_str(), "r");
-#else
-    FILE* p = ::popen(cmd.c_str(), "r");
-#endif
-    if (!p) return {};
-    std::string text;
-    char buf[512];
-    while (std::fgets(buf, sizeof buf, p)) text += buf;
-#if defined(_WIN32)
-    ::_pclose(p);
-#else
-    ::pclose(p);
-#endif
-    return text;
-}
-
 // `slangc -v` prints the release on its own, e.g. `2026.14.1`.
-inline std::string compiler_version(const std::string& exe) {
-    auto text = run_and_capture("\"" + exe + "\" -v 2>&1");
+std::string compiler_version(const std::string& exe) {
+    auto text = mcpp::plugins::tool::capture({exe, "-v"}, /*with_errors=*/true).out;
     for (auto& c : text) if (c == '\r') c = '\n';
     auto nl = text.find('\n');
     return std::string(trim(nl == std::string::npos ? text : text.substr(0, nl)));

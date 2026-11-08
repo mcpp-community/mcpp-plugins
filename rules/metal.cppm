@@ -35,14 +35,13 @@
 // fragment shader once per blend mode passes one `shader` per output, each with
 // its own definitions and name; the sources need not be in the project's tree.
 
-module;
-#include <cstdio>
-
 export module mcpp.rules.metal;
 
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
+import mcpplibs.os;
 
 // Nothing here uses `std::println`: both of its overloads reach into the libc++
 // dylib for symbols macOS 14 does not ship, so a build program that printed
@@ -113,50 +112,19 @@ inline std::vector<std::string> device_shaders() {
 
 // ─── The toolchain ─────────────────────────────────────────────────────────
 
-// The first line a command prints, or empty. `popen` is POSIX; this module is
-// compiled on every host (`tests/all-rules-compile`), so Windows is spelled.
-inline std::string first_line_of(const std::string& cmd) {
-#if defined(_WIN32)
-    FILE* p = ::_popen(cmd.c_str(), "r");
-#else
-    FILE* p = ::popen(cmd.c_str(), "r");
-#endif
-    if (!p) return {};
-    char buf[1024];
-    std::string line;
-    if (std::fgets(buf, sizeof buf, p)) line = buf;
-#if defined(_WIN32)
-    ::_pclose(p);
-#else
-    ::pclose(p);
-#endif
-    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
-    return line;
-}
-
 // The SDK's path, or empty when `xcrun` cannot locate it.
-inline std::string sdk_path(const std::string& sdk) {
-#if defined(_WIN32)
-    (void)sdk;
-    return {};
-#else
-    const std::string path = first_line_of(
-        "/usr/bin/xcrun --sdk " + sdk + " --show-sdk-path 2>/dev/null");
+std::string sdk_path(const std::string& sdk) {
+    if constexpr (mcpplibs::os::is_windows) return {};
+    const std::string path = mcpp::plugins::tool::first_line({"/usr/bin/xcrun", "--sdk", sdk, "--show-sdk-path"});
     std::error_code ec;
     return !path.empty() && std::filesystem::is_directory(path, ec) ? path : std::string();
-#endif
 }
 
-inline std::string find_tool(const std::string& sdk, const char* tool) {
-#if defined(_WIN32)
-    (void)sdk; (void)tool;
-    return {};
-#else
-    const std::string path = first_line_of(
-        "/usr/bin/xcrun --sdk " + sdk + " --find " + tool + " 2>/dev/null");
+std::string find_tool(const std::string& sdk, const char* tool) {
+    if constexpr (mcpplibs::os::is_windows) return {};
+    const std::string path = mcpp::plugins::tool::first_line({"/usr/bin/xcrun", "--sdk", sdk, "--find", tool});
     std::error_code ec;
     return !path.empty() && std::filesystem::is_regular_file(path, ec) ? path : std::string();
-#endif
 }
 
 inline std::string stem_of(const std::string& path) {

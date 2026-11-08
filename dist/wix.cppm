@@ -93,9 +93,6 @@
 // shims into an executable named like an installer). A project with its own
 // bootstrapper application supplies its own bundle definition.
 
-module;
-#include <cstdio>
-
 export module mcpp.dist.wix;
 
 import std;

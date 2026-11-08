@@ -1,0 +1,10 @@
+import std;
+import mcpp;
+import mcpp.deps.cmake;
+
+int main() {
+    mcpp::deps::cmake::options o;
+    o.source    = "answer";
+    o.libraries = { "answer" };
+    return mcpp::deps::cmake::use(o) ? 0 : 1;
+}

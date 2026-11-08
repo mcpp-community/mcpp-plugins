@@ -75,3 +75,6 @@ there is always exactly one name to give: `table_options::identifier` (default
 the array and the struct. `out_dir`, `name_space`, `elem` and `width` mean what
 they mean in `options`, `element::word32`'s "not a multiple of 4" refusal
 included -- checked per input, since a table has several.
+
+
+For object surfaces, the execution-time body generator records a payload-content checksum in its `.S` output. A payload edit, including an equal-size edit, changes that source and rebuilds its embedding object. Identical payload bytes preserve the generated assembly timestamp; the separately generated interface remains stable. Planning reads no payload bytes.

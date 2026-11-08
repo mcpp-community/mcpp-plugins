@@ -28,8 +28,9 @@
 //   }
 //
 // HOW. The build program is run by mcpp as usual; `run` starts the same
-// executable once per case (`--mcpp-plugins-testing-case=<n>`) with the case's
-// context in its environment and its standard output in a file, and runs the
+// executable once per case (`--mcpp-plugins-testing-case=<n>`) through
+// mcpplibs.os, with the case's context stated as the child's environment (this
+// process's own is never written) and its standard output kept in a file, and runs the
 // check on what it wrote. A separate process per case is what makes the
 // context complete: every accessor of `mcpp.core` reads the environment, and
 // a function's `static` state starts fresh. A failed check fails the build
@@ -37,34 +38,13 @@
 // written to `<out_dir>/plugins-testing/results.txt`, one `PASS` or `FAIL`
 // line per case, for a CI step to count.
 
-module;
-#include <stdlib.h>
-// The environment as an array, so the kit can clear the real build's
-// MCPP_XPKG_*. Darwin does not export `environ` to anything but a main program,
-// and offers `_NSGetEnviron()` instead; elsewhere the symbol is declared here
-// rather than taken from <unistd.h>, whose declaration a module purview does not
-// see.
-#if defined(__APPLE__)
-#include <crt_externs.h>
-#elif !defined(_WIN32)
-extern "C" char** environ;
-#endif
-
 export module mcpp.plugins.testing;
 
 import std;
 import mcpp;
+import mcpplibs.os;
 
 namespace mcpp::plugins::testing::detail {
-
-inline void set_env(const std::string& name, const std::string& value) {
-#if defined(_WIN32)
-    ::_putenv_s(name.c_str(), value.c_str());
-#else
-    if (value.empty()) ::unsetenv(name.c_str());
-    else ::setenv(name.c_str(), value.c_str(), 1);
-#endif
-}
 
 // Every key an accessor of `mcpp.core` reads that a plugin's logic depends on.
 // A case sets each of them -- empty unless its context states a value -- so
@@ -99,16 +79,9 @@ inline constexpr std::string_view kKeys[] = {
 // Enumerated rather than listed: the keys are derived from package names, so no
 // fixed list can cover the next payload a member reads.
 inline std::vector<std::string> inherited_payload_keys() {
-#if defined(_WIN32)
-    char** env = _environ;
-#elif defined(__APPLE__)
-    char** env = *_NSGetEnviron();
-#else
-    char** env = environ;
-#endif
     std::vector<std::string> out;
-    for (char** e = env; e && *e; ++e) {
-        std::string_view entry(*e);
+    for (auto const& variable : mcpplibs::os::env::variables()) {
+        std::string_view entry(variable);
         const auto eq = entry.find('=');
         if (eq == std::string_view::npos) continue;
         const auto name = entry.substr(0, eq);
@@ -316,7 +289,6 @@ inline std::string expand(std::string text, const std::string& root) {
         text.replace(at, 6, root);
     return text;
 }
-inline std::string quoted(const std::string& s) { return "\"" + s + "\""; }
 } // namespace detail2
 
 // Runs `cases` (see the header). Returns the build program's exit code: 0
@@ -359,18 +331,22 @@ inline int run(int argc, char** argv, std::span<const test_case> cases) {
             fs::create_directories(f.parent_path(), ec);
             std::ofstream(f, std::ios::binary) << detail2::expand(content, rootS);
         }
+        // The case's context, every other key absent: stated for the child alone.
+        mcpplibs::os::process::spawn_options o;
+        o.program = self;
+        o.args = {std::string(flag) + std::to_string(n)};
         for (auto const& k : keys) {
-            std::string v;
-            for (auto const& kv : c.ctx.values) if (kv.first == k) v = detail2::expand(kv.second, rootS);
-            detail::set_env(k, v);
+            std::optional<std::string> v;
+            for (auto const& kv : c.ctx.values)
+                if (kv.first == k) v = detail2::expand(kv.second, rootS);
+            if (v && v->empty()) v.reset();
+            o.env.emplace_back(k, std::move(v));
         }
+        auto ran = mcpplibs::os::process::run(std::move(o));
+        const int status = ran ? ran->status.shell_code() : -1;
         const fs::path so = root / "stdout.txt", se = root / "stderr.txt";
-        std::string cmd = detail2::quoted(self.string()) + " " + std::string(flag) + std::to_string(n)
-                        + " > " + detail2::quoted(so.string()) + " 2> " + detail2::quoted(se.string());
-#if defined(_WIN32)
-        cmd = "\"" + cmd + "\"";   // cmd.exe strips one outer pair of quotes
-#endif
-        const int status = std::system(cmd.c_str());
+        std::ofstream(so, std::ios::binary) << (ran ? ran->out : std::string());
+        std::ofstream(se, std::ios::binary) << (ran ? ran->err : ran.error().message());
 
         result r;
         r.exit_code = status;
@@ -396,7 +372,6 @@ inline int run(int argc, char** argv, std::span<const test_case> cases) {
         }
     }
     std::ofstream(base / "results.txt", std::ios::binary) << verdicts;
-    for (auto const& k : keys) detail::set_env(k, "");
     std::cerr << report
               << std::format("mcpp.plugins.testing: {} of {} cases passed\n", cases.size() - failed, cases.size());
     return failed == 0 ? 0 : 1;

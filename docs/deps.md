@@ -188,6 +188,9 @@ Not supported: vcpkg's classic mode; the debug libraries under `debug/lib`.
 
 ## `deps-cmake`: a CMake subproject
 
+Set `options::progress = true` to report the configure and build-install stages when running with mcpp 2026.11.5.1 or later. The default is false. Older engine APIs continue without telemetry. Counts are omitted because this adapter does not know the number of compiler tasks; a restored cached installation need not run either stage. Optional snapshot I/O errors do not fail configure/build/install. The CMake snapshot helper uses `file(RENAME ... RESULT ...)` (CMake 3.21+); older tools can still build while telemetry remains unavailable.
+
+
 ```cpp
 import mcpp.deps.cmake;
 
@@ -254,7 +257,38 @@ resolved toolset. A compiler launcher (`ccache`, `sccache`) is CMake's
 
 Each toolset statement configures its own build directory, because CMake
 refuses a cache made with another generator or instance; the directory 0.16.0
-configured stays `build/`.
+configured stays `build/`. Explicit generator, architecture, toolset and instance
+selections in `cache_args` use separate directories. Returning to a selection
+reuses its directory. Ordinary `-D` settings reconfigure the same directory.
+
+**A build for another target (0.21.0, mcpp 2026.10.30.1+, CMake 3.19+).** When the build's
+target is not the machine (`mcpp build --target x86_64-linux-musl`, an ok image
+`--target x86_64-openkal`), the toolset above is the machine's and is not used.
+The subproject is compiled as the engine compiles the target: the action reads
+the engine's contract for the configuration (`${mcpp.contract}`, see mcpp's
+docs/30) when it runs, and configures a toolchain with its compilers,
+target, sysroot, target-side headers, platform and profile flags, link words
+and archiver. Compiler response files retain argument boundaries and literal
+quotes, backslashes and dollar signs. The same toolchain reaches CMake's
+compile probes. An empty GNU argument is rejected; an option containing an
+empty string value, such as `-DNAME=""`, is retained. Ninja is the default;
+a generator in `cache_args` takes precedence. `CMAKE_SYSTEM_NAME` is the target's system (Linux,
+Android, Darwin, iOS, Windows, Emscripten, `Generic` for bare metal, and Linux
+for an ok image, whose C library is POSIX at the source level), or
+`options::system_name`; `CMAKE_TRY_COMPILE_TARGET_TYPE` is `STATIC_LIBRARY`,
+so compile probes do not require executable startup files or a link runtime.
+Changing `options::system_name` selects a separate CMake build directory.
+The libraries the subproject installs are linked into the consuming program
+by the engine. A tool the subproject runs at build time for the machine
+(LLVM's `llvm-tblgen`) is built in the host graph, as a build dependency's tool,
+and named to the subproject with a `cache_args` entry. An installation of a
+cross build is not kept in the cache below: its compilers are named by the
+contract when the action runs, after the key is written. Compilers or a
+toolchain file in `cache_args` decide here too.
+
+Cross subprojects that link executables or shared libraries require mcpp
+2026.11.7.1 or later. Contract profile options follow CMake's configuration
+flags; `options::config` still selects the CMake configuration.
 
 ### An installation is built once (0.18.0)
 

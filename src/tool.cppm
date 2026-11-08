@@ -28,13 +28,11 @@
 // reports `Using cmake (mcpp.deps.cmake) ← /usr/bin/cmake [program ·
 // build.mcpp:9]` and `mcpp why tool cmake` answers from the same record.
 
-module;
-#include <cstdlib>
-
 export module mcpp.plugins.tool;
 
 import std;
 import mcpp;
+import mcpplibs.os;
 
 namespace mcpp::plugins::tool::detail {
 
@@ -47,13 +45,9 @@ inline std::string generic(const std::filesystem::path& p) {
     return p.lexically_normal().generic_string();
 }
 
-#if defined(_WIN32)
-inline constexpr char kPathSep = ';';
-inline constexpr std::string_view kExe = ".exe";
-#else
-inline constexpr char kPathSep = ':';
-inline constexpr std::string_view kExe = "";
-#endif
+// A build program runs on the machine that builds: its own system's conventions.
+inline constexpr char kPathSep = mcpplibs::os::is_windows ? ';' : ':';
+inline constexpr std::string_view kExe = mcpplibs::os::is_windows ? ".exe" : "";
 
 // `<dir>/<name>`, with and without `.exe`.
 //
@@ -350,6 +344,51 @@ inline std::string describe_missing(const spec& s, const found& f) {
         "  or install the payload: `mcpp build` provisions {} when it is declared.",
         s.option.starts_with("options::") ? s.option.substr(9) : s.option, tool, key, env, key);
     return out;
+}
+
+// WHAT A PROGRAM PRINTS (0.21.0). A member asks a tool for a fact -- `xcrun
+// --show-sdk-path`, a compiler's version, a dry run's plan -- through
+// mcpplibs.os: the program and its arguments as a vector, with no shell between,
+// so nothing is quoted and no null device is named on any host. The standard
+// error is dropped, or appended to the output when `with_errors`. A program that
+// does not end within a minute is ended; `status` is then the shell's code for
+// it, and -1 when the program could not be started at all.
+//
+// NOT INLINE: the two are compiled once, in this unit, and an importer sees
+// only their declarations. GCC 16 fails an importer that instantiates
+// mcpplibs.os's types from another module's inline body: it cannot read the
+// module back ("failed to read compiled module cluster: Bad file data") or
+// leaves `std::optional<std::vector<grant>>` unresolved at the link
+// (`tests/metal-consumer`; docs/plugin-development.md §4).
+struct printed {
+    int         status = -1;
+    std::string out;
+};
+
+printed capture(const std::vector<std::string>& argv, bool with_errors = false,
+                       const std::filesystem::path& cwd = {}) {
+    namespace process = mcpplibs::os::process;
+    if (argv.empty()) return {};
+    process::spawn_options o;
+    o.program = argv.front();
+    o.args.assign(argv.begin() + 1, argv.end());
+    o.cwd = cwd;
+    o.in = process::stdio::null;
+    o.err = with_errors ? process::stdio::pipe : process::stdio::null;
+    auto r = process::run(std::move(o), process::bounds{});
+    if (!r) return {};
+    // The standard error after the output, as a reader of either finds it.
+    if (with_errors) r->out += r->err;
+    return {r->status.shell_code(), std::move(r->out)};
+}
+
+// The first line a program prints, without its line end; empty when it prints
+// nothing or cannot be started.
+std::string first_line(const std::vector<std::string>& argv) {
+    auto text = capture(argv).out;
+    if (auto nl = text.find('\n'); nl != std::string::npos) text.resize(nl);
+    while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) text.pop_back();
+    return text;
 }
 
 } // namespace mcpp::plugins::tool

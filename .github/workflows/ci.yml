@@ -83,18 +83,27 @@ env:
   # phase -- and `mcpp-package.json` beside every staged tree, which
   # `mcpp::plugins::package` reads. Until that release exists the jobs build it
   # from `MCPP_SOURCE_REF` (the repository variable names the branch).
-  MCPP_VERSION: 2026.10.27.1
+  #
+  # 2026.11.7.1 IS WHAT 0.21.0'S CMAKE CROSS LANE NEEDS (mcpp#885): the engine
+  # completes a cross subproject's contract (its compilers, archiver and target)
+  # when the action runs, which a subproject that links an executable or a
+  # shared library needs. The package floor stays 2026.10.30.1: every other
+  # member, and a cross subproject that only builds archives, works on the
+  # older engine, and docs/deps.md states the requirement where cross builds
+  # are described. So here, as for 0.20.0's SYCL lane, `MCPP_VERSION` is the
+  # newest engine a lane needs and the floor the oldest the collection loads on.
+  MCPP_VERSION: 2026.11.7.1
   # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
   #
-  # `MCPP_VERSION` states the engine this collection needs -- the package floor
-  # (`[package] mcpp`) is the same statement -- and a release of it may not exist
+  # `MCPP_VERSION` states the engine this collection's lanes need -- the package
+  # floor (`[package] mcpp`) the oldest it loads on -- and a release of it may not exist
   # yet: 0.19.0 was written against mcpp#755 and pinned 2026.10.1.3 before that
   # release was published. Every fetch therefore names this variable instead, and
   # the dispatch input `mcpp_source_ref` builds the engine under review with it.
   #
   # It moves to `MCPP_VERSION` once that release exists, so the ordinary path
   # runs the engine this collection states.
-  MCPP_BOOTSTRAP: 2026.10.27.1
+  MCPP_BOOTSTRAP: 2026.11.7.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above,
@@ -117,7 +126,7 @@ env:
   # one-line change here. The mcpp is the bootstrap release, which also builds
   # the engine under review when `MCPP_SOURCE_REF` names one.
   MCPPLS_VERSION: 0.0.15
-  MCPP_EDITOR_VERSION: 2026.10.27.1
+  MCPP_EDITOR_VERSION: 2026.11.7.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -221,6 +230,16 @@ jobs:
             exit 1
           fi
           echo "ok: one version, two files agreeing"
+
+      # NO HEADER AND NO PREPROCESSOR BRANCH (0.21.0, docs/plugin-development.md
+      # §4): the operating system is mcpplibs.os's, the C library std's, and a
+      # platform difference of the building machine is `if constexpr`.
+      - name: no unit includes a header or branches in the preprocessor
+        run: |
+          found=$(grep -nE '^[[:space:]]*#[[:space:]]*(include|if|ifdef|ifndef|elif)\b' \
+                    src/*.cppm src/*/*.cppm rules/*.cppm dist/*.cppm deps/*.cppm deps/*/*.cppm tools/*.cppm 2>/dev/null || true)
+          [ -z "$found" ] || { echo "FAIL: a unit includes a header or branches in the preprocessor"; echo "$found"; exit 1; }
+          echo "ok: every unit reaches the system through modules"
 
       # ONE DERIVATION, AND THE CHECK THAT KEEPS IT ONE.
       #
@@ -1470,9 +1489,38 @@ jobs:
           "$MCPP" build
           test -f $(sh "$GITHUB_WORKSPACE/tests/out-dir.sh")/saxpy.sycl.o
           test -f $(sh "$GITHUB_WORKSPACE/tests/out-dir.sh")/sycl_device_link.o
+          python3 verify-images.py sm_89
+          "$MCPP" build --accel 'sycl+{nvptx64-sm_89,nvptx64-sm_90}'
+          python3 verify-images.py sm_89,sm_90
+          "$MCPP" build --accel 'sycl+{spir64,nvptx64-sm_89}'
+          python3 verify-images.py spir64,sm_89
           "$MCPP" build --no-accel
           "$MCPP" run --no-accel | tee run.log
           grep -q '^12 24 36 48' run.log
+
+      # A SYCL library of two NVIDIA architectures and a program that links it (mcpp#899): the library's
+      # device link reads its own objects, so the SDK never unbundles an archive of several architectures,
+      # and each image is its architecture's.
+      - name: rules-sycl through a library of two NVIDIA architectures
+        working-directory: tests/sycl-library-consumer/app
+        run: |
+          "$MCPP" build
+          python3 ../../sycl-consumer/verify-images.py sm_89,sm_90
+          "$MCPP" build --no-accel
+          "$MCPP" run --no-accel | tee run.log
+          grep -q '^12 24 36 48' run.log
+
+      - name: an ordinary worker imports the progress writer without build-program modules
+        working-directory: tests/progress-worker
+        run: python3 verify.py "$MCPP"
+
+      - name: CUDA and SYCL coexist with independent code targets
+        working-directory: tests/multi-accel-consumer
+        run: |
+          "$MCPP" build
+          python3 ../sycl-consumer/verify-images.py sm_89 --cuda-target=sm_90
+          # Both host objects execute; this does not submit work to a GPU.
+          "$MCPP" run
 
       # EVERY RULE COMPILED FOR THIS HOST, which is a different claim from any
       # step above. Each of those exercises one rule and needs that rule's
@@ -1755,6 +1803,24 @@ jobs:
       # prefix are not taken.
       - name: deps-cmake keeps an installation and takes it for the same key
         run: bash .github/scripts/check-deps-and-qt.sh cmake-cache
+
+      # 0.21.0: a subproject of a build for another target is compiled from the
+      # engine's contract for it (mcpp 2026.10.30.1+): musl from a glibc machine.
+      - name: deps-cmake compiles a cross build's subproject from the engine's contract
+        run: bash .github/scripts/check-deps-and-qt.sh cmake-cross
+
+      - name: CMake contract argv survives both generators and compiler dialects
+        run: |
+          helper=$(find tests/cmake-cross/target -name answer-contract.cmake | head -1)
+          test -n "$helper"
+          llvm="${MCPP_HOME:-$HOME/.mcpp}/registry/data/xpkgs/xim-x-llvm/22.1.8/bin"
+          test -x "$llvm/clang-cl"
+          python3 .github/scripts/check-cmake-contract-argv.py "$helper" \
+            --cc /usr/bin/cc --cxx /usr/bin/c++ --msvc-preprocessor "$llvm/clang-cl" \
+            --target-clang "$llvm/clang"
+          python3 .github/scripts/check-cmake-contract-argv.py "$helper" \
+            --cc "$llvm/clang" --cxx "$llvm/clang++"
+          python3 .github/scripts/check-cmake-cache-identity.py "$MCPP"
 
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
@@ -2528,6 +2594,10 @@ jobs:
 
       # The test kit on this host: the same stated contexts, so a decision that
       # depends on the host the build program runs on is caught here.
+      - name: standalone progress uses Unicode channels on this host
+        working-directory: tests/progress-worker
+        run: python3 verify.py "$MCPP"
+
       - name: the deps members' decisions hold against stated build contexts (mcpp.plugins.testing)
         run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
 

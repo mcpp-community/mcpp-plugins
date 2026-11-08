@@ -14,11 +14,13 @@ Module `mcpp.rules.cuda`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.
 
 **Needs and behaviour.** `[build] accel = "cuda…"`, a constrained glob for `*.cu`; the clang route with an LLVM toolchain, the nvcc route with a GCC one
 
+The rule supplies toolkit search directories. The consumer selects the CUDA runtime link policy; for the Linux static-runtime arrangement used by the fixtures, the CUDA configuration states `ldflags = ["-lcudart_static", "-lrt", "-lpthread", "-ldl"]`.
+
 ## `rules-hip`
 
 Module `mcpp.rules.hip`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.6 before).
 
-**Needs and behaviour.** `[build] accel = "hip, cuda12.9+{sm_89}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine
+**Needs and behaviour.** `[build] accel = "hip+{sm_89,sm_90}"`, a constrained glob for `*.hip`. On the NVIDIA platform HIP is a header layer over the CUDA runtime, so the compiler is the project's own clang and there is no ROCm on the machine
 
 ## `rules-metal`
 
@@ -50,4 +52,16 @@ Module `mcpp.rules.sycl`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.6.
 
 **One C++ runtime, libstdc++ (0.20.0).** `libsycl.so` is compiled against libstdc++ and throws `sycl::exception` on it, and a typed `catch` does not match across two C++ runtimes in one process (mcpp#838). The program's own C++ library is therefore libstdc++: a gcc toolchain, or llvm with `gcc.libstdcxx` in the graph (`[target.'cfg(accelerator = "sycl")'.dependencies] gcc.libstdcxx = "16.1.0.1"`). On Linux the rule refuses any other C++ library before a unit is compiled, naming both remedies, and `compat:sycl-runtime` states the same requirement. The rule names no C++ library on the link line (0.19 added `-l:libstdc++.so.6` beside an llvm build's libc++); `--gcc-install-dir` follows the build's GCC: the graph's supplier (`MCPP_CXX_ABI_ROOT`), else the gcc toolchain's payload, else the `xim:gcc` the rule declares.
 
-**Needs and behaviour.** `[build] accel = "sycl"` or `"sycl, cuda12.9+{sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1
+**Needs and behaviour.** `[build] accel = "sycl"` or `"sycl+{nvptx64-sm_89}"`, a constrained glob for `*.sycl`, and `compat:sycl-runtime` so the artifact can reach `libsycl.so.9` at run time. Its own engine need is `.sycl` in the device-source table, 2026.9.6.1
+
+
+**SYCL targets belong to SYCL.** `sycl+{nvptx64-sm_89,nvptx64-sm_90}` produces both NVIDIA images. `sycl+{spir64,nvptx64-sm_89}` carries portable SPIR-V beside an NVIDIA image. `sycl` and `sycl+{spir64}` request portable SPIR-V; `sm_89` remains an alias for `nvptx64-sm_89`. An unknown target is refused before compilation. AMD `gfx*` requests are recognized but refused because this rule does not yet supply a ROCm compiler/runtime closure.
+
+Each selected implementation owns its targets. A repository may retain CUDA and SYCL source groups while selecting only `sycl+{nvptx64-sm_89}`; the CUDA group is excluded by its source constraint and the CUDA rule need not be imported. Selecting `cuda+{sm_90},sycl+{nvptx64-sm_89}` selects both implementations with different targets. The rule passes the same target vector to compilation and device linking. Its CUDA compiler payload is requested only for a SYCL NVIDIA target; `options::cuda` accepts the same explicit choice as other rule tools.
+
+The older `sycl,cuda+{sm_89}` form still inherits CUDA targets when the SYCL member has no targets, with a migration warning. Both named implementations remain selected. Explicit SYCL targets are never replaced by a CUDA member. Move the device target to the SYCL member to select only SYCL. GPU execution still requires a compatible device and driver; CI verifies the emitted images and the CPU fallback separately.
+
+**Several NVIDIA architectures in a library.** Each package's device link reads that package's own objects (`-fsycl-link` over its `.sycl.o`), so a library's images are registered inside the library and a consumer's link never asks the SDK to unbundle an archive; a library of `sycl+{nvptx64-sm_89,nvptx64-sm_90}` links into a program with each image its own architecture's (`tests/sycl-library-consumer`). Not supported: handing the SDK an archive of several NVIDIA architectures to device-link (a prebuilt SYCL `.a`, or a kernel that calls a `SYCL_EXTERNAL` function of another package). DPC++ 7.1.0's `clang-offload-bundler` matches the five-part bundle IDs its driver writes (`sycl-nvptx64-nvidia-cuda-sm_89`) to every NVPTX request, so unbundling such an archive for one architecture yields the members of all of them and the device link reports duplicate definitions (mcpp#899, an SDK defect). There, build that archive for one architecture, or keep the device code of each architecture in the package that launches it. The rule keeps every requested architecture; it neither drops one nor reuses one architecture's code for another.
+
+
+The `tests/multi-accel-consumer` fixture selects `cuda+{sm_90},sycl+{nvptx64-sm_89}` and imports both rules. CI inspects each rule's actual image target and runs both host objects without submitting GPU work. This establishes build/link coexistence with one C++ runtime; device execution, interoperation and synchronization require their own runtime checks.

@@ -1,0 +1,39 @@
+[package]
+name         = "saxpy"
+namespace    = "example"
+version      = "0.1.0"
+description  = "A SYCL library of several NVIDIA architectures, behind a seam module"
+accelerators = ["sycl"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[toolchain]
+default = "llvm@22.1.8"
+
+[build-dependencies.mcpp]
+plugins = { path = "../../..", features = ["rules-sycl"], host-module = true }
+
+[target.'cfg(accelerator = "sycl")'.dependencies.compat]
+sycl-runtime = "2026.09.07"
+
+[target.'cfg(accelerator = "sycl")'.dependencies.gcc]
+libstdcxx = "16.1.0.1"
+
+# The library's own device link reads its own objects (rules/sycl.cppm): its
+# images are registered inside the library, so a consumer's link never asks the
+# SDK to unbundle an archive of several architectures (mcpp#899).
+[build]
+sources = [
+  "src/*.cppm",
+  { glob = "src/kernels/**/*.sycl", accel = "sycl" },
+]
+include_dirs = ["include"]
+
+[target.'cfg(not(accelerator = "sycl"))'.build]
+sources = ["src/cpu/*.cpp"]
+
+[targets.saxpy]
+kind = "lib"

@@ -17,9 +17,6 @@
 // because only the lib root is built first. So shared code lives here rather
 // than in a file of its own, and a member that needs it writes
 // `import mcpp.plugins;`.
-module;
-#include <cctype>
-
 export module mcpp.plugins;
 
 import std;
@@ -49,7 +46,7 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.20.0";
+inline constexpr std::string_view version = "0.21.0";
 
 } // namespace mcpp::plugins
 
@@ -1307,14 +1304,31 @@ inline emitted outputs(const options& opt) {
 }
 
 
+// The assembly's meaning includes the bytes named by .incbin. Put a content
+// checksum in its source so restat cannot prune the assembler after a payload
+// changes while the .incbin path stays the same. This runs in the body action,
+// after its declared payload inputs exist; planning still reads no payload.
+inline std::optional<std::uint64_t> payload_checksum(const std::string& file) {
+    std::ifstream input(file, std::ios::binary);
+    if (!input) return std::nullopt;
+    std::uint64_t sum = 14695981039346656037ULL;
+    std::array<char, 8192> bytes;
+    while (input) {
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        for (std::streamsize i = 0; i < input.gcount(); ++i) {
+            sum ^= static_cast<unsigned char>(bytes[static_cast<std::size_t>(i)]);
+            sum *= 1099511628211ULL;
+        }
+    }
+    return input.bad() ? std::nullopt : std::optional(sum);
+}
+
 // Writes ONE half of the surface. The names come from `outputs`, which the
 // caller has already asked; this produces the content.
 //
-// Nothing here reads a payload's BYTES. Under object storage the assembly names
-// each payload in `.incbin` and the assembler reads it later, which is why this
-// can be an action whose command runs before, after or independently of the
-// payload's own producer -- what matters is that the payload is a declared
-// INPUT of that action, and the graph then holds the edge.
+// The interface reads no payload. The object body runs after its declared
+// payload inputs, records their content checksum and names them in .incbin;
+// the assembler reads the bytes after that body action has completed.
 inline bool write(std::span<const item> items, const options& opt, half which) {
     if (items.empty()) return true;
     if (opt.module_name.empty()) {
@@ -1520,8 +1534,16 @@ blob& load(const char* path, blob& b) {{
                 it.identifier);
             return false;
         }
-        if (!write_if_different(out.assembly_file,
-                                assembly_for(items, opt, opt.target_os))) {
+        auto assembly = assembly_for(items, opt, opt.target_os);
+        for (const auto& it : items) {
+            const auto checksum = payload_checksum(it.payload_path);
+            if (!checksum) {
+                std::cerr << std::format("mcpp.plugins.surface: cannot read payload {}\n", it.payload_path);
+                return false;
+            }
+            assembly += std::format("// payload content: {:016x}\n", *checksum);
+        }
+        if (!write_if_different(out.assembly_file, assembly)) {
             std::cerr << std::format("mcpp.plugins.surface: cannot write {}\n",
                                      out.assembly_file);
             return false;

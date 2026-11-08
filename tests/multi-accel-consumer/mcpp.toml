@@ -1,0 +1,20 @@
+[package]
+name = "multi-accel-consumer"
+version = "0.1.0"
+accelerators = ["cuda", "sycl"]
+[toolchain]
+default = "llvm@22.1.8"
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-cuda", "rules-sycl"], host-module = true }
+[dependencies.compat]
+cuda-runtime = "2026.09.05"
+sycl-runtime = "2026.09.07"
+[dependencies.gcc]
+libstdcxx = "16.1.0.1"
+[build]
+accel = "cuda+{sm_90},sycl+{nvptx64-sm_89}"
+ldflags = ["-lcudart_static", "-lrt", "-lpthread", "-ldl"]
+sources = ["src/main.cpp", { glob = "src/*.cu", accel = "cuda" }, { glob = "src/*.sycl", accel = "sycl" }]
+[targets.multi-accel-consumer]
+kind = "bin"
+main = "src/main.cpp"

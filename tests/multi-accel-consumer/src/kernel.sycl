@@ -1,0 +1,6 @@
+#include <sycl/sycl.hpp>
+extern "C" void sycl_kernel(int* value){
+    sycl::queue queue;
+    queue.single_task([=]{*value=2;}).wait_and_throw();
+}
+extern "C" int sycl_anchor(){return 2;}

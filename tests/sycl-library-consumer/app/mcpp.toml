@@ -1,0 +1,30 @@
+[package]
+name         = "app"
+version      = "0.1.0"
+description  = "A program that links the SYCL library built for two NVIDIA architectures"
+accelerators = ["sycl"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[toolchain]
+default = "llvm@22.1.8"
+
+[dependencies.example]
+saxpy = { path = "../saxpy" }
+
+[target.'cfg(accelerator = "sycl")'.dependencies.compat]
+sycl-runtime = "2026.09.07"
+
+[target.'cfg(accelerator = "sycl")'.dependencies.gcc]
+libstdcxx = "16.1.0.1"
+
+[build]
+accel = "sycl+{nvptx64-sm_89,nvptx64-sm_90}"
+sources = ["src/*.cpp"]
+
+[targets.app]
+kind = "bin"
+main = "src/main.cpp"
