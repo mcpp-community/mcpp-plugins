@@ -253,27 +253,27 @@ inline plan plan_for(options opt = {}) {
     // something that does not exist there, and the engine has already
     // accepted the value because the graph declared it.
     if (const std::string os = mcpp::target_os(); os != "emscripten") {
-        std::cerr << std::format(
+        mcpp::warning(std::format(
             "mcpp.dist.web: a web directory wraps a wasm32-emscripten "
-            "program, and this build targets '{}'.\n"
-            "  use: --format tar, or build for --target wasm32-emscripten",
-            os.empty() ? "unknown" : os) << '\n';
+            "program, and this build targets '{}'; use --pkg-format tar, or "
+            "build for --target wasm32-emscripten",
+            os.empty() ? "unknown" : os).c_str());
         p.reason = "not the emscripten target";
         return p;
     }
 
     const std::string stage = mcpp::pack_stage_dir();
     if (stage.empty()) {
-        std::cerr << "mcpp.dist.web: mcpp reported no staged tree. This "
-                     "member needs mcpp 2026.9.12.2 or newer.\n";
+        mcpp::warning("mcpp.dist.web: mcpp reported no staged tree. This "
+                      "member needs mcpp 2026.9.12.2 or newer.");
         p.reason = "no staged tree";
         return p;
     }
 
     const std::string target = target_for(opt);
     if (target.empty()) {
-        std::cerr << "mcpp.dist.web: no target to wrap. Set "
-                     "`options::target` to the program target's name.\n";
+        mcpp::warning("mcpp.dist.web: no target to wrap. Set "
+                      "`options::target` to the program target's name.");
         p.reason = "no target";
         return p;
     }
@@ -286,18 +286,17 @@ inline plan plan_for(options opt = {}) {
     const std::string stageBin  = stage + "/bin";
     const std::string launcher  = stageBin + "/" + target + ".js";
     if (!is_file(launcher)) {
-        std::cerr << std::format(
+        mcpp::warning(std::format(
             "mcpp.dist.web: the staged tree at {0} carries no launcher for "
-            "target '{1}'.\n"
-            "  expected: {0}/{1}.js",
-            stageBin, target) << '\n';
+            "target '{1}' (expected {0}/{1}.js); name the program with "
+            "`options::target`",
+            stageBin, target).c_str());
         p.reason = "no launcher in the staged tree";
         return p;
     }
 
     const auto pageFile = page_name(opt);
     if (!pageFile) {
-        std::cerr << "mcpp.dist.web: " << pageFile.error() << '\n';
         mcpp::warning(("mcpp.dist.web: " + pageFile.error()).c_str());
         p.reason = "page name refused";
         return p;
@@ -307,8 +306,8 @@ inline plan plan_for(options opt = {}) {
         const std::string tpl =
             (std::filesystem::path(mcpp::manifest_dir()) / opt.template_file).string();
         if (!is_file(tpl)) {
-            std::cerr << std::format(
-                "mcpp.dist.web: the template {} was not found", tpl) << '\n';
+            mcpp::warning(std::format(
+                "mcpp.dist.web: the template {} was not found", tpl).c_str());
             p.reason = "template not found";
             return p;
         }
@@ -341,7 +340,7 @@ inline plan plan_for(options opt = {}) {
     const std::string indexSrc =
         (std::filesystem::path(opt.out_dir) / ".dist-web" / (target + "-" + *pageFile + ".in")).string();
     if (!write_if_different(indexSrc, templateBytes)) {
-        std::cerr << std::format("mcpp.dist.web: cannot write {}", indexSrc) << '\n';
+        mcpp::warning(std::format("mcpp.dist.web: cannot write {}", indexSrc).c_str());
         p.reason = std::format("cannot write {}", *pageFile);
         return p;
     }
@@ -373,8 +372,8 @@ inline plan plan_for(options opt = {}) {
         // assertion, because a member's job on a broken invariant is to say
         // so, not to crash the build program that is packaging someone
         // else's project.
-        std::cerr << std::format(
-            "mcpp.dist.web: {} carries no files to stage", stageBin) << '\n';
+        mcpp::warning(std::format(
+            "mcpp.dist.web: {} carries no files to stage", stageBin).c_str());
         p.reason = "staged bin/ is empty";
         return p;
     }
