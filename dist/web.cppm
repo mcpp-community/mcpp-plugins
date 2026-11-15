@@ -126,6 +126,14 @@ struct options {
     // Where the produced directory lands. Empty means `<out_dir>/web`.
     std::string output;
     std::string out_dir = std::string(mcpp::out_dir());
+
+    // A runner named `web` (0.22.0): `mcpp run --pkg-format web` serves the
+    // directory on this machine and opens the page in a browser, through the
+    // `emrun` the Emscripten toolchain carries, until the operator ends it
+    // (a long-lived runner). It listens on `localhost` only; a machine that
+    // wants another browser, port or address replaces the runner in its
+    // `config.toml` (`[target.wasm32-emscripten.runners] web = [...]`).
+    bool runner = true;
 };
 
 // ─── The plan ──────────────────────────────────────────────────────────────
@@ -146,6 +154,7 @@ struct plan {
     std::string       reason;
     std::string       web_dir;   // <out_dir>/web
     std::string       stage_bin; // ${mcpp.stage_dir}/bin, kept for the floor check
+    std::string       page;      // the page, the format's distributable
     std::vector<step> steps;
     explicit operator bool() const { return applies; }
 };
@@ -325,10 +334,12 @@ inline plan plan_for(options opt = {}) {
                               : (std::filesystem::path(opt.out_dir) / "web").string();
 
     // The side file carries the page name, so two packs of one program with
-    // different pages do not overwrite each other's rendering; the default
-    // keeps the name 0.11 wrote (`<target>-index.html`).
+    // different pages do not overwrite each other's rendering. It is the
+    // page's source, not a page (0.22.0): it lives in a hidden directory and
+    // ends in `.in`, because one written beside the build's outputs as
+    // `<target>-index.html` was opened as the product and loaded nothing.
     const std::string indexSrc =
-        (std::filesystem::path(opt.out_dir) / (target + "-" + *pageFile)).string();
+        (std::filesystem::path(opt.out_dir) / ".dist-web" / (target + "-" + *pageFile + ".in")).string();
     if (!write_if_different(indexSrc, templateBytes)) {
         std::cerr << std::format("mcpp.dist.web: cannot write {}", indexSrc) << '\n';
         p.reason = std::format("cannot write {}", *pageFile);
@@ -394,6 +405,11 @@ inline plan plan_for(options opt = {}) {
         p.steps.push_back(std::move(s));
     }
 
+    // THE PAGE IS THE DIRECTORY'S ONE DISTRIBUTABLE (0.22.0). A distributable
+    // is an output no other action consumes; each copied file was one, so the
+    // format had as many as the directory has files and `mcpp run --pkg-format
+    // web` refused to choose. The page's step takes every copied file as an
+    // input: it is ordered after them, and it is what a runner is handed.
     step page;
     page.id          = "mcpp.dist.web.index";
     page.role        = "artifact";
@@ -401,8 +417,11 @@ inline plan plan_for(options opt = {}) {
     page.argv    = { "${mcpp.self}", "stage", "--verify", "content", "--output",
                      webDir + "/" + *pageFile, indexSrc };
     page.inputs  = { indexSrc };
+    for (auto const& s : p.steps)
+        page.inputs.insert(page.inputs.end(), s.outputs.begin(), s.outputs.end());
     page.outputs = { webDir + "/" + *pageFile };
     p.steps.push_back(std::move(page));
+    p.page = webDir + "/" + *pageFile;
 
     p.applies = true;
     return p;
@@ -437,6 +456,17 @@ inline bool submit(const plan& p) {
     // catch "nothing was linked or staged", not to police a size budget. A
     // wasm launcher plus its module is comfortably larger than this on any
     // program that links `import std`.
+    // HOW THE DIRECTORY IS OPENED, said once it is declared: a browser loads
+    // the module only over HTTP, and a page opened from disk loads nothing
+    // without saying why.
+    {
+        static std::string message, hint;
+        message = std::format("the web directory is {}", p.web_dir);
+        hint = std::format("open it over HTTP: `mcpp run --pkg-format web` serves it and opens {}, "
+                           "or serve the directory with any static server; a page opened from disk "
+                           "cannot load its .wasm", std::filesystem::path(p.page).filename().string());
+        mcpp::report({.severity = "note", .message = message.c_str(), .hint = hint.c_str()});
+    }
     if (bytes < 4u * 1024u) {
         static char msg[512];
         std::snprintf(msg, sizeof msg,
@@ -448,6 +478,44 @@ inline bool submit(const plan& p) {
     return true;
 }
 
+// ─── The runner ────────────────────────────────────────────────────────────
+
+// THE RUNNER NAMED FOR THE FORMAT (0.22.0). `mcpp run --pkg-format web` hands
+// the format's distributable -- the page -- to the runner named `web`. emrun,
+// which the Emscripten toolchain carries, serves the page's directory with the
+// types a browser requires (`application/wasm`), opens the page, and serves
+// until the operator ends it; it does not end by itself, so the runner is
+// declared long-lived. `--hostname localhost`: emrun listens on every address
+// unless told otherwise, and a development server is not offered to the
+// network by default.
+//
+// Declared on every pass of the wasm32-emscripten row, as the format itself
+// is: `mcpp run` reads it from a build that is not packaging. On Windows the
+// toolchain carries the script as `emrun.bat`; the program is named by its
+// path because it is not in the bin/ of a payload, where the engine looks for
+// a runner's bare name.
+inline void declare_runner() {
+    if (mcpp::target_os() != std::string_view("emscripten")) return;
+    const char* root = mcpp::toolchain_dir();
+    if (!root || !*root) return;
+    const std::string host = mcpp::host();
+    const bool windows = host.find("windows") != std::string::npos;
+    static std::string program;
+    program = (std::filesystem::path(root) / "emscripten" / (windows ? "emrun.bat" : "emrun"))
+                  .generic_string();
+    if (!is_file(program)) {
+        static std::string why;
+        why = std::format("mcpp.dist.web: the toolchain at {} carries no {}, so `mcpp run "
+                          "--pkg-format web` has no runner", root,
+                          std::filesystem::path(program).filename().string());
+        mcpp::warning(why.c_str());
+        return;
+    }
+    for (const char* tok : {program.c_str(), "--hostname", "localhost", "{}"})
+        mcpp::runner("web", tok);
+    mcpp::runner_longlived("web");
+}
+
 // ─── The one call a consumer makes ─────────────────────────────────────────
 
 // DECLARE UNCONDITIONALLY, SUBMIT CONDITIONALLY -- and both halves are here
@@ -456,6 +524,7 @@ inline bool submit(const plan& p) {
 // same way `plan_for` gates its submission.
 inline bool generate(options opt = {}) {
     mcpp::provides_pack_format("web");
+    if (opt.runner) declare_runner();
     return submit(plan_for(std::move(opt)));
 }
 
