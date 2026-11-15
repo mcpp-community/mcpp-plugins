@@ -517,12 +517,29 @@ inline void declare_runner() {
 
 // ─── The one call a consumer makes ─────────────────────────────────────────
 
+// THE PROGRAM THE DIRECTORY WRAPS, STATED TO THE ENGINE (0.22.1; mcpp
+// 2026.11.16.1, protocol 19). `mcpp pack --pkg-format web` with no program
+// named packs the program `options::target` names, as `mcpp pack <program>`
+// would: a package of several programs packed its first, which this format
+// then did not find. Stated when the engine's module has the call; an older
+// engine keeps its own choice, which `mcpp pack <program>` overrides.
+namespace pack_program_probe {
+using namespace mcpp;
+template <class S>
+concept stated = requires(S s) { pack_program(s); };
+template <class S>
+void state(S program) {
+    if constexpr (stated<S>) pack_program(program);
+}
+} // namespace pack_program_probe
+
 // DECLARE UNCONDITIONALLY, SUBMIT CONDITIONALLY -- and both halves are here
 // so a consumer cannot do one without the other. See `dist/appimage.cppm`'s
 // own comment on this function for why the declaration cannot be gated the
 // same way `plan_for` gates its submission.
 inline bool generate(options opt = {}) {
     mcpp::provides_pack_format("web");
+    if (!opt.target.empty()) pack_program_probe::state(opt.target.c_str());
     if (opt.runner) declare_runner();
     return submit(plan_for(std::move(opt)));
 }
