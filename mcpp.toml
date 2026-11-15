@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.21.0"
+version     = "0.22.0"
 # The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
 # platform's directives `mcpp.plugins.platform` states (`link_driver`,
 # `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and

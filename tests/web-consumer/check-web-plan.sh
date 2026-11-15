@@ -73,6 +73,39 @@ out=$(node "$WEB/web-consumer.js")
 [ "$out" = "1-2-3" ] || fail "node did not print 1-2-3 (got: $out)"
 echo "ok: node $WEB/web-consumer.js prints 1-2-3"
 
+echo "== the page is the one distributable, and its source is not mistaken for it (0.22.0) =="
+grep -q "Packed .*/web/index.html" pack.log || fail "mcpp pack did not name index.html as the distributable" pack.log
+grep -q "note: .*the web directory is" pack.log || fail "mcpp pack did not say where the web directory is" pack.log
+grep -q "open it over HTTP" pack.log || fail "mcpp pack did not say how the directory is opened" pack.log
+stray=$(find target -name '*-index.html' -not -path '*/.dist-web/*')
+[ -z "$stray" ] || fail "a page source lies beside the build's outputs as a page: $stray"
+echo "ok: one distributable (index.html); the page's source is .dist-web/*.html.in"
+
+echo "== mcpp run --pkg-format web serves the page through the runner named web (0.22.0) =="
+"$MCPP" run --target wasm32-emscripten --list-runners > runners.log 2>&1 || fail "--list-runners failed" runners.log
+grep -E '^ +web +.*emrun.*long-lived' runners.log || fail "no long-lived runner named web" runners.log
+# No browser on a CI machine: emrun says so and keeps serving, which is what
+# is measured -- the page and the module, with the type a browser requires.
+# mcpp becomes the runner (its image replaced on POSIX), so the started
+# process is the server, and an interrupt is the operator ending it.
+"$MCPP" run --pkg-format web --target wasm32-emscripten > serve.log 2>&1 &
+server=$!
+served=
+for i in $(seq 1 45); do
+    if curl -fsS -o target/served.wasm -w '%{content_type}' http://localhost:6931/web-consumer.wasm > target/served.type 2>/dev/null; then served=1; break; fi
+    sleep 1
+done
+[ -n "$served" ] || fail "nothing was served on localhost:6931" serve.log
+grep -q 'application/wasm' target/served.type || fail "the module was not served as application/wasm" target/served.type
+curl -fsS http://localhost:6931/index.html | grep -q 'web-consumer.js' || fail "the page was not served" serve.log
+grep -q 'localhost' serve.log || fail "the server does not say it listens on localhost" serve.log
+# A background job of a script ignores SIGINT (POSIX), so the operator's end
+# is stated as SIGTERM here.
+kill -TERM "$server"
+for i in $(seq 1 20); do kill -0 "$server" 2>/dev/null || break; sleep 1; done
+kill -0 "$server" 2>/dev/null && { kill -KILL "$server"; fail "the server did not end when interrupted" serve.log; }
+echo "ok: the page and its module are served on localhost (application/wasm)"
+
 echo "== options::page names the page, and refuses a name that is not a bare *.html file =="
 # A copy of this fixture beside it, so its path dependency on the collection
 # (`../..`) still resolves; the copy's build program sets `options::page`.

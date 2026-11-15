@@ -46,7 +46,7 @@ export namespace mcpp::plugins {
 //
 // One package, one version: the number lives in mcpp.toml, and the CI step
 // `the collection states its own version` compares the two.
-inline constexpr std::string_view version = "0.21.0";
+inline constexpr std::string_view version = "0.22.0";
 
 } // namespace mcpp::plugins
 
