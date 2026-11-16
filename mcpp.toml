@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.22.0"
+version     = "0.22.1"
 # The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
 # platform's directives `mcpp.plugins.platform` states (`link_driver`,
 # `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and
@@ -98,9 +98,11 @@ sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm
 # The operating system of every member: the programs a member asks for a fact
 # (`mcpp.plugins.tool::capture`), the libraries it opens and the platform it
 # builds on, through mcpplibs.os. No unit includes a system header (0.21.0,
-# docs/plugin-development.md §4).
+# docs/plugin-development.md §4). 0.4.4 (0.22.1) accepts openkal 0.24 and 0.25,
+# so a graph whose openkal is 0.25 (openkal-platform's version group) holds the
+# plugins; 0.4.0 named openkal 0.24.0 alone.
 [feature-deps.plugins-core]
-mcpplibs.os = "0.4.0"
+mcpplibs.os = "0.4.4"
 
 # `mcpp.plugins.toolchain` -- the builders a root build program states its
 # build toolchain with, in the toolchain phase of a project whose `[toolchain]`
@@ -322,7 +324,7 @@ sources = ["src/progress.cppm", "src/progress_writer.cppm"]
 # Since 0.3.1 a name in Windows' long spelling is the name it spells (the progress channel's path may
 # be one). One release, the one mcpp's own modules name, so a build is the same at any later time.
 [feature-deps.plugins-progress]
-mcpplibs.os = "0.4.0"
+mcpplibs.os = "0.4.4"
 
 [features.deps-cmake]
 sources = ["deps/cmake.cppm"]
