@@ -1,4 +1,4 @@
-# `dist-appimage`, `dist-wix` and `dist-web`
+# `dist-appimage`, `dist-deb`, `dist-rpm`, `dist-wix` and `dist-web`
 
 Three `dist-*` members that turn the tree `mcpp pack` stages into an installable form: an AppImage on Linux, an MSI or a Burn bundle on Windows, and a web directory for `wasm32-emscripten`. `dist-apple` and `dist-apk` have pages of their own ([dist-apple.md](dist-apple.md), [dist-apk.md](dist-apk.md)).
 
@@ -7,6 +7,14 @@ Three `dist-*` members that turn the tree `mcpp pack` stages into an installable
 Module `mcpp.dist.appimage`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.11.1 before). Its `xim:appimagetool` is installed when a pack asks for it (`provision = "on-request"`), so an ordinary Linux build downloads none.
 
 **Needs and behaviour.** `xim:appimagetool`, which this feature declares on the `cfg(linux)` axis. Linux only. Turns the tree `mcpp pack` staged into one AppImage: the staged bundle is already an AppDir bar three files, so the member writes an `AppRun`, a `.desktop` entry and an icon into it and invokes one tool -- it never copies or re-lays-out a tree that can be hundreds of megabytes. From 0.11.1 `options::icon` may be an SVG as well as a PNG: the image carries `<name>.svg`, because the desktop entry names the icon without an extension and a reader finds it by the file's, and any other format is refused by name
+
+## `dist-deb` and `dist-rpm`
+
+Modules `mcpp.dist.deb` and `mcpp.dist.rpm`, both on `mcpp.dist.linux_package` (feature `dist-linux-package`, which each implies); engine floor: 2026.10.30.1. Their `xim:nfpm` (2.49.0 or newer) is installed when a pack asks for it (`provision = "on-request"`), so an ordinary build downloads none. From 0.23.0.
+
+**Needs and behaviour.** `xim:nfpm`, declared on the `cfg(linux)` axis; no `dpkg-deb` or `rpmbuild` on the host. Linux targets only; another target is refused by name. `--pkg-format deb` or `--pkg-format rpm` installs the tree `mcpp pack` staged, unchanged, under `/opt/<name>`, adds `/usr/bin/<name>` that execs the tree's launcher, and, unless `options::desktop` is false, a desktop entry in `/usr/share/applications` and the icon `options::icon` names (an SVG in `hicolor/scalable/apps`, a PNG in `/usr/share/pixmaps`). The control fields come from `[package]`: name, version, description, licence, repository, and the first author as maintainer; a package without a maintainer is refused rather than published under a guessed one. `options::depends` lists packages the machine provides, by the target distribution's names; the staged `mcpp-package.json` says what the tree left to the machine.
+
+**Reproducible.** Every staged file is listed with an explicit mode and time (`SOURCE_DATE_EPOCH`, or 2000-01-01 when unset), because nfpm's `tree` entries keep each source file's mtime and its top-level `mtime` does not reach them; packing a re-staged, unchanged tree gives byte-identical packages. `tests/linux-package-consumer` packs both formats and reads them back.
 
 ## `dist-wix`
 

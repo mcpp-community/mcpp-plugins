@@ -1283,6 +1283,53 @@ jobs:
       # the compiled build program's actual behaviour under the exact
       # environment contract `--target aarch64-ios-sim --format app` and the
       # device row would set, run directly rather than through mcpp.
+      - name: dist-deb and dist-rpm produce packages that carry the program, reproducibly
+        working-directory: tests/linux-package-consumer
+        run: |
+          # A plain build has no distribution edge, yet both formats are known.
+          "$MCPP" build
+          if find target -name '*.deb' -o -name '*.rpm' | grep -q .; then
+            echo "FAIL: a plain build produced a package"; exit 1
+          fi
+          set +e
+          se=$("$MCPP" pack --pkg-format bogus 2>&1 >/dev/null)
+          set -e
+          grep -qE 'available in this build: .*\bdeb\b' <<<"$se" && grep -qE 'available in this build: .*\brpm\b' <<<"$se" \
+            || { echo "FAIL: the refusal does not name deb and rpm"; echo "$se"; exit 1; }
+
+          "$MCPP" pack --pkg-format deb | tee pack-deb.log
+          "$MCPP" pack --pkg-format rpm | tee pack-rpm.log
+          deb=$(find target -name 'linux-package-consumer_0.4.0_*.deb' | head -1)
+          rpm=$(find target -name 'linux-package-consumer-0.4.0-1.*.rpm' | head -1)
+          test -n "$deb" && test -n "$rpm" || { echo "FAIL: no package was produced"; exit 1; }
+
+          # The control fields come from [package], and the dependency the project stated is recorded.
+          dpkg-deb --field "$deb" Package Version Maintainer Depends | tee fields.log
+          grep -q '^Maintainer: mcpp-community <' fields.log && grep -q '^Depends: bash' fields.log \
+            || { echo "FAIL: the deb's control fields"; exit 1; }
+          rpm -qp --requires "$rpm" | grep -qx bash || { echo "FAIL: the rpm does not require bash"; exit 1; }
+
+          # The same files in both, and the installed program runs through /usr/bin.
+          dpkg-deb --contents "$deb" | awk '{print $6}' | sed 's|^\./|/|' | grep -v '/$' | sort > deb-files.txt
+          rpm -qlp "$rpm" | sort > rpm-files.txt
+          diff deb-files.txt rpm-files.txt || { echo "FAIL: deb and rpm carry different files"; exit 1; }
+          for f in /usr/bin/linux-package-consumer /usr/share/applications/linux-package-consumer.desktop \
+                   /usr/share/icons/hicolor/scalable/apps/linux-package-consumer.svg; do
+            grep -qx "$f" deb-files.txt || { echo "FAIL: $f is not in the package"; exit 1; }
+          done
+          sudo dpkg -i "$deb"
+          linux-package-consumer | tee run.log
+          grep -q '^linux-package-consumer ok' run.log || { echo "FAIL: the installed program did not run"; exit 1; }
+          sudo dpkg -r linux-package-consumer
+
+          # Re-staging an unchanged program gives the same bytes.
+          before=$(sha256sum "$deb" "$rpm")
+          touch src/main.cpp
+          "$MCPP" pack --pkg-format deb > /dev/null
+          "$MCPP" pack --pkg-format rpm > /dev/null
+          [ "$before" = "$(sha256sum "$deb" "$rpm")" ] || { echo "FAIL: repacking changed the packages"; exit 1; }
+          echo "ok: deb and rpm"
+
       - name: dist-apple's iOS row, checked at the plan level
         working-directory: tests/ios-app-consumer
         run: MCPP="$MCPP" ./check-ios-plan.sh

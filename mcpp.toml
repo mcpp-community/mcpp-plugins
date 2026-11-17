@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.22.1"
+version     = "0.23.0"
 # The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
 # platform's directives `mcpp.plugins.platform` states (`link_driver`,
 # `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and
@@ -274,6 +274,22 @@ implies = ["plugins-core"]
 [features.dist-apk]
 sources = ["dist/apk.cppm"]
 implies = ["plugins-core"]
+
+# `dist-deb` AND `dist-rpm` (0.23.0) SHARE ONE UNIT AND ONE TOOL. Both install
+# the staged closure under `/opt/<name>` with a launcher, a desktop entry and an
+# icon, and nfpm writes either format from one description, so the layout lives
+# in `dist/linux-package.cppm` behind a feature of its own that both imply.
+[features.dist-linux-package]
+sources = ["dist/linux-package.cppm"]
+implies = ["plugins-core"]
+
+[features.dist-deb]
+sources = ["dist/deb.cppm"]
+implies = ["dist-linux-package"]
+
+[features.dist-rpm]
+sources = ["dist/rpm.cppm"]
+implies = ["dist-linux-package"]
 
 # `dist-apk` WITH THE KOTLIN COMPILER, AND WITH THE MAVEN RESOLVER (0.11.0).
 # Features of their own rather than payloads of `dist-apk`, for the reason
@@ -569,6 +585,16 @@ implies           = ["plugins-core"]
 # nothing, and `mcpp pack --format appimage` installs it then.
 [target.'cfg(linux)'.feature-xlings.dist-appimage]
 "xim:appimagetool" = { version = ">=1.9.1", provision = "on-request" }
+
+# ── The tool `dist-deb` and `dist-rpm` need ───────────────────────────────
+#
+# nfpm writes both formats without `dpkg-deb` or `rpmbuild`, so a package for
+# a Linux target can be produced on any host the payload exists for, and the
+# produced bytes do not depend on which distribution tools the host carries.
+# Asked for while planning the pack, as `dist-appimage` asks for its tool, so a
+# build that packs nothing downloads nothing.
+[target.'cfg(linux)'.feature-xlings.dist-linux-package]
+"xim:nfpm" = { version = ">=2.49.0", provision = "on-request" }
 
 # WiX IS A PAYLOAD, AND FOR A WHILE THIS FILE SAID IT COULD NOT BE. The
 # toolset is under the Microsoft Reciprocal License and its own licence text
