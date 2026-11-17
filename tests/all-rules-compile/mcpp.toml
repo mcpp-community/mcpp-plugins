@@ -43,7 +43,7 @@ plugins = { path = "../..", features = [
   "rules-spirv", "rules-swift", "rules-sycl",
   "tools-embed", "tools-island",
   "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
-  "dist-apk-kotlin", "dist-apk-maven",
+  "dist-apk-kotlin", "dist-apk-maven", "dist-linux-package", "dist-deb", "dist-rpm",
   "deps-archive", "deps-cmake", "deps-vcpkg",
 ], host-module = true }
 
@@ -62,6 +62,9 @@ plugins = { path = "../..", features = [
 # every member's module is COMPILED on every host, and a member left out is a
 # member whose macOS and Windows compile is never attempted -- which is exactly
 # the failure the two platform-specific members are here to catch.
+#
+# `dist-deb` and `dist-rpm` ask for `xim:nfpm` only while planning a pack of
+# their own format, so this fixture, which packs nothing, downloads nothing for them.
 #
 # `rules-qt` declares no SDK: the rule compiles without one, and the SDK --
 # hundreds of megabytes on every host -- is a project's own declaration. The CI
