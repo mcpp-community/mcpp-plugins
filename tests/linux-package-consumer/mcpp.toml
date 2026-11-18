@@ -1,0 +1,23 @@
+# Fixture: a program that ships as a deb and as an rpm.
+#
+# One fixture for both formats, because they share the layout and the writer:
+# `mcpp pack --format deb` and `mcpp pack --format rpm` each run the build
+# program a second time over the staged closure and submit one nfpm action.
+[package]
+name        = "linux-package-consumer"
+version     = "0.4.0"
+description = "Fixture: packages a program as a deb and an rpm"
+license     = "Apache-2.0"
+authors     = ["mcpp-community <mcpp-community@users.noreply.github.com>"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["dist-deb", "dist-rpm"], host-module = true }
+
+[targets.linux-package-consumer]
+kind = "bin"
+main = "src/main.cpp"

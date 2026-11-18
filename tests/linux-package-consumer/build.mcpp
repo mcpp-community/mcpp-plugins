@@ -1,0 +1,17 @@
+import std;
+import mcpp;
+import mcpp.dist.deb;
+import mcpp.dist.rpm;
+
+int main() {
+    // Both members declare their format in every pass and act only in the pass
+    // that asked for it, so one program serves `--format deb` and `--format rpm`.
+    mcpp::dist::linux_package::options opt;
+    opt.target     = "linux-package-consumer";
+    opt.categories = {"Development"};
+    opt.terminal   = true;
+    opt.icon       = "assets/icon.svg";
+    // A package the machine provides, which CI reads back from the package.
+    opt.depends    = {"bash"};
+    return mcpp::dist::deb::generate(opt) && mcpp::dist::rpm::generate(opt) ? 0 : 1;
+}

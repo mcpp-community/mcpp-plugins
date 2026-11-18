@@ -21,6 +21,8 @@ import mcpp.dist.wix;
 import mcpp.dist.apple;
 import mcpp.dist.web;
 import mcpp.dist.apk;
+import mcpp.dist.deb;
+import mcpp.dist.rpm;
 import mcpp.deps;
 import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
@@ -73,6 +75,10 @@ int main() {
     ok = ok && !applePlan.applies;
     auto webPlan = mcpp::dist::web::plan_for();
     ok = ok && !webPlan.applies;
+    auto debPlan = mcpp::dist::deb::plan_for();
+    ok = ok && !debPlan.applies;
+    auto rpmPlan = mcpp::dist::rpm::plan_for();
+    ok = ok && !rpmPlan.applies;
     // `dist-apk`'s own gate is the target ENVIRONMENT (`cfg(env = "android")`
     // on its payload table, `mcpp::target_env() != "android"` in
     // `plan_for` itself), not `pack_format()` alone -- this fixture's host
