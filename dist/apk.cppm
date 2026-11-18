@@ -360,6 +360,12 @@ inline bool is_dir(const std::string& p) {
 // (`mcpp::manifest_dir()` composed with a subdirectory), so declaring the
 // glob with `root` itself, not this function's return value, was exactly
 // that defect.
+//
+// A root inside the build's output -- `mcpp::out_dir()`, or a directory the
+// glob walk never enters (`target`, `.mcpp`, `.git`) -- is GENERATED: the
+// build program that writes its files already runs on every build, and a glob
+// there can never match anything, which the engine reports as a warning. It is
+// answered as outside the project, so it is an action input and no glob.
 inline std::optional<std::string> root_in_project(const std::string& root) {
     std::error_code ec;
     const auto a = fs::weakly_canonical(root, ec);
@@ -368,6 +374,13 @@ inline std::optional<std::string> root_in_project(const std::string& root) {
     if (ec) return std::nullopt;
     const auto rel = a.lexically_relative(b).generic_string();
     if (rel.empty() || rel.starts_with("..")) return std::nullopt;
+    const auto out = fs::weakly_canonical(std::string(mcpp::out_dir()), ec);
+    if (!ec) {
+        const auto inside = a.lexically_relative(out).generic_string();
+        if (!inside.empty() && !inside.starts_with("..")) return std::nullopt;
+    }
+    const auto first = rel.substr(0, rel.find('/'));
+    if (first == "target" || first == ".mcpp" || first == ".git") return std::nullopt;
     return rel;
 }
 
