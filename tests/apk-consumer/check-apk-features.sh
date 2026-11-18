@@ -127,7 +127,11 @@ grep -q "org.mcpp.apkconsumer.MainActivity;" dexdump-e.log \
     || fail "classes.dex does not contain MainActivity (the project's own root)" dexdump-e.log
 grep -q "org.mcpp.apkconsumer.ExternalHelper;" dexdump-e.log \
     || fail "classes.dex does not contain ExternalHelper (the external root)" dexdump-e.log
-echo "ok: one classes.dex, carrying classes from both the project root and the external root"
+grep -q "org.mcpp.apkconsumer.GeneratedHelper;" dexdump-e.log \
+    || fail "classes.dex does not contain GeneratedHelper (the generated root)" dexdump-e.log
+! grep -q "can never re-run it" build-e.log pack-e.log \
+    || fail "a generated root was declared as a re-run glob" build-e.log pack-e.log
+echo "ok: one classes.dex, carrying classes from the project root, the external root and the generated root"
 
 # ── (f) the re-run direction, both ways (§3.3's third bullet) ──────────────
 #

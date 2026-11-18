@@ -58,7 +58,15 @@ int main() {
         // directory, reached by an absolute path computed from
         // `mcpp::manifest_dir()` rather than a second package -- see
         // `tests/apk-consumer-external-java/`'s own header.
-        opt.java_sources = { root + "/java", root + "/../apk-consumer-external-java" };
+        // A third root this program GENERATES under its output directory, as a
+        // framework's build rules generate an application shell: an action
+        // input, never a re-run glob, which could not match anything there.
+        const std::string generated = std::string(mcpp::out_dir()) + "/gen-java";
+        std::filesystem::create_directories(generated + "/org/mcpp/apkconsumer");
+        std::ofstream(generated + "/org/mcpp/apkconsumer/GeneratedHelper.java")
+            << "package org.mcpp.apkconsumer;\n\npublic class GeneratedHelper {\n"
+               "    public static String marker() { return \"generated\"; }\n}\n";
+        opt.java_sources = { root + "/java", root + "/../apk-consumer-external-java", generated };
     }
 
     // (i) Kotlin sources in a project that named `dist-apk` and not
