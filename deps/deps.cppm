@@ -39,18 +39,16 @@ import mcpp.plugins;
 export import mcpp.deps.compat;
 // The one resolver of a member's tools (0.19.0, mcpp#755).
 export import mcpp.plugins.tool;
-// An action whose work is more than one command: `cmake -P` over a script the
-// member writes (0.25.0, from this unit).
-export import mcpp.tools.script;
 
 export namespace mcpp::deps {
 
-// THE `cmake` deps-cmake AND deps-archive RUN (0.19.0, mcpp#755), and the
-// bracket argument their scripts quote every value with: since 0.25.0 the
-// mechanism the members share, `mcpp.tools.script`, under the names these
-// members have always used.
-using mcpp::tools::script::cmake_spec;
-using mcpp::tools::script::bracket;
+// THE `cmake` deps-cmake AND deps-archive RUN (0.19.0, mcpp#755): the payload
+// both features declare, in its two layouts (`bin/` and, on macOS,
+// `CMake.app/Contents/bin`), found by the one resolver every member uses.
+inline mcpp::plugins::tool::spec cmake_spec(std::string who) {
+    return { .who = std::move(who), .package = "cmake", .programs = {"cmake"},
+             .bin_dirs = {"bin", "CMake.app/Contents/bin"}, .option = "options::cmake" };
+}
 
 // Prints `message` and records it as a `mcpp::warning`, folded onto one line.
 // The engine discards a build program's output when it exits 0, so a note that
@@ -70,6 +68,16 @@ inline void warn(const std::string& message) {
         folded += c;
     }
     mcpp::warning(folded.c_str());
+}
+
+// A CMake script this build program writes, for an action whose work is more
+// than one command: `cmake -P <script>` is one argument vector, and the script
+// runs the steps in order and fails on the first that fails. Every value is a
+// bracket argument, so a path or a `-D` value keeps its spaces and semicolons.
+// The script is written only when its text changes, so its time stamp -- an
+// input of the action -- moves only when the work does.
+inline std::string bracket(std::string_view text) {
+    return "[==[" + std::string(text) + "]==]";
 }
 
 inline bool is_windows() { return std::string_view(mcpp::target_os()) == "windows"; }

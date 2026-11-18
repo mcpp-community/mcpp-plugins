@@ -102,7 +102,7 @@ import std;
 import mcpp;
 import mcpp.plugins;
 import mcpp.plugins.tool;
-import mcpp.tools.script;
+import mcpp.tools.steps;
 
 // `std::format` is header-only and used throughout; `std::println` is not --
 // see `rules/spirv.cppm` for the libc++-on-macOS-14 measurement that this
@@ -205,9 +205,9 @@ struct options {
     // `platform` is a root carrying `android.jar`; `keystore_package` above
     // stays the way a keystore package is named.
     mcpp::plugins::tool::choice build_tools, platform, jdk, bundletool_dir, kotlin, coursier;
-    // The `cmake` that runs the steps of more than one command (0.25.0,
-    // `mcpp.tools.script`): the `xim:cmake` payload, asked for when a package
-    // is planned, or a program named here.
+    // The runner of the steps of more than one command (0.25.0,
+    // `mcpp.tools.steps`; `cmake` until mcpp#955): the `xim:cmake` payload,
+    // asked for when a package is planned, or a program named here.
     mcpp::plugins::tool::choice cmake;
     std::string keystore_alias;
     // The NAME of an environment variable `apksigner` itself reads
@@ -2270,37 +2270,30 @@ inline plan plan_for(options opt = {}) {
     // stands for them; d8 takes no directory, so the classes are listed when it
     // runs; the linked archive gains the native libraries, the assets and every
     // `classes*.dex` d8 wrote; an App Bundle's base module is the linked archive
-    // laid out as bundletool reads it. Each is `cmake -P` over a script this
-    // program writes (`mcpp.tools.script`), so no step needs a shell on any
-    // host, and the script and `cmake` are inputs of the step.
-    namespace script = mcpp::tools::script;
+    // laid out as bundletool reads it. Each is a step program
+    // (`mcpp.tools.steps`): this member describes it, and its runner runs it,
+    // so no step needs a shell on any host and the runner and the written
+    // program are inputs of the step.
+    namespace steps = mcpp::tools::steps;
     // Resolved here, once the project's own inputs have been checked, so a
     // refusal about them is not hidden behind a tool that is still to come.
-    const auto cmakeSpec = script::cmake_spec("mcpp.dist.apk");
-    const auto cmakeTool = mcpp::plugins::tool::resolve(cmakeSpec, opt.cmake);
-    if (cmakeTool.pending()) return refuse(p, "cmake requested", {});
-    if (!cmakeTool) {
+    const auto runnerSpec = steps::runner_spec("mcpp.dist.apk");
+    const auto runnerTool = mcpp::plugins::tool::resolve(runnerSpec, opt.cmake);
+    if (runnerTool.pending()) return refuse(p, "cmake requested", {});
+    if (!runnerTool) {
         return refuse(p, "cmake not found",
-            mcpp::plugins::tool::describe_missing(cmakeSpec, cmakeTool)
+            mcpp::plugins::tool::describe_missing(runnerSpec, runnerTool)
             + "\n  So this plan packs nothing.");
     }
-    const std::string cmake = cmakeTool.program;
-    const auto scripted = [&](step& s, std::string_view name, const std::string& text) {
-        const auto how = script::command(cmake, outDir / "steps" / (std::string(name) + ".cmake"),
-                                         "mcpp.dist.apk", text);
+    const std::string runner = runnerTool.program;
+    const auto attach = [&](step& s, std::string_view name, const steps::program& program) {
+        const auto how = steps::command(runner, outDir / "steps" / std::string(name), "mcpp.dist.apk", program);
         s.argv = how.argv;
         s.inputs.insert(s.inputs.end(), how.inputs.begin(), how.inputs.end());
     };
     const auto joined = [](std::vector<std::string> head, const std::vector<std::string>& tail) {
         head.insert(head.end(), tail.begin(), tail.end());
         return head;
-    };
-    // A compiler whose outputs no plan can list, then the stamp that stands
-    // for them.
-    const auto run_and_stamp = [](const std::vector<std::string>& argv, const std::string& stamp) {
-        return script::run(argv)
-             + "file(MAKE_DIRECTORY " + script::bracket(fs::path(stamp).parent_path().generic_string()) + ")\n"
-             + "file(TOUCH " + script::bracket(stamp) + ")\n";
     };
 
     // ── the pipeline ────────────────────────────────────────────────────
@@ -2497,7 +2490,7 @@ inline plan plan_for(options opt = {}) {
             kt.inputs = kotlinFiles;
             for (auto const& f : javaFiles) kt.inputs.push_back(f);
             for (auto const& c : classpath) kt.inputs.push_back(c);
-            scripted(kt, id("apk-kotlinc", "aab-kotlinc"), run_and_stamp(command, kt.output));
+            attach(kt, id("apk-kotlinc", "aab-kotlinc"), steps::program{}.run(command).touch(kt.output));
             p.steps.push_back(kt);
             kotlinStamp = kt.output;
         }
@@ -2515,7 +2508,8 @@ inline plan plan_for(options opt = {}) {
         javacStep.inputs = javaFiles;
         for (auto const& c : classpath) javacStep.inputs.push_back(c);
         if (!kotlinStamp.empty()) javacStep.inputs.push_back(kotlinStamp);
-        scripted(javacStep, id("apk-javac", "aab-javac"), run_and_stamp(javacCommand, javacStep.output));
+        attach(javacStep, id("apk-javac", "aab-javac"),
+               steps::program{}.run(javacCommand).touch(javacStep.output));
         p.steps.push_back(javacStep);
 
         const std::string dexDir = (outDir / "dex").string();
@@ -2537,25 +2531,17 @@ inline plan plan_for(options opt = {}) {
         if (!kotlinFiles.empty()) classDirs.push_back(kotlinClassesDir);
         std::vector<std::string> d8Archives = archivesToDex;
         if (!kotlinFiles.empty()) d8Archives.push_back(kotlinStdlib);
-        std::string d8Script = "set(inputs)\n";
-        for (auto const& d : classDirs) {
-            d8Script += "file(GLOB_RECURSE found LIST_DIRECTORIES false " + script::bracket(d + "/*.class") + ")\n"
-                        "list(APPEND inputs ${found})\n";
-        }
-        if (!d8Archives.empty()) d8Script += "list(APPEND inputs " + script::brackets(d8Archives) + ")\n";
-        d8Script += "if(NOT inputs)\n"
-                    "    message(FATAL_ERROR \"mcpp.dist.apk: no .class file and no archive to dex\")\n"
-                    "endif()\n"
-                    "file(GLOB stale " + script::bracket(dexDir + "/classes*.dex") + ")\n"
-                    "if(stale)\n"
-                    "    file(REMOVE ${stale})\n"
-                    "endif()\n"
-                  + script::run(joined(d8, { "--min-api", minSdk, "--lib", androidJar, "--output", dexDir }),
-                                { "inputs" });
+        steps::program d8Program;
+        for (auto const& d : classDirs) d8Program.glob("inputs", d + "/*.class", { .recursive = true });
+        d8Program.append("inputs", d8Archives)
+                 .require("inputs", "mcpp.dist.apk: no .class file and no archive to dex")
+                 .remove_glob(dexDir + "/classes*.dex")
+                 .run(joined(d8, { "--min-api", minSdk, "--lib", androidJar, "--output", dexDir }),
+                      { .append_list = "inputs" });
         d8Step.inputs = { javacStep.output, androidJar };
         if (!kotlinStamp.empty()) { d8Step.inputs.push_back(kotlinStamp); d8Step.inputs.push_back(kotlinStdlib); }
         for (auto const& a : archivesToDex) d8Step.inputs.push_back(a);
-        scripted(d8Step, id("apk-d8", "aab-d8"), d8Script);
+        attach(d8Step, id("apk-d8", "aab-d8"), d8Program);
         p.steps.push_back(d8Step);
         javaOutputs.push_back(d8Step.output);
     }
@@ -2572,32 +2558,26 @@ inline plan plan_for(options opt = {}) {
         // bundletool reads a module whose manifest is under `manifest/`, whose
         // dex is under `dex/` and whose native libraries and assets are under
         // `lib/` and `assets/`. This lays the linked archive out that way.
-        const std::string module = (outDir / "module").generic_string();
+        const std::string moduleDir = (outDir / "module").generic_string();
         const std::string workDir = work.generic_string();
-        std::string moduleScript =
-            "file(REMOVE_RECURSE " + script::bracket(module) + ")\n"
-            "file(REMOVE " + script::bracket(baseModule.output) + ")\n"
-            "file(MAKE_DIRECTORY " + script::bracket(module + "/manifest") + ")\n"
-          + script::run({ jar, "xf", link.output }, {}, module)
-          + "file(RENAME " + script::bracket(module + "/AndroidManifest.xml") + " "
-                           + script::bracket(module + "/manifest/AndroidManifest.xml") + ")\n";
-        for (auto const* sub : { "lib", "assets" }) {
-            moduleScript += std::string("if(IS_DIRECTORY ") + script::bracket(workDir + "/" + sub) + ")\n"
-                            "    file(COPY " + script::bracket(workDir + "/" + sub) + " DESTINATION "
-                          + script::bracket(module) + ")\n"
-                            "endif()\n";
-        }
+        steps::program moduleProgram;
+        moduleProgram.remove(moduleDir)
+                     .remove(baseModule.output)
+                     .mkdir(moduleDir + "/manifest")
+                     .run({ jar, "xf", link.output }, { .working_directory = moduleDir })
+                     .rename(moduleDir + "/AndroidManifest.xml", moduleDir + "/manifest/AndroidManifest.xml")
+                     .copy_tree(workDir + "/lib", moduleDir + "/lib", true)
+                     .copy_tree(workDir + "/assets", moduleDir + "/assets", true);
         if (!javaOutputs.empty()) {
-            moduleScript += "file(GLOB dex " + script::bracket(fs::path(javaOutputs.front()).parent_path()
-                                                                   .generic_string() + "/classes*.dex") + ")\n"
-                            "file(COPY ${dex} DESTINATION " + script::bracket(module + "/dex") + ")\n";
+            moduleProgram.copy_glob(fs::path(javaOutputs.front()).parent_path().generic_string() + "/classes*.dex",
+                                    moduleDir + "/dex");
         }
-        moduleScript += script::run({ jar, "cfM", baseModule.output, "-C", module, "." });
+        moduleProgram.run({ jar, "cfM", baseModule.output, "-C", moduleDir, "." });
         baseModule.inputs = { link.output };
         for (auto const& f : libInputs)   baseModule.inputs.push_back(f);
         for (auto const& f : assetInputs) baseModule.inputs.push_back(f);
         for (auto const& f : javaOutputs) baseModule.inputs.push_back(f);
-        scripted(baseModule, "aab-module", moduleScript);
+        attach(baseModule, "aab-module", moduleProgram);
         p.steps.push_back(baseModule);
 
         p.output = !opt.output.empty() ? opt.output
@@ -2646,30 +2626,25 @@ inline plan plan_for(options opt = {}) {
     // `classes*.dex` d8 wrote is added: a package whose classes pass the
     // 64K-method limit of one dex gets `classes2.dex` and on, and which of
     // them exist is known only when d8 has run.
-    std::string libsScript = "file(COPY_FILE " + script::bracket(link.output) + " "
-                           + script::bracket(libs.output) + ")\n";
+    steps::program libsProgram;
+    libsProgram.copy_file(link.output, libs.output);
     if (inPlaceLibraries) {
-        libsScript += script::run({ jar, "--update", "--no-compress", "--file", libs.output,
-                                    "-C", work.string(), "lib" });
-        libsScript += script::run({ jar, "uf", libs.output, "-C", work.string(), "assets" });
+        libsProgram.run({ jar, "--update", "--no-compress", "--file", libs.output, "-C", work.string(), "lib" })
+                   .run({ jar, "uf", libs.output, "-C", work.string(), "assets" });
     } else {
-        libsScript += script::run({ jar, "uf", libs.output, "-C", work.string(), "lib",
-                                    "-C", work.string(), "assets" });
+        libsProgram.run({ jar, "uf", libs.output, "-C", work.string(), "lib", "-C", work.string(), "assets" });
     }
     if (!javaOutputs.empty()) {
         const std::string dexDir = (outDir / "dex").generic_string();
-        libsScript += "file(GLOB dex RELATIVE " + script::bracket(dexDir) + " "
-                    + script::bracket(dexDir + "/classes*.dex") + ")\n"
-                      "if(NOT dex)\n"
-                      "    message(FATAL_ERROR \"mcpp.dist.apk: d8 wrote no classes*.dex in " + dexDir + "\")\n"
-                      "endif()\n"
-                    + script::run({ jar, "uf", libs.output }, { "dex" }, dexDir);
+        libsProgram.glob("dex", dexDir + "/classes*.dex", { .relative_to = dexDir })
+                   .require("dex", "mcpp.dist.apk: d8 wrote no classes*.dex in " + dexDir)
+                   .run({ jar, "uf", libs.output }, { .working_directory = dexDir, .append_list = "dex" });
     }
     libs.inputs = { link.output };
     for (auto const& f : libInputs)   libs.inputs.push_back(f);
     for (auto const& f : assetInputs) libs.inputs.push_back(f);
     for (auto const& f : javaOutputs) libs.inputs.push_back(f);
-    scripted(libs, "apk-libs", libsScript);
+    attach(libs, "apk-libs", libsProgram);
     p.steps.push_back(libs);
 
     step align;

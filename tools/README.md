@@ -9,7 +9,7 @@ program needs that no compiler performs, and does it while `build.mcpp` runs.
 |---|---|---|
 | `mcpp.tools.embed` | `tools-embed` | writes a data file into a header the program compiles in, as a byte array or a 32-bit word array |
 | `mcpp.tools.island` | `tools-island` | writes the `extern "C"` boundary and the C++ module of a code island |
-| `mcpp.tools.script` | `tools-script` | runs an action whose work is more than one command as `cmake -P` over a script a member writes; the members that need it imply it |
+| `mcpp.tools.steps` | `tools-steps` | describes an action whose work is more than one command as portable operations, run by a backend (`cmake -P` until mcpp-community/mcpp#955); the members that need it imply it |
 
 Each member is one file, `tools/<x>.cppm`, declaring `export module
 mcpp.tools.<x>;`, added to the source set by the feature `tools-<x>` in

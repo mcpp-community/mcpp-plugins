@@ -2604,9 +2604,9 @@ jobs:
 
       # dist-apk ON A HOST THAT IS NOT LINUX (0.24.0). Every tool the member
       # runs is a native program (`aapt2`, `zipalign`) or a jar on the JDK's
-      # `java`, and each step of more than one command is `cmake -P` over a
-      # script it writes (0.25.0, `tools-script`), so no step needs a shell and
-      # a Windows host packs what a Linux host does. On Windows the NDK's
+      # `java`, and each step of more than one command is a step program
+      # (0.25.0, `tools-steps`), so no step needs a shell and a Windows host
+      # packs what a Linux host does. On Windows the NDK's
       # libc++ module sources come from `xim:android-ndk-libcxx-modules`,
       # which `xim:android-ndk`'s windows entry depends on. The criteria are the
       # level-0 step's on the Linux job, plus a level-1 package whose dex holds

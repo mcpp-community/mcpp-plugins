@@ -193,7 +193,7 @@ import std;
 import mcpp;
 import mcpp.plugins;
 import mcpp.plugins.tool;
-import mcpp.tools.script;
+import mcpp.tools.steps;
 
 // Nothing here uses `std::println`, and that is not a style choice: both of
 // its overloads reach into the libc++ dylib for symbols macOS 14 does not
@@ -337,9 +337,10 @@ struct options {
     std::string volume_name;
     std::string dmg;
 
-    // The `cmake` that runs the steps of more than one command (0.25.0,
-    // `mcpp.tools.script`): the `xim:cmake` payload, asked for only when a plan
-    // copies a framework or stages a disk image, or a program named here.
+    // The runner of the steps of more than one command (0.25.0,
+    // `mcpp.tools.steps`; `cmake` until mcpp#955): the `xim:cmake` payload,
+    // asked for only when a plan copies a framework or stages a disk image,
+    // or a program named here.
     mcpp::plugins::tool::choice cmake;
 
     std::string out_dir = std::string(mcpp::out_dir());
@@ -431,17 +432,20 @@ inline plan& refuse(plan& p, std::string reason, const std::string& message) {
     return p;
 }
 
-// A step of more than one command (0.25.0): `cmake -P` over a script this
-// program writes into `<out_dir>/dist-apple/steps/` (`mcpp.tools.script`), so
-// no step is a shell script. The script and `cmake` join the step's inputs.
-inline void scripted(step& s, const std::string& cmake, const std::string& out_dir,
-                     const std::string& name, const std::string& text) {
+// A step of more than one command (0.25.0): a step program
+// (`mcpp.tools.steps`) written into `<out_dir>/dist-apple/steps/`, so no step
+// is a shell script. The runner and the written program join the step's inputs.
+// `name` is used as a file name; anything but letters, digits, `-` and `.`
+// becomes `_`.
+inline void attach(step& s, const std::string& runner, const std::string& out_dir,
+                   const std::string& name, const mcpp::tools::steps::program& program) {
     std::string file = name;
-    for (char& c : file)
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '.') c = '_';
-    const auto how = mcpp::tools::script::command(
-        cmake, std::filesystem::path(out_dir) / "dist-apple" / "steps" / (file + ".cmake"),
-        "mcpp.dist.apple", text);
+    for (std::size_t i = 0; i < file.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(file[i]);
+        if (!std::isalnum(c) && c != '-' && c != '.') file[i] = '_';
+    }
+    const auto how = mcpp::tools::steps::command(
+        runner, std::filesystem::path(out_dir) / "dist-apple" / "steps" / file, "mcpp.dist.apple", program);
     s.argv = how.argv;
     s.inputs.insert(s.inputs.end(), how.inputs.begin(), how.inputs.end());
 }
@@ -1306,18 +1310,18 @@ inline plan plan_for(options opt = {}) {
     // `cmake` runs the steps of more than one command (0.25.0): a framework's
     // copy and signature, and a disk image's staging. Asked for only when the
     // plan has one.
-    namespace script = mcpp::tools::script;
-    std::string cmake;
+    namespace steps = mcpp::tools::steps;
+    std::string runner;
     if (!frameworks.empty() || dmg) {
-        const auto cmakeSpec = script::cmake_spec("mcpp.dist.apple");
-        const auto cmakeTool = mcpp::plugins::tool::resolve(cmakeSpec, opt.cmake);
-        if (cmakeTool.pending()) { p.reason = "cmake requested"; return p; }
-        if (!cmakeTool) {
+        const auto runnerSpec = steps::runner_spec("mcpp.dist.apple");
+        const auto runnerTool = mcpp::plugins::tool::resolve(runnerSpec, opt.cmake);
+        if (runnerTool.pending()) { p.reason = "cmake requested"; return p; }
+        if (!runnerTool) {
             return refuse(p, "cmake not found",
-                mcpp::plugins::tool::describe_missing(cmakeSpec, cmakeTool)
+                mcpp::plugins::tool::describe_missing(runnerSpec, runnerTool)
                 + "\n  So this plan bundles nothing.");
         }
-        cmake = cmakeTool.program;
+        runner = runnerTool.program;
     }
 
     // THE FRAMEWORKS: each copied from the staged tree and, when the bundle is
@@ -1332,16 +1336,16 @@ inline plan plan_for(options opt = {}) {
             fw.id          = "mcpp.dist.apple.framework." + rel;
             fw.role        = "artifact";
             fw.description = "APP FRAMEWORK " + rel;
-            std::string text = "file(MAKE_DIRECTORY "
-                             + script::bracket(std::filesystem::path(dest).parent_path().generic_string()) + ")\n"
-                             + script::run({ "ditto", source, dest });
+            steps::program copy;
+            copy.mkdir(std::filesystem::path(dest).parent_path().generic_string())
+                .run({ "ditto", source, dest });
             if (signs) {
-                text += script::run(signingIdentity == "-"
+                copy.run(signingIdentity == "-"
                     ? std::vector<std::string>{ "codesign", "--force", "--sign", "-", dest }
                     : std::vector<std::string>{ "codesign", "--force", "--sign", signingIdentity, "--timestamp", dest });
             }
             fw.inputs      = { source, "${mcpp.stage_dir}" };
-            scripted(fw, cmake, opt.out_dir, "framework-" + rel, text);
+            attach(fw, runner, opt.out_dir, "framework-" + rel, copy);
             fw.outputs     = { dest };
             p.steps.push_back(fw);
             assembled.push_back(dest);
@@ -1477,11 +1481,11 @@ inline plan plan_for(options opt = {}) {
         staging.description = "DMG STAGE";
         const std::string staged = dmgStage + "/" + std::filesystem::path(bundlePath).filename().string();
         staging.inputs      = { bundlePath };
-        scripted(staging, cmake, opt.out_dir, "dmg-stage",
-                 "file(REMOVE_RECURSE " + script::bracket(dmgStage) + ")\n"
-                 "file(MAKE_DIRECTORY " + script::bracket(dmgStage) + ")\n"
-               + script::run({ "ditto", bundlePath, staged })
-               + "file(CREATE_LINK /Applications " + script::bracket(dmgStage + "/Applications") + " SYMBOLIC)\n");
+        attach(staging, runner, opt.out_dir, "dmg-stage",
+               steps::program{}.remove(dmgStage)
+                               .mkdir(dmgStage)
+                               .run({ "ditto", bundlePath, staged })
+                               .symlink("/Applications", dmgStage + "/Applications"));
         staging.outputs     = { dmgStage };
         p.steps.push_back(staging);
 
