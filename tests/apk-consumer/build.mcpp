@@ -35,8 +35,19 @@ int main() {
     mcpp::action a;
     a.id   = "gen-res";
     a.role = "source";
-    a.arg((root + "/gen.sh").c_str()).arg(src.c_str()).arg(out.c_str())
-     .input(src.c_str())
+    // `gen.sh` is a copy, and a Windows host cannot start a shell script as
+    // an action's program, so there the same copy is cmd.exe's, given native
+    // paths (`copy` reads a `/` as a switch).
+    if (std::string_view(mcpp::host()).find("windows") != std::string_view::npos) {
+        const auto native = [](const std::string& p) {
+            return std::filesystem::path(p).make_preferred().string();
+        };
+        a.arg("cmd").arg("/c").arg("copy").arg("/y")
+         .arg(native(src).c_str()).arg(native(out).c_str());
+    } else {
+        a.arg((root + "/gen.sh").c_str()).arg(src.c_str()).arg(out.c_str());
+    }
+    a.input(src.c_str())
      .output(out.c_str())
      .submit();
 

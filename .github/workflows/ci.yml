@@ -2602,20 +2602,58 @@ jobs:
             || { echo "FAIL: mcpp run exited $rc with the project's entries, and the program exits 7"; exit 1; }
           echo "ok: the simulator bundle carries the project's entries, and the simulator ran it and returned 7"
 
-      # NO dist-apk STEP ON THIS HOST, AND THE REASON IS THE ENGINE. The NDK,
-      # the build tools, the platform, the JDK, the Kotlin compiler and coursier
-      # all publish a macOS table, and `tests/apk-consumer` was packed here once
-      # (0.11.0's first run): `mcpp build --target x86_64-linux-android` failed
-      # at the application's own link with
-      #
-      #   ld64.lld: error: unknown argument '-soname'
-      #
-      # before any dist-apk step ran. On a macOS host mcpp 2026.9.14.2 composes
-      # the link line in its macOS branch, which states the target triple only
-      # for an Apple row, so `-fuse-ld=lld` picks the Mach-O flavour
-      # (mcpp-community/mcpp#647, E3). The steps return when an engine links
-      # that row; the Windows NDK has no libc++ module surface, so that host
-      # has no Android row at all.
+      # dist-apk ON A HOST THAT IS NOT LINUX (0.24.0). Every tool the member
+      # runs is a native program (`aapt2`, `zipalign`) or a jar on the JDK's
+      # `java`, and its helper is a Java source file, so no step needs a shell
+      # and a Windows host packs what a Linux host does. On Windows the NDK's
+      # libc++ module sources come from `xim:android-ndk-libcxx-modules`,
+      # which `xim:android-ndk`'s windows entry depends on. The criteria are the
+      # level-0 step's on the Linux job, plus a level-1 package whose dex holds
+      # the activity: that is the helper's `run-and-stamp`, `run-d8` and
+      # `copy-then-jar` all having run.
+      - name: dist-apk packs a signed APK on this host, level 0 and level 1
+        if: ${{ !cancelled() }}
+        working-directory: tests/apk-consumer
+        shell: bash
+        run: |
+          set -e
+          T=x86_64-linux-android
+          check() { # <apk> <entry>...
+            apk="$1"; shift
+            "$JDK/bin/java" -jar "$BT/lib/apksigner.jar" verify --print-certs "$apk" > verify.log 2>&1 || true
+            grep -q 'CN=Android Debug' verify.log \
+              || { cat verify.log; echo "FAIL: $apk is not signed with the debug key"; exit 1; }
+            "$JDK/bin/jar" tf "$apk" | tr -d '\r' > listing.log
+            for f in "$@"; do
+              grep -qxF "$f" listing.log || { cat listing.log; echo "FAIL: $apk does not list $f"; exit 1; }
+            done
+            "$BT/aapt2" dump badging "$apk" 2>/dev/null | tr -d '\r' > badging.log || true
+            grep -q "^package: name='" badging.log \
+              || { cat badging.log; echo "FAIL: aapt2 could not read $apk"; exit 1; }
+          }
+
+          unset APK_CONSUMER_LEVEL1
+          "$MCPP" build --target "$T"
+          "$MCPP" pack --pkg-format apk --target "$T" | tee pack.log
+          BT=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-android-build-tools" -mindepth 1 -maxdepth 1 -type d | head -1)
+          JDK=$(find "$MCPP_HOME/registry/data/xpkgs/xim-x-jdk-temurin" -mindepth 1 -maxdepth 1 -type d | head -1)
+          apk=$(find target -name 'apk-consumer.apk' | head -1)
+          test -n "$apk" || { cat pack.log; echo "FAIL: no apk-consumer.apk"; exit 1; }
+          check "$apk" "lib/x86_64/libapk-consumer.so" "assets/mcpp-run.json" \
+                       "AndroidManifest.xml" "assets/generated/res.bin"
+          echo "ok: level 0 -- a signed, aapt2-readable APK with the native library and the deployed asset"
+
+          export APK_CONSUMER_LEVEL1=1
+          "$MCPP" pack --pkg-format apk --target "$T" | tee pack1.log
+          apk=$(find target -name 'apk-consumer.apk' | head -1)
+          check "$apk" "classes.dex" "lib/x86_64/libapk-consumer.so"
+          "$BT/dexdump" -l plain "$(find target -name classes.dex -path '*dist-apk*' | head -1)" > dexdump.log 2>&1 \
+            || { cat dexdump.log; echo "FAIL: dexdump could not read the dex"; exit 1; }
+          for c in MainActivity GeneratedHelper; do
+            grep -q "org.mcpp.apkconsumer.$c;" dexdump.log \
+              || { echo "FAIL: the dex does not hold org.mcpp.apkconsumer.$c"; exit 1; }
+          done
+          echo "ok: level 1 -- javac, d8 and the helper ran on this host, and the dex holds the activity and the generated class"
 
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
