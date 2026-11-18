@@ -337,6 +337,218 @@ inline bool is_dir(const std::string& p) {
     return !p.empty() && fs::is_directory(p, ec);
 }
 
+// THE HOST, NOT THE TARGET: every tool here runs on the machine that builds.
+// A Windows host names its programs `<name>.exe` and separates a class path
+// with `;`.
+inline bool host_is_windows() {
+    return std::string_view(mcpp::host()).find("windows") != std::string_view::npos;
+}
+inline std::string host_program(const fs::path& dir, std::string_view name) {
+    return (dir / (std::string(name) + (host_is_windows() ? ".exe" : ""))).string();
+}
+inline const char* class_path_separator() { return host_is_windows() ? ";" : ":"; }
+
+// THE PIPELINE'S HELPER, ONE PROGRAM FOR EVERY HOST (0.24.0). Four steps need
+// more than one command or a file set known only when they run; until 0.24.0
+// each was a `#!/bin/sh` script, which a Windows host cannot start. The JDK
+// this member already requires runs a single Java source file directly
+// (`java DistApk.java <command> ...`, JEP 330, JDK 11), so the helper is that
+// file, and its commands do what the scripts did:
+//
+//   copy-then-jar <src> <dst> <jar> [--dex <dir>] [--stored <dir> <entry>] <jar update argument>...
+//       Copies the linked archive and adds the staged `lib/`, `assets/` and
+//       the dex with `jar`: aapt2 has no flag for native libraries.
+//       `--dex <dir>` adds every `classes*.dex` d8 wrote there: a package
+//       whose classes pass the 64K-method limit of one dex gets
+//       `classes2.dex` and on, and which of them exist is known only when d8
+//       has run. `--stored <dir> <entry>` adds an entry uncompressed, which
+//       native libraries loaded in place must be.
+//   run-and-stamp <stamp> <command>...
+//       Runs the command, then touches the stamp: javac's and kotlinc's own
+//       output sets are not knowable at plan time.
+//   run-d8 <d8 command>... --inputs <classes directory | archive>... --options <d8 option>...
+//       `d8` DOES NOT ACCEPT A DIRECTORY, MEASURED (2026-09-12, d8 9.2.4,
+//       `xim:android-build-tools` 37.0.0): `d8 --output <dir> <classesDir>`
+//       fails in the tool itself, `Unsupported source file type`, one frame
+//       into `BaseCommand$Builder.addProgramFiles`. So a directory is
+//       expanded to its `.class` files here, at command time; an archive
+//       (a JAR, an AAR's classes.jar, the Kotlin stdlib) is passed as it is.
+//       Earlier dex files are removed first, so a package that shrinks below
+//       the multidex limit does not keep a stale `classes2.dex`.
+//   make-module <proto archive> <module dir> <work dir> <dex | -> <jar> <out>
+//       THE BASE MODULE OF AN APP BUNDLE. `aapt2 link --proto-format` writes
+//       the manifest at the archive's root beside `resources.pb` and `res/`;
+//       bundletool reads a module whose manifest is under `manifest/`, whose
+//       dex is under `dex/` and whose native libraries and assets are under
+//       `lib/` and `assets/`. A level-0 package has no dex, which the fourth
+//       argument states as `-`: an empty argument does not survive the
+//       action's argv.
+//
+// A failing tool's exit status is the helper's, and the tool's own output
+// reaches the build's, as it did through `set -e`.
+inline constexpr std::string_view helper_source = R"java(// mcpp.dist.apk helper. Do not edit.
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class DistApk {
+    static final class Failure extends RuntimeException {
+        final int status;
+        Failure(int status) { super(null, null, false, false); this.status = status; }
+    }
+
+    static Failure fail(String message) {
+        System.err.println("DistApk: " + message);
+        return new Failure(1);
+    }
+
+    static void run(List<String> command, Path directory) throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder(command).inheritIO();
+        if (directory != null) builder.directory(directory.toFile());
+        int status = builder.start().waitFor();
+        if (status != 0) throw new Failure(status);
+    }
+
+    static List<String> list(String... items) { return new ArrayList<>(Arrays.asList(items)); }
+
+    static List<String> dexFiles(Path directory) throws IOException {
+        try (Stream<Path> files = Files.list(directory)) {
+            return files.map(f -> f.getFileName().toString())
+                        .filter(n -> n.startsWith("classes") && n.endsWith(".dex"))
+                        .sorted().collect(Collectors.toList());
+        }
+    }
+
+    static void copyTree(Path from, Path to) throws IOException {
+        try (Stream<Path> files = Files.walk(from)) {
+            for (Path f : files.sorted().collect(Collectors.toList())) {
+                Path target = to.resolve(from.relativize(f).toString());
+                if (Files.isDirectory(f)) Files.createDirectories(target);
+                else Files.copy(f, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+
+    static void deleteTree(Path root) throws IOException {
+        if (!Files.exists(root)) return;
+        try (Stream<Path> files = Files.walk(root)) {
+            for (Path f : files.sorted((a, b) -> b.compareTo(a)).collect(Collectors.toList())) Files.delete(f);
+        }
+    }
+
+    static void copyThenJar(List<String> a) throws Exception {
+        if (a.size() < 3) throw fail("copy-then-jar <src> <dst> <jar> ...");
+        Path dst = Paths.get(a.get(1)).toAbsolutePath();
+        String jar = a.get(2);
+        int i = 3;
+        String dex = null, storedDir = null, stored = null;
+        if (i + 1 < a.size() && a.get(i).equals("--dex")) { dex = a.get(i + 1); i += 2; }
+        if (i + 2 < a.size() && a.get(i).equals("--stored")) { storedDir = a.get(i + 1); stored = a.get(i + 2); i += 3; }
+        Files.copy(Paths.get(a.get(0)), dst, StandardCopyOption.REPLACE_EXISTING);
+        if (stored != null) {
+            run(list(jar, "--update", "--no-compress", "--file", dst.toString(), "-C", storedDir, stored), null);
+        }
+        if (i < a.size()) {
+            List<String> update = list(jar, "uf", dst.toString());
+            update.addAll(a.subList(i, a.size()));
+            run(update, null);
+        }
+        if (dex != null) {
+            List<String> names = dexFiles(Paths.get(dex));
+            if (names.isEmpty()) throw fail("no classes*.dex in " + dex);
+            List<String> update = list(jar, "uf", dst.toString());
+            update.addAll(names);
+            run(update, Paths.get(dex));
+        }
+    }
+
+    static void runAndStamp(List<String> a) throws Exception {
+        if (a.size() < 2) throw fail("run-and-stamp <stamp> <command>...");
+        run(a.subList(1, a.size()), null);
+        Path stamp = Paths.get(a.get(0));
+        if (stamp.getParent() != null) Files.createDirectories(stamp.getParent());
+        if (Files.exists(stamp)) Files.setLastModifiedTime(stamp, FileTime.fromMillis(System.currentTimeMillis()));
+        else Files.createFile(stamp);
+    }
+
+    static void runD8(List<String> a) throws Exception {
+        int inputsAt = a.indexOf("--inputs"), optionsAt = a.indexOf("--options");
+        if (inputsAt < 1 || optionsAt < inputsAt) throw fail("run-d8 <d8>... --inputs <input>... --options <option>...");
+        List<String> inputs = new ArrayList<>();
+        for (String input : a.subList(inputsAt + 1, optionsAt)) {
+            Path path = Paths.get(input);
+            if (!Files.isDirectory(path)) { inputs.add(input); continue; }
+            try (Stream<Path> files = Files.walk(path)) {
+                files.filter(f -> f.toString().endsWith(".class") && Files.isRegularFile(f))
+                     .map(Path::toString).sorted().forEach(inputs::add);
+            }
+        }
+        if (inputs.isEmpty()) throw fail("run-d8: no .class file and no archive to dex");
+        List<String> options = a.subList(optionsAt + 1, a.size());
+        int output = options.indexOf("--output");
+        if (output >= 0 && output + 1 < options.size()) {
+            Path directory = Paths.get(options.get(output + 1));
+            if (Files.isDirectory(directory)) {
+                for (String name : dexFiles(directory)) Files.delete(directory.resolve(name));
+            }
+        }
+        List<String> command = new ArrayList<>(a.subList(0, inputsAt));
+        command.addAll(options);
+        command.addAll(inputs);
+        run(command, null);
+    }
+
+    static void makeModule(List<String> a) throws Exception {
+        if (a.size() != 6) throw fail("make-module <proto> <module> <work> <dex|-> <jar> <out>");
+        Path proto = Paths.get(a.get(0)).toAbsolutePath(), module = Paths.get(a.get(1)), work = Paths.get(a.get(2));
+        String dex = a.get(3), jar = a.get(4);
+        Path out = Paths.get(a.get(5)).toAbsolutePath();
+        deleteTree(module);
+        Files.deleteIfExists(out);
+        Files.createDirectories(module.resolve("manifest"));
+        run(list(jar, "xf", proto.toString()), module);
+        Files.move(module.resolve("AndroidManifest.xml"), module.resolve("manifest").resolve("AndroidManifest.xml"));
+        if (Files.isDirectory(work.resolve("lib"))) copyTree(work.resolve("lib"), module.resolve("lib"));
+        if (Files.isDirectory(work.resolve("assets"))) copyTree(work.resolve("assets"), module.resolve("assets"));
+        if (!dex.equals("-")) {
+            Path from = Paths.get(dex).toAbsolutePath().getParent();
+            Files.createDirectories(module.resolve("dex"));
+            for (String name : dexFiles(from)) {
+                Files.copy(from.resolve(name), module.resolve("dex").resolve(name), StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        run(list(jar, "cfM", out.toString(), "-C", module.toString(), "."), null);
+    }
+
+    public static void main(String[] args) {
+        try {
+            if (args.length == 0) throw fail("DistApk <command> <argument>...");
+            List<String> rest = Arrays.asList(args).subList(1, args.length);
+            switch (args[0]) {
+                case "copy-then-jar": copyThenJar(rest); break;
+                case "run-and-stamp": runAndStamp(rest); break;
+                case "run-d8":        runD8(rest); break;
+                case "make-module":   makeModule(rest); break;
+                default: throw fail("unknown command " + args[0]);
+            }
+        } catch (Failure f) {
+            System.exit(f.status);
+        } catch (Exception e) {
+            System.err.println("DistApk " + (args.length > 0 ? args[0] : "") + ": " + e);
+            System.exit(1);
+        }
+    }
+}
+)java";
+
 // Is `root` under the package root, `mcpp::manifest_dir()`, and if so, what
 // is its manifest-relative form? A project root is declared with
 // `rerun_if_changed_glob` below (a file appearing there re-runs the build
@@ -1569,19 +1781,15 @@ inline plan plan_for(options opt = {}) {
             "target; this member needs mcpp 2026.9.12.2 or newer.");
     }
 
-    // `apksigner`/`d8`: the JAVA_HOME/PATH wrapper `xim:android-build-tools`
-    // itself writes under its own `bin/` (see that package's header) --
-    // POSIX only, which is the coverage this member's fixture and CI both
-    // run under; a Windows consumer's `apksigner.bat`/`d8.bat` already
-    // honour `JAVA_HOME` through that package's own `config()` and need no
-    // different path here.
-    const std::string aapt2     = (fs::path(buildTools) / "aapt2").string();
-    const std::string zipalign  = (fs::path(buildTools) / "zipalign").string();
-    const std::string apksigner = (fs::path(buildTools) / "bin" / "apksigner").string();
-    const std::string d8        = (fs::path(buildTools) / "bin" / "d8").string();
+    // `aapt2` and `zipalign` are native programs of `xim:android-build-tools`;
+    // `apksigner` and `d8` are its jars, `lib/apksigner.jar` and `lib/d8.jar`.
+    const std::string aapt2        = host_program(buildTools, "aapt2");
+    const std::string zipalign     = host_program(buildTools, "zipalign");
+    const std::string apksignerJar = (fs::path(buildTools) / "lib" / "apksigner.jar").string();
+    const std::string d8Jar        = (fs::path(buildTools) / "lib" / "d8.jar").string();
     for (auto const& [name, path] : {
              std::pair{"aapt2", aapt2}, std::pair{"zipalign", zipalign},
-             std::pair{"apksigner", apksigner}, std::pair{"d8", d8}}) {
+             std::pair{"apksigner.jar", apksignerJar}, std::pair{"d8.jar", d8Jar}}) {
         if (!is_file(path)) {
             return refuse(p, std::format("{} not found", name), std::format(
                 "mcpp.dist.apk: {} was not found at {}; {} does not look like the "
@@ -1589,9 +1797,8 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
-    // `javac`/`jar`/`jarsigner`: NONE is part of `xim:android-build-tools`
-    // (only `apksigner` and `d8` are wrapped there, see that package's header)
-    // -- all three come from `xim:jdk-temurin` directly, declared on this
+    // `java`/`javac`/`jar`/`jarsigner`: NONE is part of `xim:android-build-tools`
+    // -- all four come from `xim:jdk-temurin` directly, declared on this
     // member's own table rather than assumed reachable through
     // android-build-tools' runtime dependency, which provisions the JDK for
     // ITS OWN wrappers and does not make it visible to a consumer's build
@@ -1603,11 +1810,13 @@ inline plan plan_for(options opt = {}) {
             "mcpp.dist.apk: xim:jdk-temurin was not found (declare it under "
             "[target.'cfg(env = \"android\")'.feature-xlings.dist-apk]).");
     }
-    const std::string javac     = (fs::path(jdkHome) / "bin" / "javac").string();
-    const std::string jar       = (fs::path(jdkHome) / "bin" / "jar").string();
-    const std::string jarsigner = (fs::path(jdkHome) / "bin" / "jarsigner").string();
-    for (auto const& [name, path] : {std::pair{"javac", javac}, std::pair{"jar", jar},
-                                     std::pair{"jarsigner", jarsigner}}) {
+    const fs::path jdkBin = fs::path(jdkHome) / "bin";
+    const std::string java      = host_program(jdkBin, "java");
+    const std::string javac     = host_program(jdkBin, "javac");
+    const std::string jar       = host_program(jdkBin, "jar");
+    const std::string jarsigner = host_program(jdkBin, "jarsigner");
+    for (auto const& [name, path] : {std::pair{"java", java}, std::pair{"javac", javac},
+                                     std::pair{"jar", jar}, std::pair{"jarsigner", jarsigner}}) {
         if (!is_file(path)) {
             return refuse(p, std::format("{} not found", name), std::format(
                 "mcpp.dist.apk: {} was not found at {}; {} does not look like a "
@@ -1615,20 +1824,35 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
-    // `bundletool`: only an App Bundle needs it. The launcher `xim:bundletool`
-    // writes runs the JDK it was installed against.
-    std::string bundletool;
+    // EVERY JAVA TOOL RUNS FROM ITS JAR ON THIS JDK'S `java`, NOT THROUGH A
+    // LAUNCHER (0.24.0). The launchers are scripts: POSIX shell scripts, and
+    // on Windows `.bat` files, which CreateProcess starts only by handing them
+    // to cmd.exe and which mcpp refuses as an action's program when an
+    // argument carries a cmd.exe metacharacter. Each command below is what
+    // that tool's own launcher runs, with its default heap: `d8` and
+    // `apksigner` as build-tools 37.0.0's scripts state them, bundletool and
+    // coursier as `java -jar`, which their xim launchers are, and kotlinc as
+    // JetBrains' `kotlinc/bin/kotlinc` runs the JVM compiler. One command on
+    // every host, so the Linux fixtures run what a Windows host runs.
+    const std::vector<std::string> d8 = {
+        java, "-Xmx2G", "-cp", d8Jar, "com.android.tools.r8.D8"};
+    const std::vector<std::string> apksigner = {java, "-Xmx1024M", "-jar", apksignerJar};
+
+    // `bundletool`: only an App Bundle needs it. `xim:bundletool` keeps
+    // upstream's jar at its root as `bundletool-all.jar`.
+    std::vector<std::string> bundletool;
     if (bundle) {
         const std::string btDir = payload_root("bundletool", opt.bundletool_dir, payloadPending);
         if (payloadPending) return refuse(p, "bundletool requested", {});
-        bundletool = btDir.empty() ? std::string()
-                                   : (fs::path(btDir) / "bin" / "bundletool").string();
-        if (!is_file(bundletool)) {
+        const std::string btJar = btDir.empty() ? std::string()
+                                                : (fs::path(btDir) / "bundletool-all.jar").string();
+        bundletool = {java, "-jar", btJar};
+        if (!is_file(btJar)) {
             return refuse(p, "bundletool not found", std::format(
                 "mcpp.dist.apk: an Android App Bundle is built by bundletool, and "
                 "xim:bundletool was not found{}. It is declared under "
                 "[target.'cfg(env = \"android\")'.feature-xlings.dist-apk].",
-                btDir.empty() ? std::string() : std::format(" at {}", bundletool)));
+                btDir.empty() ? std::string() : std::format(" at {}", btJar)));
         }
     }
 
@@ -1724,10 +1948,12 @@ inline plan plan_for(options opt = {}) {
                 "options::maven and rewrites {}, or 'fetch', which downloads what the lock "
                 "names into {}.", mode, opt.maven_lock, cacheRoot));
         }
+        // `xim:coursier` keeps upstream's `coursier.jar` at its root; its
+        // launchers run it with `java -jar`, and so does this.
         const auto coursier = [&]() -> std::string {
             bool pend = false;
             const std::string dir = payload_root("coursier", opt.coursier, pend);
-            return dir.empty() ? std::string() : (fs::path(dir) / "bin" / "cs").string();
+            return dir.empty() ? std::string() : (fs::path(dir) / "coursier.jar").string();
         };
         const auto no_coursier = [&](plan& pl) -> plan& {
             return refuse(pl, "coursier not found", std::format(
@@ -1740,7 +1966,7 @@ inline plan plan_for(options opt = {}) {
             const std::string cs = coursier();
             if (!is_file(cs)) return no_coursier(p);
             const std::string report = (fs::path(opt.out_dir) / "dist-apk-maven.json").string();
-            std::vector<std::string> argv = {cs, "fetch", "--cache", cacheRoot};
+            std::vector<std::string> argv = {java, "-jar", cs, "fetch", "--cache", cacheRoot};
             for (auto const& r : repositories) { argv.push_back("-r"); argv.push_back(r); }
             argv.push_back("-A");
             argv.push_back("aar,jar");
@@ -1828,7 +2054,7 @@ inline plan plan_for(options opt = {}) {
         if (!missing.empty() && mode == "fetch") {
             const std::string cs = coursier();
             if (!is_file(cs)) return no_coursier(p);
-            std::vector<std::string> argv = {cs, "fetch", "--cache", cacheRoot};
+            std::vector<std::string> argv = {java, "-jar", cs, "fetch", "--cache", cacheRoot};
             for (auto const& r : repositories) { argv.push_back("-r"); argv.push_back(r); }
             argv.push_back("-A");
             argv.push_back("aar,jar");
@@ -1896,15 +2122,23 @@ inline plan plan_for(options opt = {}) {
         if (!c.kotlin.empty()) needsKotlin = true;
         if (!c.java.empty() || !c.kotlin.empty() || !c.jars.empty()) hasDex = true;
     }
-    std::string kotlinc, kotlinStdlib;
+    std::vector<std::string> kotlinc;
+    std::string kotlinStdlib;
     if (needsKotlin) {
         const std::string kdir = payload_root("kotlin", opt.kotlin, payloadPending);
         if (payloadPending) return refuse(p, "kotlin requested", {});
+        std::string preloader, compiler;
         if (!kdir.empty()) {
-            kotlinc      = (fs::path(kdir) / "bin" / "kotlinc").string();
-            kotlinStdlib = (fs::path(kdir) / "kotlinc" / "lib" / "kotlin-stdlib.jar").string();
+            const fs::path lib = fs::path(kdir) / "kotlinc" / "lib";
+            preloader    = (lib / "kotlin-preloader.jar").string();
+            compiler     = (lib / "kotlin-compiler.jar").string();
+            kotlinStdlib = (lib / "kotlin-stdlib.jar").string();
+            // JetBrains' `kotlinc/bin/kotlinc`, with its default heap.
+            kotlinc = {java, "-Xmx512M", "-Xms128M", "-cp", preloader,
+                       "org.jetbrains.kotlin.preloading.Preloader", "-cp", compiler,
+                       "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler"};
         }
-        if (!is_file(kotlinc) || !is_file(kotlinStdlib)) {
+        if (!is_file(preloader) || !is_file(compiler) || !is_file(kotlinStdlib)) {
             return refuse(p, "kotlin not found",
                 "mcpp.dist.apk: Kotlin sources are compiled by kotlinc from xim:kotlin, which "
                 "was not found. Name the dist-apk-kotlin feature of mcpp:plugins instead of "
@@ -2224,95 +2458,25 @@ inline plan plan_for(options opt = {}) {
     }
     assetInputs.push_back(runJsonPath);
 
-    // ── the small helper scripts this pipeline needs (argv only, no shell
-    // between the engine and the tool). Each is written at plan time, only
-    // when its bytes differ, and is marked executable. ─────────────────────
-    auto helper = [&](const char* name, std::string_view body) {
-        const std::string path = (outDir / name).string();
-        write_if_different(path, body);
-        std::error_code ec;
-        fs::permissions(path,
-            fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
-            fs::perm_options::add, ec);
-        return path;
+    // ── the helper this pipeline needs, `DistApk.java` (see `helper_source`),
+    // written at plan time only when its bytes differ and run by this JDK's
+    // `java` as a single-file program, so no shell stands between the engine
+    // and a tool on any host. ─────────────────────────────────────────────
+    const std::string helperSource = (outDir / "DistApk.java").string();
+    if (!write_if_different(helperSource, helper_source)) {
+        return refuse(p, "cannot write DistApk.java", std::format(
+            "mcpp.dist.apk: cannot write {}.", helperSource));
+    }
+    const auto helper = [&](std::string_view command) {
+        return std::vector<std::string>{java, helperSource, std::string(command)};
     };
-    // Copies the linked archive and adds the staged `lib/`, `assets/` and the
-    // dex with `jar`: aapt2 has no flag for native libraries.
-    // `--dex <dir>` adds every `classes*.dex` d8 wrote there: a package whose
-    // classes pass the 64K-method limit of one dex gets `classes2.dex` and on,
-    // and which of them exist is known only when d8 has run. `--stored <dir>
-    // <entry>` adds an entry uncompressed, which native libraries loaded in
-    // place must be.
-    const std::string copyThenJar = helper("copy-then-jar.sh",
-        "#!/bin/sh\n"
-        "# mcpp.dist.apk helper. Do not edit.\n"
-        "# copy-then-jar.sh <src> <dst> <jar> [--dex <dir>] [--stored <dir> <entry>] <jar update arguments>...\n"
-        "set -e\n"
-        "src=\"$1\"; dst=\"$2\"; jar=\"$3\"; shift 3\n"
-        "dex=\"\"; stored_dir=\"\"; stored=\"\"\n"
-        "if [ \"${1:-}\" = --dex ]; then dex=\"$2\"; shift 2; fi\n"
-        "if [ \"${1:-}\" = --stored ]; then stored_dir=\"$2\"; stored=\"$3\"; shift 3; fi\n"
-        "cp \"$src\" \"$dst\"\n"
-        "if [ -n \"$stored\" ]; then \"$jar\" --update --no-compress --file \"$dst\" -C \"$stored_dir\" \"$stored\"; fi\n"
-        "if [ \"$#\" -gt 0 ]; then \"$jar\" uf \"$dst\" \"$@\"; fi\n"
-        "if [ -n \"$dex\" ]; then (cd \"$dex\" && \"$jar\" uf \"$dst\" classes*.dex); fi\n");
-    const std::string runAndStamp = helper("run-and-stamp.sh",
-        "#!/bin/sh\n"
-        "set -e\n"
-        "stamp=\"$1\"; shift\n"
-        "\"$@\"\n"
-        "mkdir -p \"$(dirname \"$stamp\")\"\n"
-        "touch \"$stamp\"\n");
-    // `d8` DOES NOT ACCEPT A DIRECTORY, MEASURED (2026-09-12, d8 9.2.4,
-    // `xim:android-build-tools` 37.0.0): `d8 --output <dir> <classesDir>`
-    // fails in the tool itself, `Unsupported source file type`, one frame
-    // into `BaseCommand$Builder.addProgramFiles`. javac's own output set is
-    // not knowable at plan time, so this wrapper finds the `.class` files
-    // `d8`'s command line needs at COMMAND time instead.
-    // Its inputs are directories of classes (javac's, kotlinc's), expanded, and
-    // archives (JARs, an AAR's classes.jar, the Kotlin stdlib), passed as they
-    // are; `--` ends them. Earlier dex files are removed first, so a package
-    // that shrinks below the multidex limit does not keep a stale `classes2.dex`.
-    const std::string runD8 = helper("run-d8.sh",
-        "#!/bin/sh\n"
-        "# mcpp.dist.apk helper. Do not edit.\n"
-        "# run-d8.sh <d8> <classes directory | archive>... -- <d8 option>...\n"
-        "set -e\n"
-        "d8=\"$1\"; shift\n"
-        "inputs=\"\"\n"
-        "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do\n"
-        "    if [ -d \"$1\" ]; then inputs=\"$inputs $(find \"$1\" -name '*.class')\"; else inputs=\"$inputs $1\"; fi\n"
-        "    shift\n"
-        "done\n"
-        "[ \"$#\" -gt 0 ] && shift\n"
-        "if [ -z \"$(echo $inputs)\" ]; then\n"
-        "    echo \"run-d8.sh: no .class file and no archive to dex\" >&2\n"
-        "    exit 1\n"
-        "fi\n"
-        "out=\"\"; prev=\"\"\n"
-        "for a in \"$@\"; do [ \"$prev\" = --output ] && out=\"$a\"; prev=\"$a\"; done\n"
-        "if [ -n \"$out\" ]; then rm -f \"$out\"/classes*.dex; fi\n"
-        "\"$d8\" \"$@\" $inputs\n");
-    // THE BASE MODULE OF AN APP BUNDLE. `aapt2 link --proto-format` writes the
-    // manifest at the archive's root beside `resources.pb` and `res/`;
-    // bundletool reads a module whose manifest is under `manifest/`, whose dex
-    // is under `dex/` and whose native libraries and assets are under `lib/`
-    // and `assets/`. This lays the linked archive out that way. A level-0
-    // package has no dex, which the fourth argument states as `-`: an empty
-    // argument does not survive the action's argv.
-    const std::string makeModule = bundle ? helper("make-module.sh",
-        "#!/bin/sh\n"
-        "# mcpp.dist.apk helper. Do not edit.\n"
-        "set -e\n"
-        "proto=\"$1\"; module=\"$2\"; work=\"$3\"; dex=\"$4\"; jar=\"$5\"; out=\"$6\"\n"
-        "rm -rf \"$module\" \"$out\"\n"
-        "mkdir -p \"$module/manifest\"\n"
-        "(cd \"$module\" && \"$jar\" xf \"$proto\")\n"
-        "mv \"$module/AndroidManifest.xml\" \"$module/manifest/AndroidManifest.xml\"\n"
-        "if [ -d \"$work/lib\" ]; then cp -R \"$work/lib\" \"$module/lib\"; fi\n"
-        "if [ -d \"$work/assets\" ]; then cp -R \"$work/assets\" \"$module/assets\"; fi\n"
-        "if [ \"$dex\" != - ]; then mkdir -p \"$module/dex\"; cp \"$(dirname \"$dex\")\"/classes*.dex \"$module/dex/\"; fi\n"
-        "\"$jar\" cfM \"$out\" -C \"$module\" .\n") : std::string();
+    const auto then = [](std::vector<std::string> head, std::initializer_list<std::string> tail) {
+        head.insert(head.end(), tail);
+        return head;
+    };
+    const auto append = [](std::vector<std::string>& head, const std::vector<std::string>& tail) {
+        head.insert(head.end(), tail.begin(), tail.end());
+    };
 
     // ── the pipeline ────────────────────────────────────────────────────
     std::vector<std::string> assembled; // every step's own output, for later inputs
@@ -2500,8 +2664,10 @@ inline plan plan_for(options opt = {}) {
             kt.role        = "artifact";
             kt.description = "KOTLINC";
             kt.output      = kotlinClassesDir + "/.stamp";
-            kt.argv = { runAndStamp, kt.output, kotlinc, "-jvm-target", "17", "-no-reflect",
-                        "-classpath", join(classpath, ":"), "-d", kotlinClassesDir };
+            kt.argv = then(helper("run-and-stamp"), { kt.output });
+            append(kt.argv, kotlinc);
+            append(kt.argv, { "-jvm-target", "17", "-no-reflect",
+                              "-classpath", join(classpath, class_path_separator()), "-d", kotlinClassesDir });
             for (auto const& f : kotlinFiles) kt.argv.push_back(f);
             for (auto const& f : javaFiles)   kt.argv.push_back(f);
             kt.inputs = kotlinFiles;
@@ -2518,9 +2684,9 @@ inline plan plan_for(options opt = {}) {
         javacStep.role = "artifact";
         javacStep.description = "JAVAC";
         javacStep.output = classesDir + "/.stamp";
-        javacStep.argv = { runAndStamp, javacStep.output, javac,
-                          "-source", "17", "-target", "17",
-                          "-cp", join(javacClasspath, ":"), "-d", classesDir };
+        javacStep.argv = then(helper("run-and-stamp"), { javacStep.output, javac,
+                              "-source", "17", "-target", "17",
+                              "-cp", join(javacClasspath, class_path_separator()), "-d", classesDir });
         for (auto const& f : javaFiles) javacStep.argv.push_back(f);
         javacStep.inputs = javaFiles;
         for (auto const& c : classpath) javacStep.inputs.push_back(c);
@@ -2533,11 +2699,14 @@ inline plan plan_for(options opt = {}) {
         d8Step.role = "artifact";
         d8Step.description = "D8";
         d8Step.output = dexDir + "/classes.dex";
-        d8Step.argv = { runD8, d8, classesDir };
+        d8Step.argv = helper("run-d8");
+        append(d8Step.argv, d8);
+        d8Step.argv.push_back("--inputs");
+        d8Step.argv.push_back(classesDir);
         if (!kotlinFiles.empty()) d8Step.argv.push_back(kotlinClassesDir);
         for (auto const& a : archivesToDex) d8Step.argv.push_back(a);
         if (!kotlinFiles.empty()) d8Step.argv.push_back(kotlinStdlib);
-        d8Step.argv.push_back("--");
+        d8Step.argv.push_back("--options");
         for (auto const& a : {std::string("--min-api"), minSdk, std::string("--lib"), androidJar,
                               std::string("--output"), dexDir})
             d8Step.argv.push_back(a);
@@ -2555,9 +2724,10 @@ inline plan plan_for(options opt = {}) {
         baseModule.role = "artifact";
         baseModule.description = "AAB BASE MODULE";
         baseModule.output = (outDir / "base.zip").string();
-        baseModule.argv = { makeModule, link.output, (outDir / "module").string(), work.string(),
-                        javaOutputs.empty() ? std::string("-") : javaOutputs.front(),
-                        jar, baseModule.output };
+        baseModule.argv = then(helper("make-module"), {
+                link.output, (outDir / "module").string(), work.string(),
+                javaOutputs.empty() ? std::string("-") : javaOutputs.front(),
+                jar, baseModule.output });
         baseModule.inputs = { link.output };
         for (auto const& f : libInputs)   baseModule.inputs.push_back(f);
         for (auto const& f : assetInputs) baseModule.inputs.push_back(f);
@@ -2571,8 +2741,9 @@ inline plan plan_for(options opt = {}) {
         build.role = "artifact";
         build.description = "BUNDLETOOL BUILD-BUNDLE";
         build.output = opt.sign ? (outDir / "unsigned.aab").string() : p.output;
-        build.argv = { bundletool, "build-bundle", "--modules=" + baseModule.output,
-                       "--output=" + build.output, "--overwrite" };
+        build.argv = bundletool;
+        build.argv.insert(build.argv.end(), { "build-bundle", "--modules=" + baseModule.output,
+                                              "--output=" + build.output, "--overwrite" });
         build.inputs = { baseModule.output };
         p.steps.push_back(build);
         if (!opt.sign) {
@@ -2603,10 +2774,10 @@ inline plan plan_for(options opt = {}) {
     libs.role = "artifact";
     libs.description = "APK LIBS+ASSETS";
     libs.output = (outDir / "withlibs.apk").string();
-    libs.argv = { copyThenJar, link.output, libs.output, jar };
+    libs.argv = then(helper("copy-then-jar"), { link.output, libs.output, jar });
     if (!javaOutputs.empty()) {
         // After the three fixed operands and before the `jar` arguments: see
-        // `copy-then-jar.sh`.
+        // `copy-then-jar` in `helper_source`.
         libs.argv.push_back("--dex");
         libs.argv.push_back((outDir / "dex").string());
     }
@@ -2652,11 +2823,12 @@ inline plan plan_for(options opt = {}) {
     sign.role = "artifact";
     sign.description = "APKSIGNER";
     sign.output = p.output;
-    sign.argv = { apksigner, "sign", "--ks", keystoreFile,
-                 "--ks-pass", keystorePassArg,
-                 "--ks-key-alias", keystoreAlias,
-                 "--key-pass", keystorePassArg,
-                 "--out", sign.output, align.output };
+    sign.argv = apksigner;
+    append(sign.argv, { "sign", "--ks", keystoreFile,
+                        "--ks-pass", keystorePassArg,
+                        "--ks-key-alias", keystoreAlias,
+                        "--key-pass", keystorePassArg,
+                        "--out", sign.output, align.output });
     sign.inputs = { align.output, keystoreFile };
     p.steps.push_back(sign);
 
