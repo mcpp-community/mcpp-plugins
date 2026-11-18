@@ -16,6 +16,7 @@ import mcpp.rules.swift;
 import mcpp.rules.sycl;
 import mcpp.tools.embed;
 import mcpp.tools.island;
+import mcpp.tools.steps;
 import mcpp.dist.appimage;
 import mcpp.dist.wix;
 import mcpp.dist.apple;
@@ -58,6 +59,20 @@ int main() {
     // Same question of the island generator: the one call that writes
     // nothing. `entry_name` is where its only parsing lives.
     ok = ok && mcpp::tools::island::entry_name("int f(int a)") == "f";
+    // And of the step programs: what the backend renders, which writes
+    // nothing itself. A value keeps its space and semicolon, and a list built
+    // when the step runs follows the command's own arguments.
+    {
+        mcpp::tools::steps::program s;
+        s.glob("found", "d/*.class", { .recursive = true })
+         .run({"a b", "c;d"}, { .working_directory = "w", .append_list = "found" });
+        ok = ok && mcpp::tools::steps::cmake_backend::render(s)
+               == "set(mcpp_steps_found)\n"
+                  "file(GLOB_RECURSE mcpp_steps_matched LIST_DIRECTORIES false [==[d/*.class]==])\n"
+                  "list(APPEND mcpp_steps_found ${mcpp_steps_matched})\n"
+                  "execute_process(COMMAND [==[a b]==] [==[c;d]==] ${mcpp_steps_found}\n"
+                  "    WORKING_DIRECTORY [==[w]==]\n    COMMAND_ERROR_IS_FATAL ANY)\n";
+    }
 
     // `dist-wix`, `dist-apple` and `dist-web` are neither rules nor tools, but the same
     // property is worth asserting on every platform for the same reason: a

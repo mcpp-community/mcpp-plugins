@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.24.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.25.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -75,6 +75,7 @@ mcpp 2026.11.7.1 or later; cross configuration requires CMake 3.19 or later.
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.10.1.3 | Compiles SYCL (`*.sycl`) with DPC++. | [rules](docs/rules.md#rules-sycl) |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | Writes a data file into a header the program compiles in. | [tools-embed](docs/tools-embed.md) |
 | `tools-island` | `mcpp.tools.island` | 2026.9.7.1 | Generates the `extern "C"` boundary and the C++ module of a code island. | [tools-island](docs/tools-island.md) |
+| `tools-steps` | `mcpp.tools.steps` | 2026.10.1.3 | Describes an action whose work is more than one command as portable operations a backend runs; implied by `dist-apk` and `dist-apple`. | [tools-steps](docs/tools-steps.md) |
 | `dist-appimage` | `mcpp.dist.appimage` | 2026.10.1.3 | Turns the tree `mcpp pack` stages into an AppImage (Linux). | [dist](docs/dist.md#dist-appimage) |
 | `dist-deb` | `mcpp.dist.deb` | 2026.10.30.1 | Installs the staged tree under `/opt/<name>` with a launcher, a desktop entry and an icon, as a Debian package (Linux targets). | [dist](docs/dist.md#dist-deb-and-dist-rpm) |
 | `dist-rpm` | `mcpp.dist.rpm` | 2026.10.30.1 | The same installation as an RPM package (Linux targets). | [dist](docs/dist.md#dist-deb-and-dist-rpm) |
