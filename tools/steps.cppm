@@ -52,6 +52,12 @@ struct glob_options {
     bool recursive = false;
     // Give each match relative to this directory rather than absolute.
     std::string relative_to;
+    // Drop a match whose path, as it is given, matches one of these patterns
+    // (0.26.0). Unlike the pattern that finds the files, an exclusion applies
+    // to the whole path: `*` matches any run of characters, `/` included, and
+    // `?` one character; `*/platform/ios/App/*` drops everything below such a
+    // directory at any depth.
+    std::vector<std::string> exclude;
 };
 
 enum class op_kind {
@@ -59,9 +65,9 @@ enum class op_kind {
     rename, symlink, glob, append, require,
 };
 
-// One operation. `values` is the argument vector of `run` and the values of
-// `append`; `a` and `b` are an operation's operands; `list` names the list an
-// operation reads or extends.
+// One operation. `values` is the argument vector of `run`, the values of
+// `append` and the exclusions of `glob`; `a` and `b` are an operation's
+// operands; `list` names the list an operation reads or extends.
 struct op {
     op_kind                  kind;
     std::vector<std::string> values;
@@ -114,7 +120,7 @@ public:
     }
     // Appends the files a pattern matches, sorted, to a list.
     program& glob(std::string list, std::string pattern, glob_options o = {}) {
-        op x{ op_kind::glob, {}, std::move(pattern), std::move(o.relative_to), std::move(list) };
+        op x{ op_kind::glob, std::move(o.exclude), std::move(pattern), std::move(o.relative_to), std::move(list) };
         x.recursive = o.recursive;
         return add(std::move(x));
     }
@@ -169,6 +175,32 @@ inline bool valid_list_name(const std::string& name) {
 }
 
 inline std::string var(const std::string& list) { return "mcpp_steps_" + list; }
+
+// An exclusion pattern as an anchored regular expression over the whole path:
+// `*` is any run of characters, `?` one, a bracket expression stays one, and
+// every other character stands for itself.
+inline std::string exclusion_regex(const std::string& pattern) {
+    std::string out = "^";
+    for (std::size_t i = 0; i < pattern.size(); ++i) {
+        const char c = pattern[i];
+        if (c == '*') {
+            out += ".*";
+        } else if (c == '?') {
+            out += '.';
+        } else if (c == '[') {
+            const std::size_t close = pattern.find(']', i + 1);
+            if (close == std::string::npos) { out += "\\["; continue; }
+            std::string set = pattern.substr(i + 1, close - i - 1);
+            if (!set.empty() && set[0] == '!') set[0] = '^';
+            out += "[" + set + "]";
+            i = close;
+        } else {
+            if (std::string_view(".+()^$|\\{}").find(c) != std::string_view::npos) out += '\\';
+            out += c;
+        }
+    }
+    return out + "$";
+}
 
 inline std::string parent_of(const std::string& path) {
     return std::filesystem::path(path).parent_path().generic_string();
@@ -242,8 +274,10 @@ inline std::string render(const program& p) {
         case op_kind::glob:
             out += std::string(o.recursive ? "file(GLOB_RECURSE" : "file(GLOB") + " mcpp_steps_matched LIST_DIRECTORIES false";
             if (!o.b.empty()) out += " RELATIVE " + bracket(o.b);
-            out += " " + bracket(o.a) + ")\n"
-                   "list(APPEND " + var(o.list) + " ${mcpp_steps_matched})\n";
+            out += " " + bracket(o.a) + ")\n";
+            for (std::size_t k = 0; k < o.values.size(); ++k)
+                out += "list(FILTER mcpp_steps_matched EXCLUDE REGEX " + bracket(exclusion_regex(o.values[k])) + ")\n";
+            out += "list(APPEND " + var(o.list) + " ${mcpp_steps_matched})\n";
             break;
         case op_kind::append:
             if (!o.values.empty()) out += "list(APPEND " + var(o.list) + " " + brackets(o.values) + ")\n";

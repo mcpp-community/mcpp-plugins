@@ -2490,7 +2490,8 @@ inline plan plan_for(options opt = {}) {
             kt.inputs = kotlinFiles;
             for (auto const& f : javaFiles) kt.inputs.push_back(f);
             for (auto const& c : classpath) kt.inputs.push_back(c);
-            attach(kt, id("apk-kotlinc", "aab-kotlinc"), steps::program{}.run(command).touch(kt.output));
+            attach(kt, id("apk-kotlinc", "aab-kotlinc"),
+                   steps::program{}.remove(kotlinClassesDir).run(command).touch(kt.output));
             p.steps.push_back(kt);
             kotlinStamp = kt.output;
         }
@@ -2508,8 +2509,12 @@ inline plan plan_for(options opt = {}) {
         javacStep.inputs = javaFiles;
         for (auto const& c : classpath) javacStep.inputs.push_back(c);
         if (!kotlinStamp.empty()) javacStep.inputs.push_back(kotlinStamp);
+        // THE DIRECTORY IS EMPTIED FIRST: a compiler adds classes and never
+        // removes one, so a source that left the package -- a library dropped
+        // from the graph, a file deleted -- would otherwise keep its class in
+        // the directory d8 lists, and in the package.
         attach(javacStep, id("apk-javac", "aab-javac"),
-               steps::program{}.run(javacCommand).touch(javacStep.output));
+               steps::program{}.remove(classesDir).run(javacCommand).touch(javacStep.output));
         p.steps.push_back(javacStep);
 
         const std::string dexDir = (outDir / "dex").string();

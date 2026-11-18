@@ -14,7 +14,7 @@ Module `mcpp.tools.steps`; engine floor: 2026.10.1.3; implied by `dist-apk` and 
 | `touch(file)`, `mkdir(dir)` | creates or updates a file, creating its directory; creates a directory |
 | `remove(path)`, `remove_glob(pattern)` | removes a file or a tree, or the files a pattern matches; absent is not an error |
 | `copy_file(from, to)`, `copy_tree(from, to, if_exists)`, `copy_glob(pattern, dir)`, `rename(from, to)`, `symlink(target, link)` | file operations; `copy_tree` copies a directory's contents, and with `if_exists` skips a source that is not a directory |
-| `glob(list, pattern, {recursive, relative_to})` | appends the matching files, sorted, to a named list |
+| `glob(list, pattern, {recursive, relative_to, exclude})` | appends the matching files, sorted, to a named list; from 0.26.0 `exclude` drops a match whose whole path matches one of its patterns, where `*` crosses a `/` |
 | `append(list, values)`, `require(list, message)` | appends values known at plan time; fails the step with `message` when the list is empty |
 
 Every value is taken verbatim, so a path keeps its spaces, semicolons and backslashes. A list is named by letters, digits and `_`, and starts empty. A pattern's wildcards (`*`, `?`, `[...]`) apply to its last component, and `recursive` matches it in every subdirectory.
