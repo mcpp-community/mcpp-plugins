@@ -22,7 +22,7 @@ mcpp is a general build engine with a framework for build plugins. Plugins come 
 
    The level that decided is recorded with `mcpp::fact`. What a plugin returns (a prefix, an SDK root, the deployed files) is its extension point: `build.mcpp` may declare its own actions over it.
 4. **The runtime closure belongs to the package that ships the binaries.** A payload whose libraries load others carries or declares them on every platform, so a packed program starts on a machine with only its operating system. A plugin names the payload's library directories as runtime search directories and nothing beyond them.
-5. **Internals are not part of the contract.** The contract is the set of feature names, `options` fields, returned types and documented environment variables. A consumer's manifest names no program the plugin uses internally. An action's command is the tool itself (`vcpkg`, or `cmake -P` over a script the plugin writes), never a helper program built from the plugin's package.
+5. **Internals are not part of the contract.** The contract is the set of feature names, `options` fields, returned types and documented environment variables. A consumer's manifest names no program the plugin uses internally. An action's command is the tool itself (`vcpkg`, or `cmake -P` over a script the plugin writes, through `mcpp.tools.script`), never a helper program built from the plugin's package and never a shell script, which a Windows host cannot start.
 6. **Work is an action.** Installation, extraction and generation are actions with declared inputs and outputs (SPEC-007 R1.1, R3). A build program plans, and `mcpp emit build-database` never installs.
 7. **Absence is a warning.** A missing tool or SDK is a `mcpp::warning`, and the plan states every path it can (R1.2). A plan never depends on what an action produced (R1.3).
 8. **Engine gaps are reported, not patched.** A capability the engine lacks is filed as an mcpp issue. A workaround that already exists is recorded in the plugin's documentation with the issue number and is removed when the engine provides the capability.
@@ -52,7 +52,7 @@ mcpp-index refuses such a package.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.24.0", features = ["plugins-core"], host-module = true, reexport = true }
+plugins = { version = "0.25.0", features = ["plugins-core"], host-module = true, reexport = true }
 ```
 
 `reexport = true` is needed when the plugin's consumers import L2 modules in

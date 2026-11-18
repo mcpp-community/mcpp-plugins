@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.24.0"
+version     = "0.25.0"
 # The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
 # platform's directives `mcpp.plugins.platform` states (`link_driver`,
 # `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and
@@ -265,7 +265,7 @@ implies = ["plugins-core"]
 
 [features.dist-apple]
 sources = ["dist/apple.cppm"]
-implies = ["plugins-core"]
+implies = ["plugins-core", "tools-script"]
 
 [features.dist-web]
 sources = ["dist/web.cppm"]
@@ -273,7 +273,7 @@ implies = ["plugins-core"]
 
 [features.dist-apk]
 sources = ["dist/apk.cppm"]
-implies = ["plugins-core"]
+implies = ["plugins-core", "tools-script"]
 
 # `dist-deb` AND `dist-rpm` (0.23.0) SHARE ONE UNIT AND ONE TOOL. Both install
 # the staged closure under `/opt/<name>` with a launcher, a desktop entry and an
@@ -327,7 +327,7 @@ implies = ["dist-apk"]
 # consumer never names it.
 [features.deps]
 sources = ["deps/deps.cppm", "deps/compat/names.cppm"]
-implies = ["plugins-core"]
+implies = ["plugins-core", "tools-script"]
 
 [features.deps-vcpkg]
 sources = ["deps/vcpkg.cppm"]
@@ -360,6 +360,13 @@ implies           = ["plugins-core"]
 
 [features.tools-island]
 sources = ["tools/island.cppm"]
+implies           = ["plugins-core"]
+
+# An action whose work is more than one command: `cmake -P` over a script the
+# member writes (0.25.0). The deps members, `dist-apk` and `dist-apple` imply
+# it; each declares `xim:cmake` on its own table, on request.
+[features.tools-script]
+sources = ["tools/script.cppm"]
 implies           = ["plugins-core"]
 
 # ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
@@ -639,6 +646,10 @@ implies           = ["plugins-core"]
 # "run"` keeps a build or a pack from installing it.
 [target.'cfg(os = "macos")'.feature-xlings.dist-apple]
 "xim:macapp-run" = { version = "0.1.0", when = "run" }
+# `xim:cmake` runs the bundle's steps of more than one command (0.25.0,
+# `tools-script`), asked for only when a plan copies a framework or stages a
+# disk image.
+"xim:cmake"      = { version = ">=3.31", provision = "on-request" }
 
 # THE iOS DEVICE ROW'S RUNNER (0.11.0), `devicectl-run`, which installs a signed
 # bundle on a connected device and launches it. The simulator row keeps the
@@ -696,6 +707,11 @@ implies           = ["plugins-core"]
 # mcpp#755): the member requests it while planning a bundle, so an ordinary
 # `--format apk` build installs nothing for it.
 "xim:bundletool"              = { version = "1.18.3", provision = "on-request" }
+# `xim:cmake` RUNS THE STEPS OF MORE THAN ONE COMMAND (0.25.0, `tools-script`):
+# `cmake -P` over a script the member writes, so no step needs a shell on any
+# host. Asked for when a package is planned, as `deps-cmake` and `deps-archive`
+# ask for it.
+"xim:cmake"                   = { version = ">=3.31", provision = "on-request" }
 
 # The compiler `options::kotlin_sources` needs, and the resolver `options::maven`
 # needs, each behind its own feature (see `[features.dist-apk-kotlin]`). The

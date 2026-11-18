@@ -41,7 +41,7 @@ import_std = true
 plugins = { path = "../..", features = [
   "rules-ascendc", "rules-cuda", "rules-hip", "rules-metal", "rules-qt", "rules-slang",
   "rules-spirv", "rules-swift", "rules-sycl",
-  "tools-embed", "tools-island",
+  "tools-embed", "tools-island", "tools-script",
   "dist-appimage", "dist-wix", "dist-apple", "dist-web", "dist-apk",
   "dist-apk-kotlin", "dist-apk-maven", "dist-linux-package", "dist-deb", "dist-rpm",
   "deps-archive", "deps-cmake", "deps-vcpkg",

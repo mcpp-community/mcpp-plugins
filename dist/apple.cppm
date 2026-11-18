@@ -192,6 +192,8 @@ export module mcpp.dist.apple;
 import std;
 import mcpp;
 import mcpp.plugins;
+import mcpp.plugins.tool;
+import mcpp.tools.script;
 
 // Nothing here uses `std::println`, and that is not a style choice: both of
 // its overloads reach into the libc++ dylib for symbols macOS 14 does not
@@ -335,6 +337,11 @@ struct options {
     std::string volume_name;
     std::string dmg;
 
+    // The `cmake` that runs the steps of more than one command (0.25.0,
+    // `mcpp.tools.script`): the `xim:cmake` payload, asked for only when a plan
+    // copies a framework or stages a disk image, or a program named here.
+    mcpp::plugins::tool::choice cmake;
+
     std::string out_dir = std::string(mcpp::out_dir());
 };
 
@@ -424,13 +431,19 @@ inline plan& refuse(plan& p, std::string reason, const std::string& message) {
     return p;
 }
 
-// A helper script, written into `<out_dir>/dist-apple/` at plan time when its
-// bytes differ, and run by `/bin/sh` so that no permission bit is needed.
-inline std::string helper_script(const std::string& out_dir, const char* name,
-                                 std::string_view body) {
-    const auto path = std::filesystem::path(out_dir) / "dist-apple" / name;
-    write_if_different(path, body);
-    return path.string();
+// A step of more than one command (0.25.0): `cmake -P` over a script this
+// program writes into `<out_dir>/dist-apple/steps/` (`mcpp.tools.script`), so
+// no step is a shell script. The script and `cmake` join the step's inputs.
+inline void scripted(step& s, const std::string& cmake, const std::string& out_dir,
+                     const std::string& name, const std::string& text) {
+    std::string file = name;
+    for (char& c : file)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '.') c = '_';
+    const auto how = mcpp::tools::script::command(
+        cmake, std::filesystem::path(out_dir) / "dist-apple" / "steps" / (file + ".cmake"),
+        "mcpp.dist.apple", text);
+    s.argv = how.argv;
+    s.inputs.insert(s.inputs.end(), how.inputs.begin(), how.inputs.end());
 }
 
 inline std::string target_for(const options& opt) {
@@ -1290,25 +1303,28 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
+    // `cmake` runs the steps of more than one command (0.25.0): a framework's
+    // copy and signature, and a disk image's staging. Asked for only when the
+    // plan has one.
+    namespace script = mcpp::tools::script;
+    std::string cmake;
+    if (!frameworks.empty() || dmg) {
+        const auto cmakeSpec = script::cmake_spec("mcpp.dist.apple");
+        const auto cmakeTool = mcpp::plugins::tool::resolve(cmakeSpec, opt.cmake);
+        if (cmakeTool.pending()) { p.reason = "cmake requested"; return p; }
+        if (!cmakeTool) {
+            return refuse(p, "cmake not found",
+                mcpp::plugins::tool::describe_missing(cmakeSpec, cmakeTool)
+                + "\n  So this plan bundles nothing.");
+        }
+        cmake = cmakeTool.program;
+    }
+
     // THE FRAMEWORKS: each copied from the staged tree and, when the bundle is
     // signed, signed before the bundle is -- a bundle signature seals nested
-    // code that is already signed.
+    // code that is already signed. An ad-hoc signature (`-`) carries no
+    // timestamp.
     if (!frameworks.empty()) {
-        const std::string copyFramework = helper_script(opt.out_dir, "copy-framework.sh",
-            "#!/bin/sh\n"
-            "# mcpp.dist.apple helper. Do not edit.\n"
-            "# copy-framework.sh <source> <destination> sign|nosign [identity]\n"
-            "set -e\n"
-            "src=\"$1\"; dst=\"$2\"; mode=\"$3\"; identity=\"$4\"\n"
-            "mkdir -p \"$(dirname \"$dst\")\"\n"
-            "ditto \"$src\" \"$dst\"\n"
-            "if [ \"$mode\" = sign ]; then\n"
-            "    if [ \"$identity\" = - ]; then\n"
-            "        codesign --force --sign - \"$dst\"\n"
-            "    else\n"
-            "        codesign --force --sign \"$identity\" --timestamp \"$dst\"\n"
-            "    fi\n"
-            "fi\n");
         for (auto const& rel : frameworks) {
             const std::string source = (std::filesystem::path(stage) / "bin" / rel).string();
             const std::string dest   = frameworksDir + "/" + rel;
@@ -1316,10 +1332,16 @@ inline plan plan_for(options opt = {}) {
             fw.id          = "mcpp.dist.apple.framework." + rel;
             fw.role        = "artifact";
             fw.description = "APP FRAMEWORK " + rel;
-            fw.argv        = { "/bin/sh", copyFramework, source, dest };
-            if (signs) { fw.argv.push_back("sign"); fw.argv.push_back(signingIdentity); }
-            else       { fw.argv.push_back("nosign"); }
+            std::string text = "file(MAKE_DIRECTORY "
+                             + script::bracket(std::filesystem::path(dest).parent_path().generic_string()) + ")\n"
+                             + script::run({ "ditto", source, dest });
+            if (signs) {
+                text += script::run(signingIdentity == "-"
+                    ? std::vector<std::string>{ "codesign", "--force", "--sign", "-", dest }
+                    : std::vector<std::string>{ "codesign", "--force", "--sign", signingIdentity, "--timestamp", dest });
+            }
             fw.inputs      = { source, "${mcpp.stage_dir}" };
+            scripted(fw, cmake, opt.out_dir, "framework-" + rel, text);
             fw.outputs     = { dest };
             p.steps.push_back(fw);
             assembled.push_back(dest);
@@ -1449,24 +1471,17 @@ inline plan plan_for(options opt = {}) {
         const std::string dmgPath = !opt.dmg.empty() ? opt.dmg
             : (std::filesystem::path(opt.out_dir) / (name + ".dmg")).string();
         const std::string dmgStage = (std::filesystem::path(opt.out_dir) / "dist-apple" / "dmg").string();
-        const std::string stageDmg = helper_script(opt.out_dir, "stage-dmg.sh",
-            "#!/bin/sh\n"
-            "# mcpp.dist.apple helper. Do not edit.\n"
-            "# stage-dmg.sh <bundle> <staging directory> <bundle name>\n"
-            "set -e\n"
-            "bundle=\"$1\"; stage=\"$2\"; name=\"$3\"\n"
-            "rm -rf \"$stage\"\n"
-            "mkdir -p \"$stage\"\n"
-            "ditto \"$bundle\" \"$stage/$name\"\n"
-            "ln -s /Applications \"$stage/Applications\"\n");
-
         step staging;
         staging.id          = "mcpp.dist.apple.dmg-stage";
         staging.role        = "artifact";
         staging.description = "DMG STAGE";
-        staging.argv        = { "/bin/sh", stageDmg, bundlePath, dmgStage,
-                                std::filesystem::path(bundlePath).filename().string() };
+        const std::string staged = dmgStage + "/" + std::filesystem::path(bundlePath).filename().string();
         staging.inputs      = { bundlePath };
+        scripted(staging, cmake, opt.out_dir, "dmg-stage",
+                 "file(REMOVE_RECURSE " + script::bracket(dmgStage) + ")\n"
+                 "file(MAKE_DIRECTORY " + script::bracket(dmgStage) + ")\n"
+               + script::run({ "ditto", bundlePath, staged })
+               + "file(CREATE_LINK /Applications " + script::bracket(dmgStage + "/Applications") + " SYMBOLIC)\n");
         staging.outputs     = { dmgStage };
         p.steps.push_back(staging);
 
