@@ -2626,12 +2626,13 @@ jobs:
       # dist-apk ON A HOST THAT IS NOT LINUX (0.24.0). Every tool the member
       # runs is a native program (`aapt2`, `zipalign`) or a jar on the JDK's
       # `java`, and each step of more than one command is a step program
-      # (0.25.0, `tools-steps`), so no step needs a shell and a Windows host
+      # (0.25.0, `tools-steps`), run from 0.27.0 by the collection's own
+      # runner, so no step needs a shell or `xim:cmake` and a Windows host
       # packs what a Linux host does. On Windows the NDK's
       # libc++ module sources come from `xim:android-ndk-libcxx-modules`,
       # which `xim:android-ndk`'s windows entry depends on. The criteria are the
       # level-0 step's on the Linux job, plus a level-1 package whose dex holds
-      # the activity: that is the javac, d8 and libs scripts all having run.
+      # the activity: that is the javac, d8 and libs steps all having run.
       - name: dist-apk packs a signed APK on this host, level 0 and level 1
         if: ${{ !cancelled() }}
         working-directory: tests/apk-consumer
@@ -2674,7 +2675,7 @@ jobs:
             grep -q "org.mcpp.apkconsumer.$c;" dexdump.log \
               || { echo "FAIL: the dex does not hold org.mcpp.apkconsumer.$c"; exit 1; }
           done
-          echo "ok: level 1 -- the javac, d8 and libs scripts ran on this host, and the dex holds the activity and the generated class"
+          echo "ok: level 1 -- the javac, d8 and libs steps ran on this host, and the dex holds the activity and the generated class"
 
       - name: the rule declared its own compiler
         working-directory: tests/spirv-consumer
