@@ -1,0 +1,117 @@
+// Every operation of `mcpp.tools.steps`, run by the runner `tools-steps`
+// carries (0.27.0), on the host that builds. The operations work under a root
+// whose name holds a space, a semicolon and a non-ASCII character, over a tree
+// with a link to a directory and read-only entries; `steps-probe` sets the
+// permissions, records the arguments a step passes and, last, checks what the
+// operations left. `STEPS_CONSUMER_CASE` adds a step that must fail: `require`
+// on an empty list (`require`), or a program that exits 3 (`status`).
+import std;
+import mcpp;
+import mcpp.tools.steps;
+
+namespace steps = mcpp::tools::steps;
+
+namespace {
+
+// One step, written beside the others. Its output is the file its last
+// operation writes, so a step that stopped early leaves the output missing.
+void submit(const std::string& runner, const std::string& name, const steps::program& program,
+            const std::vector<std::string>& inputs, const std::string& output) {
+    const auto how = steps::command(runner, std::string(mcpp::out_dir()) + "/steps/" + name,
+                                    "steps-consumer", program);
+    const std::string id = "steps-consumer:" + name;
+    const std::string description = "STEPS " + name;
+    mcpp::action a;
+    a.id          = id.c_str();
+    a.role        = mcpp::roles::artifact;
+    a.description = description.c_str();
+    for (auto const& t : how.argv) a.arg(t.c_str());
+    for (auto const& i : how.inputs) a.input(i.c_str());
+    for (auto const& i : inputs) a.input(i.c_str());
+    a.output(output.c_str());
+    a.submit();
+}
+
+} // namespace
+
+int main() {
+    const std::string runner = steps::runner();
+    if (runner.empty()) {
+        std::cerr << steps::missing_runner("steps-consumer") << '\n';
+        return 1;
+    }
+    const std::string probe = mcpp::dep_bin("steps-probe", "steps-probe");
+    if (probe.empty()) {
+        std::cerr << "steps-consumer: the tool steps-probe is not available to this build program\n";
+        return 1;
+    }
+    const std::string out = mcpp::out_dir();
+    // A space, a semicolon and `ü`, and a value with `ü 漢`, each written as its
+    // UTF-8 bytes so that the source's encoding cannot alter them.
+    const std::string root = out + "/steps root; \xC3\xBC";
+    const std::string han  = "\xC3\xBC \xE6\xBC\xA2";
+
+    steps::program ops;
+    ops.remove(root)
+       .touch(root + "/src/b.txt")
+       .touch(root + "/src/a.txt")
+       .touch(root + "/src/c.log")
+       .touch(root + "/src/sub/d.txt")
+       .touch(root + "/src/platform/ios/App/e.txt")
+       .touch(root + "/src/ro/f.txt")
+       .symlink("sub", root + "/src/linked.txt")
+       .mkdir(root + "/src/empty")
+       .mkdir(root + "/doomed/inner")
+       .touch(root + "/doomed/inner/f.txt")
+       .run({ probe, "mode", "444", root + "/src/ro/f.txt", root + "/doomed/inner/f.txt" })
+       .run({ probe, "mode", "555", root + "/doomed/inner" })
+       .run({ probe, "mode", "700", root + "/src/ro" })
+       .glob("flat", root + "/src/*.txt")
+       .glob("deep", root + "/src/*.txt", { .recursive = true, .relative_to = root + "/src",
+                                            .exclude = { "platform/*" } })
+       .append("deep", { "x y;z", han })
+       .glob("picked", root + "/src/[!a]?t[a-z]t")
+       .glob("cased", root + "/src/A.TXT")
+       .run({ probe, "args", root + "/args-flat.txt", "a b", "c;d", "e\\f", "g h\\", "\"q\"", "", han },
+            { .append_list = "flat" })
+       .run({ probe, "args", root + "/args-deep.txt" }, { .append_list = "deep" })
+       .run({ probe, "args", root + "/args-picked.txt" }, { .append_list = "picked" })
+       .run({ probe, "args", root + "/args-cased.txt" }, { .append_list = "cased" })
+       .run({ probe, "cwd", "cwd.txt" }, { .working_directory = root + "/src/sub" })
+       .copy_file(root + "/args-flat.txt", root + "/copy/deep/args.txt")
+       .copy_file(root + "/src/ro/f.txt", root + "/copy/ro.txt")
+       .copy_file(root + "/args-flat.txt", root + "/copy/ro.txt")
+       .copy_tree(root + "/src", root + "/tree")
+       .copy_tree(root + "/src", root + "/tree")
+       .copy_tree(root + "/absent", root + "/tree2", true)
+       .copy_tree(root + "/src/sub", root + "/tree3", true)
+       .copy_glob(root + "/src/*.txt", root + "/globbed")
+       .rename(root + "/globbed/a.txt", root + "/globbed/renamed.txt")
+       .symlink("src", root + "/link")
+       .remove_glob(root + "/tree/*.txt")
+       .remove(root + "/doomed")
+       .remove(root + "/never-was")
+       .require("flat", "steps-consumer: the glob of src/*.txt found nothing")
+       .run({ probe, "verify", root, out + "/steps-verified.txt", out + "/steps-runs.txt" });
+    submit(runner, "operations", ops, { probe }, out + "/steps-verified.txt");
+
+    mcpp::rerun_if_env_changed("STEPS_CONSUMER_CASE");
+    const char* chosen = std::getenv("STEPS_CONSUMER_CASE");
+    const std::string which = chosen ? chosen : "";
+    if (which == "require") {
+        submit(runner, "require", steps::program{}
+                   .glob("none", root + "/src/*.none")
+                   .require("none", "steps-consumer: the list 'none' is empty, as this case intends")
+                   .touch(out + "/steps-require.txt"),
+               {}, out + "/steps-require.txt");
+    } else if (which == "status") {
+        submit(runner, "status", steps::program{}
+                   .run({ probe, "exit", "3" })
+                   .touch(out + "/steps-status.txt"),
+               { probe }, out + "/steps-status.txt");
+    } else if (!which.empty()) {
+        std::cerr << "steps-consumer: STEPS_CONSUMER_CASE names no case: " << which << '\n';
+        return 1;
+    }
+    return 0;
+}

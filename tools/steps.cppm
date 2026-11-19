@@ -10,22 +10,28 @@
 // `/bin/sh` scripts, which a Windows host cannot start; a Java program on the
 // JDK a member already needed; `cmake -P` over a script.
 //
-// HERE A MEMBER DESCRIBES THE STEP AND A BACKEND RUNS IT. `program` is a list
+// HERE A MEMBER DESCRIBES THE STEP AND A RUNNER RUNS IT. `program` is a list
 // of portable operations -- run a command, touch, make, remove and copy
 // files, list files into a named list, fail when a list is empty -- with
 // every value taken verbatim, so a path keeps its spaces, semicolons and
-// backslashes on every host. A member never writes the backend's language.
+// backslashes on every host. A member never writes the runner's language.
 //
-// THE BACKEND IS `cmake -P` UNTIL THE ENGINE RUNS A STEP PROGRAM ITSELF
-// (mcpp-community/mcpp#955). `command` renders the program as a CMake script,
-// written only when its text changes, and returns the action's argument
-// vector and the inputs it declares -- the runner and the script, so a changed
-// program or runner runs the action again and an unchanged one does not.
-// `runner_spec` is the runner the member resolves through `mcpp.plugins.tool`;
-// a member that runs steps declares it on its own table,
-// `"xim:cmake" = { version = ">=3.31", provision = "on-request" }`, so a plan
-// that runs none installs nothing. When the engine runs step programs, these
-// two functions change and no member does.
+// THE RUNNER IS THIS PACKAGE'S OWN PROGRAM, `steps` (0.27.0). `command` writes
+// the program as a step file (`mcpp::plugins::steps`, in the lib root, which
+// the runner reads), only when its text changes, and returns the action's
+// argument vector, `{<runner>, <file>}`, with both as the inputs it declares,
+// so a changed program or runner runs the action again and an unchanged one
+// does not. The feature that adds this module declares the runner as its tool
+// (`[features.tools-steps] tools = ["steps"]`): it is built once for the
+// machine that builds, and every build program that links this library with
+// the feature active receives its path (mcpp 2026.11.19.1, SPEC-007 R6.3),
+// a framework's user as well as the package that names this collection.
+//
+// The runner was `cmake -P` over a rendered script in 0.25.0 and 0.26.0, and
+// each member that ran steps declared `xim:cmake` for it. mcpp-community/mcpp#955
+// asked the engine to interpret these operations; the engine instead lets a
+// plugin carry its own program, so the operations stay this package's
+// vocabulary, versioned with it.
 //
 // Loops here index rather than iterate: an inline function of an imported
 // module that iterates a string fails to compile in the importer under
@@ -35,10 +41,13 @@ export module mcpp.tools.steps;
 
 import std;
 import mcpp;
+import mcpp.plugins;
 import mcpp.plugins.fs;
-import mcpp.plugins.tool;
 
 export namespace mcpp::tools::steps {
+
+using op_kind = mcpp::plugins::steps::op_kind;
+using op      = mcpp::plugins::steps::op;
 
 struct run_options {
     // The directory the command runs in; empty is the build's.
@@ -58,22 +67,6 @@ struct glob_options {
     // `?` one character; `*/platform/ios/App/*` drops everything below such a
     // directory at any depth.
     std::vector<std::string> exclude;
-};
-
-enum class op_kind {
-    run, touch, mkdir, remove, remove_glob, copy_file, copy_tree, copy_glob,
-    rename, symlink, glob, append, require,
-};
-
-// One operation. `values` is the argument vector of `run`, the values of
-// `append` and the exclusions of `glob`; `a` and `b` are an operation's
-// operands; `list` names the list an operation reads or extends.
-struct op {
-    op_kind                  kind;
-    std::vector<std::string> values;
-    std::string              a, b, list;
-    bool                     recursive = false;
-    bool                     if_exists = false;
 };
 
 // The operations of one step, run in order; the first that fails fails the
@@ -145,182 +138,42 @@ private:
     std::vector<op> ops_;
 };
 
-// ─── The backend: `cmake -P` (until mcpp-community/mcpp#955) ───────────────
+// ─── The runner: `steps`, a program of this package (0.27.0) ──────────────
 
-namespace cmake_backend {
+// The runner's path in this build program, from the feature's tool. Empty only
+// where the engine gives this program no such tool, and the engine then
+// reports the undeclared tool itself (`build-program/undeclared-tool`); a
+// member refuses with `missing_runner` rather than plan an action without a
+// program.
+inline std::string runner() { return mcpp::dep_bin("mcpp.plugins", "steps"); }
 
-// A value as a bracket argument, with a bracket no value contains.
-inline std::string bracket(std::string_view value) {
-    std::string eq = "==";
-    while (value.find("]" + eq + "]") != std::string_view::npos) eq += '=';
-    return "[" + eq + "[" + std::string(value) + "]" + eq + "]";
-}
-
-inline std::string brackets(const std::vector<std::string>& values) {
-    std::string out;
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        if (i) out += ' ';
-        out += bracket(values[i]);
-    }
-    return out;
-}
-
-inline bool valid_list_name(const std::string& name) {
-    if (name.empty()) return false;
-    for (std::size_t i = 0; i < name.size(); ++i) {
-        const unsigned char c = static_cast<unsigned char>(name[i]);
-        if (!std::isalnum(c) && c != '_') return false;
-    }
-    return true;
-}
-
-inline std::string var(const std::string& list) { return "mcpp_steps_" + list; }
-
-// An exclusion pattern as an anchored regular expression over the whole path:
-// `*` is any run of characters, `?` one, a bracket expression stays one, and
-// every other character stands for itself.
-inline std::string exclusion_regex(const std::string& pattern) {
-    std::string out = "^";
-    for (std::size_t i = 0; i < pattern.size(); ++i) {
-        const char c = pattern[i];
-        if (c == '*') {
-            out += ".*";
-        } else if (c == '?') {
-            out += '.';
-        } else if (c == '[') {
-            const std::size_t close = pattern.find(']', i + 1);
-            if (close == std::string::npos) { out += "\\["; continue; }
-            std::string set = pattern.substr(i + 1, close - i - 1);
-            if (!set.empty() && set[0] == '!') set[0] = '^';
-            out += "[" + set + "]";
-            i = close;
-        } else {
-            if (std::string_view(".+()^$|\\{}").find(c) != std::string_view::npos) out += '\\';
-            out += c;
-        }
-    }
-    return out + "$";
-}
-
-inline std::string parent_of(const std::string& path) {
-    return std::filesystem::path(path).parent_path().generic_string();
-}
-
-// The script. A list name outside letters, digits and `_` is a member's
-// mistake and is refused here rather than rendered into the script.
-inline std::string render(const program& p) {
-    std::string out;
-    std::vector<std::string> lists;
-    const auto& ops = p.ops();
-    for (std::size_t i = 0; i < ops.size(); ++i) {
-        const std::string& l = ops[i].list;
-        if (l.empty()) continue;
-        if (!valid_list_name(l))
-            throw std::invalid_argument("mcpp.tools.steps: list name '" + l + "' is not letters, digits and _");
-        if (std::find(lists.begin(), lists.end(), l) == lists.end()) {
-            lists.push_back(l);
-            out += "set(" + var(l) + ")\n";
-        }
-    }
-    for (std::size_t i = 0; i < ops.size(); ++i) {
-        const op& o = ops[i];
-        switch (o.kind) {
-        case op_kind::run:
-            out += "execute_process(COMMAND " + brackets(o.values);
-            if (!o.list.empty()) out += " ${" + var(o.list) + "}";
-            if (!o.a.empty()) out += "\n    WORKING_DIRECTORY " + bracket(o.a);
-            out += "\n    COMMAND_ERROR_IS_FATAL ANY)\n";
-            break;
-        case op_kind::touch:
-            if (!parent_of(o.a).empty()) out += "file(MAKE_DIRECTORY " + bracket(parent_of(o.a)) + ")\n";
-            out += "file(TOUCH " + bracket(o.a) + ")\n";
-            break;
-        case op_kind::mkdir:
-            out += "file(MAKE_DIRECTORY " + bracket(o.a) + ")\n";
-            break;
-        case op_kind::remove:
-            out += "file(REMOVE_RECURSE " + bracket(o.a) + ")\n";
-            break;
-        case op_kind::remove_glob:
-            out += "file(GLOB mcpp_steps_matched LIST_DIRECTORIES false " + bracket(o.a) + ")\n"
-                   "if(mcpp_steps_matched)\n"
-                   "    file(REMOVE ${mcpp_steps_matched})\n"
-                   "endif()\n";
-            break;
-        case op_kind::copy_file:
-            if (!parent_of(o.b).empty()) out += "file(MAKE_DIRECTORY " + bracket(parent_of(o.b)) + ")\n";
-            out += "file(COPY_FILE " + bracket(o.a) + " " + bracket(o.b) + ")\n";
-            break;
-        case op_kind::copy_tree: {
-            // A trailing `/` copies the directory's contents rather than the directory.
-            std::string body = "file(MAKE_DIRECTORY " + bracket(o.b) + ")\n"
-                               "file(COPY " + bracket(o.a + "/") + " DESTINATION " + bracket(o.b) + ")\n";
-            out += o.if_exists ? "if(IS_DIRECTORY " + bracket(o.a) + ")\n" + body + "endif()\n" : body;
-            break;
-        }
-        case op_kind::copy_glob:
-            out += "file(GLOB mcpp_steps_matched LIST_DIRECTORIES false " + bracket(o.a) + ")\n"
-                   "file(MAKE_DIRECTORY " + bracket(o.b) + ")\n"
-                   "if(mcpp_steps_matched)\n"
-                   "    file(COPY ${mcpp_steps_matched} DESTINATION " + bracket(o.b) + ")\n"
-                   "endif()\n";
-            break;
-        case op_kind::rename:
-            out += "file(RENAME " + bracket(o.a) + " " + bracket(o.b) + ")\n";
-            break;
-        case op_kind::symlink:
-            out += "file(CREATE_LINK " + bracket(o.a) + " " + bracket(o.b) + " SYMBOLIC)\n";
-            break;
-        case op_kind::glob:
-            out += std::string(o.recursive ? "file(GLOB_RECURSE" : "file(GLOB") + " mcpp_steps_matched LIST_DIRECTORIES false";
-            if (!o.b.empty()) out += " RELATIVE " + bracket(o.b);
-            out += " " + bracket(o.a) + ")\n";
-            for (std::size_t k = 0; k < o.values.size(); ++k)
-                out += "list(FILTER mcpp_steps_matched EXCLUDE REGEX " + bracket(exclusion_regex(o.values[k])) + ")\n";
-            out += "list(APPEND " + var(o.list) + " ${mcpp_steps_matched})\n";
-            break;
-        case op_kind::append:
-            if (!o.values.empty()) out += "list(APPEND " + var(o.list) + " " + brackets(o.values) + ")\n";
-            break;
-        case op_kind::require:
-            out += "if(NOT " + var(o.list) + ")\n"
-                   "    message(FATAL_ERROR " + bracket(o.a) + ")\n"
-                   "endif()\n";
-            break;
-        }
-    }
-    return out;
-}
-
-} // namespace cmake_backend
-
-// The program a member resolves to run steps: `xim:cmake` in its two layouts
-// (`bin/` and, on macOS, `CMake.app/Contents/bin`). `who` is the member's
-// module, for the decision record and the refusal text.
-inline mcpp::plugins::tool::spec runner_spec(std::string who) {
-    return { .who = std::move(who), .package = "cmake", .programs = {"cmake"},
-             .bin_dirs = {"bin", "CMake.app/Contents/bin"}, .option = "options::cmake" };
+// The refusal of a member that has no runner; `who` is the member's module.
+inline std::string missing_runner(std::string_view who) {
+    return std::format(
+        "{}: the runner of its step programs, `steps` of mcpp.plugins, is not available to this "
+        "build program. The feature `tools-steps` declares it, and mcpp 2026.11.19.1 or newer "
+        "gives it to every build program that links mcpp.plugins with that feature active.",
+        who);
 }
 
 // What an action declares to run a step program.
 struct invocation {
-    std::vector<std::string> argv;     // the runner, then its arguments
-    std::vector<std::string> inputs;   // the runner and the written program
+    std::vector<std::string> argv;     // the runner, then the step file
+    std::vector<std::string> inputs;   // the runner and the step file
 };
 
-// Writes `p` beside `base` (the backend adds its extension) unless the file
-// already holds it, and returns how an action runs it with `runner`, the
-// program `runner_spec` resolved. The first line names `who`, so a file found
-// in an output directory says what wrote it.
+// Writes `p` as `<base>.steps` unless the file already holds it, and returns
+// how an action runs it with `runner`, the path `runner()` answered. The
+// comment line names `who`, so a file found in an output directory says what
+// wrote it.
 inline invocation command(const std::string& runner, const std::filesystem::path& base,
                           std::string_view who, const program& p) {
     std::filesystem::path file = base;
-    file += ".cmake";
-    mcpp::plugins::fs::write_if_changed(file,
-        "# Written by " + std::string(who) + " through mcpp.tools.steps. Do not edit.\n"
-        + cmake_backend::render(p));
+    file += ".steps";
+    mcpp::plugins::fs::write_if_changed(file, mcpp::plugins::steps::write(p.ops(),
+        "Written by " + std::string(who) + " through mcpp.tools.steps. Do not edit."));
     const std::string path = mcpp::plugins::fs::generic(file);
-    return { .argv = { runner, "-P", path }, .inputs = { runner, path } };
+    return { .argv = { runner, path }, .inputs = { runner, path } };
 }
 
 } // namespace mcpp::tools::steps

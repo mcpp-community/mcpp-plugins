@@ -205,10 +205,6 @@ struct options {
     // `platform` is a root carrying `android.jar`; `keystore_package` above
     // stays the way a keystore package is named.
     mcpp::plugins::tool::choice build_tools, platform, jdk, bundletool_dir, kotlin, coursier;
-    // The runner of the steps of more than one command (0.25.0,
-    // `mcpp.tools.steps`; `cmake` until mcpp#955): the `xim:cmake` payload,
-    // asked for when a package is planned, or a program named here.
-    mcpp::plugins::tool::choice cmake;
     std::string keystore_alias;
     // The NAME of an environment variable `apksigner` itself reads
     // (`--ks-pass env:<NAME>`) -- this member never reads the secret; only
@@ -2271,21 +2267,13 @@ inline plan plan_for(options opt = {}) {
     // runs; the linked archive gains the native libraries, the assets and every
     // `classes*.dex` d8 wrote; an App Bundle's base module is the linked archive
     // laid out as bundletool reads it. Each is a step program
-    // (`mcpp.tools.steps`): this member describes it, and its runner runs it,
-    // so no step needs a shell on any host and the runner and the written
-    // program are inputs of the step.
+    // (`mcpp.tools.steps`): this member describes it, and the runner `steps`,
+    // this package's program, runs it (0.27.0), so no step needs a shell on any
+    // host and the runner and the written program are inputs of the step.
     namespace steps = mcpp::tools::steps;
-    // Resolved here, once the project's own inputs have been checked, so a
-    // refusal about them is not hidden behind a tool that is still to come.
-    const auto runnerSpec = steps::runner_spec("mcpp.dist.apk");
-    const auto runnerTool = mcpp::plugins::tool::resolve(runnerSpec, opt.cmake);
-    if (runnerTool.pending()) return refuse(p, "cmake requested", {});
-    if (!runnerTool) {
-        return refuse(p, "cmake not found",
-            mcpp::plugins::tool::describe_missing(runnerSpec, runnerTool)
-            + "\n  So this plan packs nothing.");
-    }
-    const std::string runner = runnerTool.program;
+    const std::string runner = steps::runner();
+    if (runner.empty())
+        return refuse(p, "no step runner", steps::missing_runner("mcpp.dist.apk") + "\n  So this plan packs nothing.");
     const auto attach = [&](step& s, std::string_view name, const steps::program& program) {
         const auto how = steps::command(runner, outDir / "steps" / std::string(name), "mcpp.dist.apk", program);
         s.argv = how.argv;

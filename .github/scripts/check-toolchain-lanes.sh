@@ -47,6 +47,7 @@ llvm_full=(
     "island-interface|^all ok"
     "archive-consumer|^archive-consumer: 'greetings from the archive'"
     "spirv-module-consumer|^all ok"
+    "steps-consumer|^steps-consumer ok"
 )
 llvm_configure_only=(qt-consumer qt-widgets-consumer qt-sdk-consumer qt-import-only)
 

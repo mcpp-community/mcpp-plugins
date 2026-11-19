@@ -51,15 +51,15 @@ stage_tree() {
 }
 
 # run_program <format> <os> <env> <stage> <log>
-# The runner of the step programs (0.25.0, `tools-steps`): a plan names it and
-# never runs it, so a file where the payload keeps `cmake` is enough.
-RUNNER=$(mktemp -d)
-mkdir -p "$RUNNER/bin" && : > "$RUNNER/bin/cmake" && chmod +x "$RUNNER/bin/cmake"
+# The runner of the step programs (0.27.0, `steps`), which the engine hands a
+# build program through `tools-steps`' tool: a plan names it and never runs it,
+# so the path is enough.
+RUNNER=/plan-check/tool-store/bin/steps
 
 run_program() {
     local out
     out=$(mktemp -d)
-    env -i PATH="$PATH" MCPP_XPKG_XIM_CMAKE_DIR="$RUNNER" \
+    env -i PATH="$PATH" MCPP_DEP_MCPP_PLUGINS_BIN_STEPS="$RUNNER" \
         MCPP_PACK_FORMAT="$1" MCPP_TARGET_OS="$2" MCPP_TARGET_ENV="$3" \
         MCPP_PACK_STAGE_DIR="$4" MCPP_MANIFEST_DIR="$PWD" \
         MCPP_PKG_NAME=app-framework-consumer MCPP_PKG_VERSION=0.1.0 \
@@ -83,15 +83,56 @@ def fail(msg):
     print("--- " + log + " ---")
     print("\n".join(lines))
     sys.exit(1)
-# A step of more than one command is `<runner> -P <program>`, with the runner
-# and the program among its inputs; this returns the program the step runs.
+# A step of more than one command is `<runner> <file>.steps`, with the runner
+# and the file among its inputs; this returns the operations the file holds,
+# read as the runner reads them (src/plugins.cppm, `mcpp::plugins::steps`):
+# after the format line and comments, one record per operation -- its name, its
+# flags, the operands a and b, its list, the count of its values and each value,
+# every value `<bytes>:<value>`.
 def program(a):
     c = a["command"]
-    if len(c) != 3 or not c[0].endswith("/bin/cmake") or c[1] != "-P" or not c[2].endswith(".cmake"):
+    if len(c) != 2 or not c[0].endswith("/steps") or not c[1].endswith(".steps"):
         fail(a["id"] + " is not a step program run by the runner: " + repr(c))
-    if c[0] not in a["inputs"] or c[2] not in a["inputs"]:
+    if c[0] not in a["inputs"] or c[1] not in a["inputs"]:
         fail(a["id"] + " does not declare the runner and its program as inputs")
-    return open(c[2]).read()
+    data = open(c[1], "rb").read()
+    if not data.startswith(b"mcpp-steps 1\n"):
+        fail(c[1] + " is not a step file of format 1")
+    at = len(b"mcpp-steps 1\n")
+    def word():
+        nonlocal at
+        end = at
+        while end < len(data) and data[end:end + 1] not in (b" ", b"\n"): end += 1
+        w, at = data[at:end].decode("utf-8"), end
+        return w
+    def counted():
+        nonlocal at
+        colon = data.index(b":", at)
+        n = int(data[at:colon])
+        v, at = data[colon + 1:colon + 1 + n].decode("utf-8"), colon + 1 + n
+        return v
+    def skip(ch):
+        nonlocal at
+        if data[at:at + 1] != ch: fail(c[1] + ": expected " + repr(ch) + " at byte " + str(at))
+        at += 1
+    ops = []
+    while at < len(data):
+        if data[at:at + 1] == b"#":
+            at = data.index(b"\n", at) + 1
+            continue
+        o = {"kind": word()}
+        skip(b" "); o["flags"] = word()
+        for k in ("a", "b", "list"):
+            skip(b" "); o[k] = counted()
+        skip(b" "); n = int(word())
+        o["values"] = []
+        for _ in range(n):
+            skip(b" "); o["values"].append(counted())
+        skip(b"\n")
+        ops.append(o)
+    return ops
+def runs(ops):
+    return [o["values"] for o in ops if o["kind"] == "run"]
 exec(code)
 PY
 }
@@ -109,9 +150,11 @@ fw = actions.get("mcpp.dist.apple.framework.libapp-framework-dep.dylib")
 if not fw: fail("no framework step for the staged dylib")
 if not fw["outputs"] or not fw["outputs"][0].endswith("/AppFrameworkConsumer.app/Contents/Frameworks/libapp-framework-dep.dylib"):
     fail("the framework step does not write Contents/Frameworks/libapp-framework-dep.dylib")
-fwp = program(fw)
-if "ditto" not in fwp or "[==[codesign]==] [==[--force]==] [==[--sign]==] [==[-]==]" not in fwp or "--timestamp" in fwp:
-    fail("the framework step does not copy and sign ad hoc:\n" + fwp)
+fwr = runs(program(fw))
+dest = fw["outputs"][0]
+if not any(r[0] == "ditto" and r[-1] == dest for r in fwr) \
+        or ["codesign", "--force", "--sign", "-", dest] not in fwr or any("--timestamp" in r for r in fwr):
+    fail("the framework step does not copy and sign ad hoc: " + repr(fwr))
 if any(i.startswith("mcpp.dist.apple.resource.libapp") for i in actions):
     fail("the staged dylib is also planned as a resource")
 if "mcpp.dist.apple.resource.data" not in actions:
@@ -143,8 +186,9 @@ img = actions.get("mcpp.dist.apple.dmg")
 if not (bundle and st and img): fail("the disk image steps are not planned")
 if bundle["outputs"][0] not in st["inputs"]: fail("the image staging does not take the bundle")
 stp = program(st)
-if "ditto" not in stp or "file(CREATE_LINK [==[/Applications]==]" not in stp:
-    fail("the image staging does not copy the bundle beside an Applications link:\n" + stp)
+if not any(r[0] == "ditto" for r in runs(stp)) \
+        or not any(o["kind"] == "symlink" and o["a"] == "/Applications" for o in stp):
+    fail("the image staging does not copy the bundle beside an Applications link: " + repr(stp))
 if st["outputs"][0] not in img["inputs"]: fail("hdiutil does not take the staging directory")
 cmd = img["command"]
 if cmd[:2] != ["hdiutil", "create"] or "UDZO" not in cmd or not cmd[-1].endswith("/AppFrameworkConsumer.dmg"):
@@ -182,7 +226,7 @@ check /tmp/apple-plan-ios.log '
 fw = actions.get("mcpp.dist.apple.framework.libapp-framework-dep.dylib")
 if not fw or not fw["outputs"][0].endswith("/AppFrameworkConsumer.app/Frameworks/libapp-framework-dep.dylib"):
     fail("the simulator bundle does not carry the dylib in Frameworks/")
-if "codesign" in program(fw): fail("the simulator framework is signed")
+if any(r[0] == "codesign" for r in runs(program(fw))): fail("the simulator framework is signed")
 if "mcpp.dist.apple.codesign" in actions: fail("the simulator bundle is signed")
 if "mcpp:link-flag=-Wl,-rpath,@executable_path/Frameworks" not in lines:
     fail("no iOS framework rpath was emitted")

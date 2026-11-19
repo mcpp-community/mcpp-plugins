@@ -363,12 +363,31 @@ sources = ["tools/island.cppm"]
 implies           = ["plugins-core"]
 
 # An action whose work is more than one command (0.25.0): the member describes
-# the step and a backend runs it, `cmake -P` until the engine runs step
-# programs itself (mcpp-community/mcpp#955). `dist-apk` and `dist-apple` imply
-# it; each declares the runner, `xim:cmake`, on its own table, on request.
+# the step and a runner runs it. `dist-apk` and `dist-apple` imply it.
+#
+# THE RUNNER IS THIS PACKAGE'S PROGRAM `steps`, AND THE FEATURE CARRIES IT
+# (0.27.0). An edge that activates this feature acts as if it had written
+# `tools = ["steps"]`: the program is built once for the machine that builds,
+# kept in the tool store, and its path reaches every build program that links
+# this library with the feature active, a framework's user included (mcpp
+# 2026.11.19.1, SPEC-007 R6.3). Until 0.27.0 the runner was `cmake -P`, and each
+# member that ran steps declared `xim:cmake` for it; mcpp-community/mcpp#955
+# asked the engine to run the operations instead, and the engine gave a plugin
+# this way to carry its own program.
 [features.tools-steps]
 sources = ["tools/steps.cppm"]
 implies           = ["plugins-core"]
+tools             = ["steps"]
+
+# The dependency only the runner's own build needs: mcpplibs.os, which starts
+# each program with its argument vector and no shell on Linux, macOS and
+# Windows. The runner names this feature in `required_features`, and the build
+# that makes a target as a tool activates the target's required features, so
+# only that build has it and a consumer never names `steps-runner`.
+[features.steps-runner]
+
+[feature-deps.steps-runner]
+mcpplibs.os = "0.4.5"
 
 # ── The environment each rule needs (mcpp 2026.9.6.6+) ──────────────────────
 #
@@ -749,4 +768,11 @@ kind = "lib"
 [targets.mcpp-embed]
 kind = "bin"
 main = "tools/embed_main.cpp"
+
+# steps -- the runner of a step program (`mcpp.tools.steps`), which
+# `[features.tools-steps] tools` brings to a build program; see that feature.
+[targets.steps]
+kind              = "bin"
+main              = "tools/steps_main.cpp"
+required_features = ["steps-runner"]
 

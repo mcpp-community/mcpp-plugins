@@ -5,6 +5,7 @@
 // someone's project.
 import std;
 import mcpp;
+import mcpp.plugins;
 import mcpp.rules.ascendc;
 import mcpp.rules.cuda;
 import mcpp.rules.hip;
@@ -59,32 +60,41 @@ int main() {
     // Same question of the island generator: the one call that writes
     // nothing. `entry_name` is where its only parsing lives.
     ok = ok && mcpp::tools::island::entry_name("int f(int a)") == "f";
-    // And of the step programs: what the backend renders, which writes
-    // nothing itself. A value keeps its space and semicolon, and a list built
-    // when the step runs follows the command's own arguments.
+    // And of the step programs (0.27.0): the file `command` writes, which
+    // writes nothing itself here, read back as the runner reads it. Every value
+    // is counted, so a space, a semicolon, a backslash, a quote, a line break
+    // and non-ASCII text survive; so do the flags, the operands, the list a
+    // command reads and an exclusion; and the text is the format
+    // docs/tools-steps.md states.
     {
+        namespace st = mcpp::plugins::steps;
         mcpp::tools::steps::program s;
-        s.glob("found", "d/*.class", { .recursive = true })
-         .run({"a b", "c;d"}, { .working_directory = "w", .append_list = "found" });
-        ok = ok && mcpp::tools::steps::cmake_backend::render(s)
-               == "set(mcpp_steps_found)\n"
-                  "file(GLOB_RECURSE mcpp_steps_matched LIST_DIRECTORIES false [==[d/*.class]==])\n"
-                  "list(APPEND mcpp_steps_found ${mcpp_steps_matched})\n"
-                  "execute_process(COMMAND [==[a b]==] [==[c;d]==] ${mcpp_steps_found}\n"
-                  "    WORKING_DIRECTORY [==[w]==]\n    COMMAND_ERROR_IS_FATAL ANY)\n";
+        s.glob("found", "d/*.class", { .recursive = true, .relative_to = "d", .exclude = { "*/x/*" } })
+         .run({"a b", "c;d", "e\\f", "\"q\"\n", "\xC3\xBC"}, { .working_directory = "w", .append_list = "found" })
+         .copy_tree("from", "to", true)
+         .require("found", "none found");
+        const std::string text = st::write(s.ops(), "a test");
+        const auto back = st::read(text);
+        ok = ok && back && *back == s.ops()
+               && text == "mcpp-steps 1\n# a test\n"
+                          "glob r 9:d/*.class 1:d 5:found 1 5:*/x/*\n"
+                          "run - 1:w 0: 5:found 5 3:a b 3:c;d 3:e\\f 4:\"q\"\n 2:\xC3\xBC\n"
+                          "copy_tree e 4:from 2:to 0: 0\n"
+                          "require - 10:none found 0: 5:found 0\n";
     }
-    // An exclusion applies to the whole path: `*` crosses a `/`, a character
-    // a regular expression gives meaning to stands for itself, and `[!...]`
-    // is a negated set.
+    // A list named outside letters, digits and `_` is refused while the build
+    // program plans; a file of another format, or with a value whose count
+    // does not hold, is refused by the reader.
     {
-        mcpp::tools::steps::program s;
-        s.glob("objects", "obj/*.o", { .recursive = true, .exclude = { "*/platform/ios/App/*", "a.b+[!x]?" } });
-        ok = ok && mcpp::tools::steps::cmake_backend::render(s)
-               == "set(mcpp_steps_objects)\n"
-                  "file(GLOB_RECURSE mcpp_steps_matched LIST_DIRECTORIES false [==[obj/*.o]==])\n"
-                  "list(FILTER mcpp_steps_matched EXCLUDE REGEX [==[^.*/platform/ios/App/.*$]==])\n"
-                  "list(FILTER mcpp_steps_matched EXCLUDE REGEX [==[^a\\.b\\+[^x].$]==])\n"
-                  "list(APPEND mcpp_steps_objects ${mcpp_steps_matched})\n";
+        namespace st = mcpp::plugins::steps;
+        bool refused = false;
+        try {
+            (void)st::write(mcpp::tools::steps::program{}.append("a-b", {"x"}).ops(), "");
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        ok = ok && refused && !st::read("mcpp-steps 2\n") && !st::read("mcpp-steps 1\nrun - 3:ab 0: 0: 0\n")
+               && !st::read("mcpp-steps 1\nexecute - 0: 0: 0: 0\n");
     }
 
     // `dist-wix`, `dist-apple` and `dist-web` are neither rules nor tools, but the same

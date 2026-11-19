@@ -1197,6 +1197,18 @@ jobs:
           done
           echo "ok: N inputs, one header, one table"
 
+      # tools-steps (0.27.0): every operation of a step program, run by the
+      # collection's own runner `steps`, which the feature carries to the build
+      # program, under a root whose name holds a space, a semicolon and a
+      # non-ASCII character, over a link to a directory and read-only entries;
+      # `require` on an empty list and a program that exits 3, each failing the
+      # step by name; and an unchanged step not run again.
+      # The fixture declares no `xim:cmake`, so nothing but the runner can run
+      # the steps.
+      - name: tools-steps runs every operation with the collection's own runner
+        working-directory: tests/steps-consumer
+        run: MCPP="$MCPP" bash check-steps.sh
+
       # ── dist: what comes out of the LINK ────────────────────────────────
       #
       # Every step above asserts what reaches a COMPILE. These assert what
@@ -2245,6 +2257,15 @@ jobs:
             echo "FAIL: the generated header carries a namespace"; exit 1
           fi
           echo "ok: the boundary is generated and namespaced on this host"
+
+      # The step programs on this host (0.27.0), with the Linux job's criteria:
+      # the runner starts each program with no shell, so its arguments arrive
+      # as the member wrote them on Windows too, and its names reach the file
+      # system in UTF-8.
+      - name: tools-steps runs every operation with the collection's own runner on this host
+        if: ${{ !cancelled() }}
+        working-directory: tests/steps-consumer
+        run: MCPP="$MCPP" bash check-steps.sh
 
       # ── dist, on the platform each member serves ────────────────────────
       #

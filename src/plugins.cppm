@@ -1643,3 +1643,221 @@ inline bool build_output(const std::filesystem::path& dir) {
 }
 
 } // namespace mcpp::plugins::tree
+
+// mcpp::plugins::steps -- a step program as the file that carries it from the
+// build program that plans the step to the runner that performs it (0.27.0).
+//
+// SHARED BECAUSE TWO PROGRAMS READ ONE FORMAT. `mcpp.tools.steps` writes the
+// file while a build program plans, and `steps` (tools/steps_main.cpp), this
+// package's runner, reads it when the action runs. One definition here keeps
+// the writer and the reader from drifting, which is why `surface` lives here
+// for `mcpp-embed` as well.
+//
+// EVERY VALUE IS COUNTED, NOT QUOTED. A value is its length in bytes, a colon
+// and the bytes, so a path keeps its spaces, semicolons, backslashes, quotes,
+// line breaks and non-ASCII text on every host, and no character is escaped on
+// one side to be restored on the other. One record per operation, one line
+// each unless a value holds a line break, after the line that names the format:
+//
+//   mcpp-steps 1
+//   # Written by mcpp.dist.apk through mcpp.tools.steps. Do not edit.
+//   remove - 16:/out/classes dir 0: 0: 0
+//   run - 0: 0: 0: 4 10:/jdk/javac 2:-d 16:/out/classes dir 6:A.java
+//
+// A record is the operation's name; its flags, `-` for none or `r` (recursive)
+// and `e` (if_exists) in that order; the operands `a` and `b`; the list it
+// reads or extends; and the count of its values, then each value. A line that
+// begins with `#` where a record could begin is a comment.
+//
+// Loops here index rather than iterate, for the GCC 16.1 defect
+// tools/steps.cppm records.
+export namespace mcpp::plugins::steps {
+
+enum class op_kind {
+    run, touch, mkdir, remove, remove_glob, copy_file, copy_tree, copy_glob,
+    rename, symlink, glob, append, require,
+};
+
+// One operation. `values` is the argument vector of `run`, the values of
+// `append` and the exclusions of `glob`; `a` and `b` are an operation's
+// operands; `list` names the list an operation reads or extends.
+struct op {
+    op_kind                  kind = op_kind::run;
+    std::vector<std::string> values;
+    std::string              a, b, list;
+    bool                     recursive = false;
+    bool                     if_exists = false;
+
+    bool operator==(const op&) const = default;
+};
+
+// Each kind's name in a file, which is the member's call that makes it.
+inline constexpr std::array<std::string_view, 13> kind_names = {
+    "run", "touch", "mkdir", "remove", "remove_glob", "copy_file", "copy_tree",
+    "copy_glob", "rename", "symlink", "glob", "append", "require",
+};
+
+inline std::string_view name_of(op_kind k) { return kind_names[static_cast<std::size_t>(k)]; }
+
+// A list is named by letters, digits and `_`.
+inline bool valid_list_name(std::string_view name) {
+    if (name.empty()) return false;
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(name[i]);
+        if (!std::isalnum(c) && c != '_') return false;
+    }
+    return true;
+}
+
+// The first line of every step file: the format and its version.
+inline constexpr std::string_view format_line = "mcpp-steps 1";
+
+namespace detail {
+
+inline void put(std::string& out, std::string_view value) {
+    out += std::to_string(value.size());
+    out += ':';
+    out += value;
+}
+
+// What is wrong with an operation's list, or nothing. `glob`, `append` and
+// `require` name the list they extend or read; `run` may name one to read.
+inline std::string list_problem(const op& o) {
+    const bool needs = o.kind == op_kind::glob || o.kind == op_kind::append || o.kind == op_kind::require;
+    if (o.list.empty() ? !needs : valid_list_name(o.list)) return {};
+    return std::format("list name '{}' of {} is not letters, digits and _", o.list, name_of(o.kind));
+}
+
+// A cursor over a file's text: each call reads one token and leaves the
+// cursor after it, or answers nothing and leaves `at` where the token failed.
+struct cursor {
+    std::string_view text;
+    std::size_t      at = 0;
+
+    bool eat(char c) {
+        if (at >= text.size() || text[at] != c) return false;
+        ++at;
+        return true;
+    }
+    std::string_view word() {
+        const std::size_t from = at;
+        while (at < text.size() && text[at] != ' ' && text[at] != '\n') ++at;
+        return text.substr(from, at - from);
+    }
+    std::optional<std::size_t> count() {
+        const std::size_t from = at;
+        std::size_t n = 0;
+        while (at < text.size() && text[at] >= '0' && text[at] <= '9') {
+            const auto digit = static_cast<std::size_t>(text[at] - '0');
+            if (n > (std::numeric_limits<std::size_t>::max() - digit) / 10) return std::nullopt;
+            n = n * 10 + digit;
+            ++at;
+        }
+        if (at == from) return std::nullopt;
+        return n;
+    }
+    std::optional<std::string> value() {
+        const auto n = count();
+        if (!n || !eat(':') || *n > text.size() - at) return std::nullopt;
+        std::string v(text.substr(at, *n));
+        at += *n;
+        return v;
+    }
+};
+
+} // namespace detail
+
+// The text of a step file; `comment` says what wrote it, on the second line. A
+// list name outside letters, digits and `_` is the member's mistake and is
+// refused here, while its build program plans, rather than written for the
+// runner to refuse when the action runs.
+inline std::string write(const std::vector<op>& ops, std::string_view comment) {
+    std::string out(format_line);
+    out += "\n# ";
+    for (std::size_t i = 0; i < comment.size(); ++i)
+        out += (comment[i] == '\n' || comment[i] == '\r') ? ' ' : comment[i];
+    out += '\n';
+    for (std::size_t i = 0; i < ops.size(); ++i) {
+        const op& o = ops[i];
+        if (const std::string problem = detail::list_problem(o); !problem.empty())
+            throw std::invalid_argument("mcpp.tools.steps: " + problem);
+        out += name_of(o.kind);
+        out += ' ';
+        if (!o.recursive && !o.if_exists) out += '-';
+        if (o.recursive) out += 'r';
+        if (o.if_exists) out += 'e';
+        out += ' ';
+        detail::put(out, o.a);
+        out += ' ';
+        detail::put(out, o.b);
+        out += ' ';
+        detail::put(out, o.list);
+        out += ' ';
+        out += std::to_string(o.values.size());
+        for (std::size_t k = 0; k < o.values.size(); ++k) {
+            out += ' ';
+            detail::put(out, o.values[k]);
+        }
+        out += '\n';
+    }
+    return out;
+}
+
+// The operations a step file holds, or what makes it unreadable, naming the
+// operation and the byte where reading stopped.
+inline std::expected<std::vector<op>, std::string> read(std::string_view text) {
+    detail::cursor in{ text };
+    if (in.word() != "mcpp-steps" || !in.eat(' '))
+        return std::unexpected(std::string("not a step file: it does not begin with 'mcpp-steps'"));
+    if (const std::string_view version = in.word(); version != "1")
+        return std::unexpected(std::format(
+            "a step file of format '{}', and this runner reads format 1", version));
+    if (!in.eat('\n'))
+        return std::unexpected(std::string("the line 'mcpp-steps 1' does not end"));
+    std::vector<op> ops;
+    while (in.at < text.size()) {
+        if (text[in.at] == '#') {
+            const std::size_t end = text.find('\n', in.at);
+            in.at = end == std::string_view::npos ? text.size() : end + 1;
+            continue;
+        }
+        const auto bad = [&](std::string_view what) {
+            return std::unexpected(std::format("operation {} (byte {}): {}", ops.size() + 1, in.at, what));
+        };
+        op o;
+        const std::string_view kind = in.word();
+        std::size_t k = 0;
+        while (k < kind_names.size() && kind_names[k] != kind) ++k;
+        if (k == kind_names.size()) return bad(std::format("'{}' is not an operation", kind));
+        o.kind = static_cast<op_kind>(k);
+        if (!in.eat(' ')) return bad("the flags are missing");
+        const std::string_view flags = in.word();
+        if (flags != "-") {
+            std::size_t f = 0;
+            if (f < flags.size() && flags[f] == 'r') { o.recursive = true; ++f; }
+            if (f < flags.size() && flags[f] == 'e') { o.if_exists = true; ++f; }
+            if (f == 0 || f != flags.size()) return bad(std::format("'{}' are not flags", flags));
+        }
+        std::optional<std::string> a, b, list;
+        if (!in.eat(' ') || !(a = in.value()) || !in.eat(' ') || !(b = in.value())
+            || !in.eat(' ') || !(list = in.value()) || !in.eat(' '))
+            return bad("an operand is not a counted value");
+        o.a = std::move(*a);
+        o.b = std::move(*b);
+        o.list = std::move(*list);
+        const auto n = in.count();
+        if (!n) return bad("the count of values is missing");
+        for (std::size_t v = 0; v < *n; ++v) {
+            std::optional<std::string> value;
+            if (!in.eat(' ') || !(value = in.value()))
+                return bad(std::format("value {} of {} is not a counted value", v + 1, *n));
+            o.values.push_back(std::move(*value));
+        }
+        if (!in.eat('\n')) return bad("the operation does not end its line");
+        if (const std::string problem = detail::list_problem(o); !problem.empty()) return bad(problem);
+        ops.push_back(std::move(o));
+    }
+    return ops;
+}
+
+} // namespace mcpp::plugins::steps

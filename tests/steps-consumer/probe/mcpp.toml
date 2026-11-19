@@ -1,0 +1,23 @@
+# The program the step programs of tests/steps-consumer run: it records the
+# arguments a step passes, the directory it runs in, exits with a status it is
+# given, and checks what the operations left (src/main.cpp). The fixture builds
+# it as a tool, so a step names it by its path.
+[package]
+name        = "steps-probe"
+version     = "0.1.0"
+description = "Fixture: the program a step program of tests/steps-consumer runs"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+# Its arguments in UTF-8 on every host, and the names it checks.
+[dependencies]
+mcpplibs.os = "0.4.5"
+
+[targets.steps-probe]
+kind = "bin"
+main = "src/main.cpp"

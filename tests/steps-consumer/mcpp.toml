@@ -1,0 +1,29 @@
+# Fixture: every operation of `mcpp.tools.steps`, run on the host that builds
+# by the runner `tools-steps` carries (0.27.0), and checked by `steps-probe`, a
+# program this fixture builds as a tool. The build program is the test: the
+# step that checks the operations' tree writes the action's output only when
+# every check holds. `check-steps.sh` adds the runs that must fail and the run
+# that must not run the step again.
+[package]
+name        = "steps-consumer"
+version     = "0.1.0"
+description = "Fixture: step programs run by the collection's own runner"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies]
+steps-probe = { path = "probe", tools = ["steps-probe"] }
+
+# Only `tools-steps`: the runner arrives through the feature, and nothing here
+# declares `xim:cmake`.
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["tools-steps"], host-module = true }
+
+[targets.steps-consumer]
+kind = "bin"
+main = "src/main.cpp"

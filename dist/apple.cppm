@@ -192,7 +192,6 @@ export module mcpp.dist.apple;
 import std;
 import mcpp;
 import mcpp.plugins;
-import mcpp.plugins.tool;
 import mcpp.tools.steps;
 
 // Nothing here uses `std::println`, and that is not a style choice: both of
@@ -336,12 +335,6 @@ struct options {
     // means `app_name` and `<out_dir>/<app_name>.dmg`.
     std::string volume_name;
     std::string dmg;
-
-    // The runner of the steps of more than one command (0.25.0,
-    // `mcpp.tools.steps`; `cmake` until mcpp#955): the `xim:cmake` payload,
-    // asked for only when a plan copies a framework or stages a disk image,
-    // or a program named here.
-    mcpp::plugins::tool::choice cmake;
 
     std::string out_dir = std::string(mcpp::out_dir());
 };
@@ -1307,21 +1300,15 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
-    // `cmake` runs the steps of more than one command (0.25.0): a framework's
-    // copy and signature, and a disk image's staging. Asked for only when the
-    // plan has one.
+    // The runner `steps`, this package's program (0.27.0), runs the steps of
+    // more than one command: a framework's copy and signature, and a disk
+    // image's staging. Asked for only when the plan has one.
     namespace steps = mcpp::tools::steps;
     std::string runner;
     if (!frameworks.empty() || dmg) {
-        const auto runnerSpec = steps::runner_spec("mcpp.dist.apple");
-        const auto runnerTool = mcpp::plugins::tool::resolve(runnerSpec, opt.cmake);
-        if (runnerTool.pending()) { p.reason = "cmake requested"; return p; }
-        if (!runnerTool) {
-            return refuse(p, "cmake not found",
-                mcpp::plugins::tool::describe_missing(runnerSpec, runnerTool)
-                + "\n  So this plan bundles nothing.");
-        }
-        runner = runnerTool.program;
+        runner = steps::runner();
+        if (runner.empty())
+            return refuse(p, "no step runner", steps::missing_runner("mcpp.dist.apple") + "\n  So this plan bundles nothing.");
     }
 
     // THE FRAMEWORKS: each copied from the staged tree and, when the bundle is
