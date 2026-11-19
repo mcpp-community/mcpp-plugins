@@ -49,6 +49,9 @@ check_terminal_bundle() {
         || fail "the bundle step does not declare exactly one output" "$log"
     echo "$bundle_out" | grep -q '\.app"$' \
         || fail "the bundle step's own output is not the .app directory" "$log"
+    # The bundle is refreshed by a step program (0.27.0), not `/usr/bin/touch`.
+    grep -qE '"command":\["/plan-check/tool-store/bin/steps","[^"]*/bundle\.steps"\]' <<<"$bundle_line" \
+        || fail "the bundle step is not a step program run by the runner" "$log"
     local bundle_inputs
     bundle_inputs=$(quoted_inputs "$bundle_line")
     for other_id in mcpp.dist.apple.info-plist mcpp.dist.apple.layout \
@@ -109,7 +112,11 @@ run_row() {
             > "$stage/ios-app-consumer"
     fi
     out=$(mktemp -d)
+    # The runner of the step programs (0.27.0, `steps`), which the engine hands
+    # a build program through `tools-steps`' tool: the bundle step is one, and
+    # a plan names the runner without running it, so the path is enough.
     env -i PATH="$PATH" \
+        MCPP_DEP_MCPP_PLUGINS_BIN_STEPS=/plan-check/tool-store/bin/steps \
         MCPP_PACK_FORMAT=app \
         MCPP_TARGET_OS="$os" \
         MCPP_TARGET_ENV="$envv" \

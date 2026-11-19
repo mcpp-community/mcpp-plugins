@@ -425,11 +425,11 @@ inline plan& refuse(plan& p, std::string reason, const std::string& message) {
     return p;
 }
 
-// A step of more than one command (0.25.0): a step program
-// (`mcpp.tools.steps`) written into `<out_dir>/dist-apple/steps/`, so no step
-// is a shell script. The runner and the written program join the step's inputs.
-// `name` is used as a file name; anything but letters, digits, `-` and `.`
-// becomes `_`.
+// A step whose work is file operations, alone or around commands (0.25.0; the
+// bundle's refresh from 0.27.0): a step program (`mcpp.tools.steps`) written
+// into `<out_dir>/dist-apple/steps/`, so no step is a shell script. The runner
+// and the written program join the step's inputs. `name` is used as a file
+// name; anything but letters, digits, `-` and `.` becomes `_`.
 inline void attach(step& s, const std::string& runner, const std::string& out_dir,
                    const std::string& name, const mcpp::tools::steps::program& program) {
     std::string file = name;
@@ -1300,16 +1300,14 @@ inline plan plan_for(options opt = {}) {
         }
     }
 
-    // The runner `steps`, this package's program (0.27.0), runs the steps of
-    // more than one command: a framework's copy and signature, and a disk
-    // image's staging. Asked for only when the plan has one.
+    // The runner `steps`, this package's program (0.27.0), runs the step
+    // programs: a framework's copy and signature, a disk image's staging, and
+    // the bundle's refresh, which every plan has. The feature that carries the
+    // runner is active wherever this member is, so asking costs nothing.
     namespace steps = mcpp::tools::steps;
-    std::string runner;
-    if (!frameworks.empty() || dmg) {
-        runner = steps::runner();
-        if (runner.empty())
-            return refuse(p, "no step runner", steps::missing_runner("mcpp.dist.apple") + "\n  So this plan bundles nothing.");
-    }
+    const std::string runner = steps::runner();
+    if (runner.empty())
+        return refuse(p, "no step runner", steps::missing_runner("mcpp.dist.apple") + "\n  So this plan bundles nothing.");
 
     // THE FRAMEWORKS: each copied from the staged tree and, when the bundle is
     // signed, signed before the bundle is -- a bundle signature seals nested
@@ -1441,16 +1439,18 @@ inline plan plan_for(options opt = {}) {
     // stamp included, when it ran, so the bundle is not the terminal until
     // signing (the last thing that can still fail) has happened. A directory
     // is an acceptable action output (the engine verifies `is_regular_file
-    // || is_directory`); `touch` has nothing to write, only a mtime to
+    // || is_directory`); the step has nothing to write, only a mtime to
     // refresh, and refreshing it is what makes ninja record the edge as run
-    // rather than replay a stale one.
+    // rather than replay a stale one. The refresh is the step operation
+    // `touch` (0.27.0) rather than `/usr/bin/touch`: an operation the
+    // collection performs itself needs no program at a fixed place on the host.
     step bundle;
     bundle.id          = "mcpp.dist.apple.bundle";
     bundle.role        = "artifact";
     bundle.description = "APP BUNDLE";
-    bundle.argv         = { "/usr/bin/touch", bundlePath };
-    bundle.inputs        = assembled;
-    bundle.outputs       = { bundlePath };
+    bundle.inputs      = assembled;
+    attach(bundle, runner, opt.out_dir, "bundle", steps::program{}.touch(bundlePath));
+    bundle.outputs     = { bundlePath };
     p.steps.push_back(bundle);
 
     // `--format dmg`: the bundle beside an `Applications` link, then the image.

@@ -168,6 +168,9 @@ if fw["outputs"][0] not in sign["inputs"]:
 bundle = actions.get("mcpp.dist.apple.bundle")
 if not bundle or sign["outputs"][0] not in bundle["inputs"]:
     fail("the bundle step does not follow the signature")
+bp = program(bundle)
+if [(o["kind"], o["a"]) for o in bp] != [("touch", bundle["outputs"][0])]:
+    fail("the bundle step does not refresh the bundle with the step operation touch: " + repr(bp))
 if any(k.startswith("mcpp.dist.apple.dmg") for k in actions):
     fail("--format app planned a disk image")
 if "mcpp:link-flag=-Wl,-rpath,@executable_path/../Frameworks" not in lines:
@@ -175,7 +178,7 @@ if "mcpp:link-flag=-Wl,-rpath,@executable_path/../Frameworks" not in lines:
 if "mcpp:runner-named=app:macapp-run" not in lines:
     fail("the app runner was not supplied")
 '
-echo "ok: the program, not the tree's entry script, is the bundle executable; the dylib is a framework signed ad hoc, not a resource; the bundle is signed after it; the rpath and the runner are declared"
+echo "ok: the program, not the tree's entry script, is the bundle executable; the dylib is a framework signed ad hoc, not a resource; the bundle is signed after it and refreshed by a step; the rpath and the runner are declared"
 
 echo "== --format dmg on macOS =="
 run_program dmg macos "" "$stage" /tmp/apple-plan-dmg.log
