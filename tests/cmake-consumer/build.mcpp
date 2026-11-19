@@ -8,5 +8,7 @@ int main() {
     o.progress  = true;
     o.libraries = { "greet" };
     o.shared    = true;
+    // The subproject builds whichever kind BUILD_SHARED_LIBS asks for.
+    o.build_shared_libs = true;
     return mcpp::deps::cmake::use(o) ? 0 : 1;
 }

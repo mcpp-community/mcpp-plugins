@@ -88,6 +88,13 @@ struct options {
     // and whether the prefix's shared-library directory reaches `mcpp run`
     // and `mcpp pack`.
     bool shared = false;
+    // Whether the subproject builds its libraries shared: `true` or
+    // `false` passes `-DBUILD_SHARED_LIBS=ON` or `OFF` to the configure step,
+    // and unset leaves the choice to the subproject, as before. `shared` only
+    // states what the subproject installs; this asks it to build that, so the
+    // two usually agree. A `BUILD_SHARED_LIBS` in `cache_args` as well is an
+    // error.
+    std::optional<bool> build_shared_libs;
     // The `cmake` executable (0.19.0: a `tool::choice`, so a path still
     // assigns). Default: the `xim:cmake` payload, or an override of it. A
     // choice made here is not downloaded: the payload is declared on request.
@@ -571,6 +578,13 @@ inline prefix use(const options& opt) {
         return {};
     }
 
+    if (opt.build_shared_libs && defines(opt.cache_args, "BUILD_SHARED_LIBS")) {
+        std::cerr << std::format(
+            "{}: options::build_shared_libs and a BUILD_SHARED_LIBS in options::cache_args both "
+            "state how the subproject builds its libraries; state it once.\n", who);
+        return {};
+    }
+
     // THE TOOLSET. Compilers or a toolchain file among the cache arguments
     // are the project's decision, and so is a generator it names -- each by
     // the argument that states it, not by a substring of another (0.18.0).
@@ -668,6 +682,8 @@ inline prefix use(const options& opt) {
         same("-B"); arg(buildS, "<build>");
         arg("-DCMAKE_INSTALL_PREFIX=" + p.root, "-DCMAKE_INSTALL_PREFIX=<prefix>");
         same("-DCMAKE_BUILD_TYPE=" + opt.config);
+        if (opt.build_shared_libs)
+            same(std::string("-DBUILD_SHARED_LIBS=") + (*opt.build_shared_libs ? "ON" : "OFF"));
         if (!opt.prefix_path.empty()) {
             std::string joined;
             for (auto const& d : opt.prefix_path) {

@@ -578,6 +578,69 @@ int main(int argc, char** argv) {
                   c.expect(r.has_line(yes), std::string(yes) + ": the argument chooses");
           } },
 
+        { "cmake: build_shared_libs reaches CMake as BUILD_SHARED_LIBS, and the key states it",
+          with_subproject(t::row::windows_managed()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.build_shared_libs = true;
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              std::string script;
+              for (auto const& f : r.files_under("out/deps-cmake/greet"))
+                  if (f.ends_with("greet.cmake")) script = r.file(f);
+              c.expect(script.find("[==[-DBUILD_SHARED_LIBS=ON]==]") != std::string::npos,
+                       "the configure step asks for shared libraries");
+              const auto from = script.find("set(recipe [==[");
+              const auto recipe = from == std::string::npos ? std::string()
+                                                            : script.substr(from, script.find("]==])", from) - from);
+              c.expect(recipe.find("arg -DBUILD_SHARED_LIBS=ON\n") != std::string::npos,
+                       "an installation built shared has its own key");
+          } },
+
+        { "cmake: build_shared_libs false asks for static libraries",
+          with_subproject(t::row::linux_gcc()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.build_shared_libs = false;
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.file("out/deps-cmake/greet/greet.cmake").find("[==[-DBUILD_SHARED_LIBS=OFF]==]")
+                           != std::string::npos,
+                       "the configure step asks for static libraries");
+          } },
+
+        { "cmake: build_shared_libs unset leaves BUILD_SHARED_LIBS to the subproject",
+          with_subproject(t::row::linux_gcc()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.shared = true;
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.file("out/deps-cmake/greet/greet.cmake").find("BUILD_SHARED_LIBS") == std::string::npos,
+                       "options::shared alone passes nothing to CMake");
+          } },
+
+        { "cmake: build_shared_libs and BUILD_SHARED_LIBS in cache_args together are refused",
+          with_subproject(t::row::linux_gcc()),
+          [] {
+              mcpp::deps::cmake::options o;
+              o.build_shared_libs = true;
+              o.cache_args = {"-D", "BUILD_SHARED_LIBS:BOOL=OFF"};
+              return cmake_use(o);
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code != 0, "the member fails");
+              c.expect(r.errors.find("options::build_shared_libs and a BUILD_SHARED_LIBS") != std::string::npos,
+                       "the reason names both statements");
+              c.expect(!r.has_line("mcpp:action=", {"deps-cmake:greet"}), "no installation is declared");
+          } },
+
         { "cmake: a launcher in cache_args keeps the named toolset and Ninja",
           with_subproject(t::row::windows_managed()),
           [] {
