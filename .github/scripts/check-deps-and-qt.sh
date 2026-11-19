@@ -185,6 +185,11 @@ cmake_consumer() {
     "$MCPP" build 2>&1 | tee target/ci/build.log
     "$MCPP" run | tee target/ci/run.log
     grep -q '^cmake-consumer: greet says 42$' target/ci/run.log || fail "the program did not call the subproject's library"
+    # The subproject leaves its library's kind to BUILD_SHARED_LIBS, which
+    # options::build_shared_libs states.
+    grep -rqs '^BUILD_SHARED_LIBS:[A-Z]*=ON$' target --include=CMakeCache.txt ||
+        fail "options::build_shared_libs did not reach the subproject's configure step"
+    echo "ok: options::build_shared_libs reached the subproject as BUILD_SHARED_LIBS=ON"
     assert_not_rerun "$(stamp_of deps-cmake)"
     # The builds after an edit are planned as well.
     touch greet/greet.c
