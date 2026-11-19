@@ -24,7 +24,8 @@
 // no member changes a step description. The backend was `cmake -P` of the
 // `xim:cmake` it asked for, which the index offers only as CMake 4; where CMake
 // decided a detail the statement left open, this program decides it the same
-// way, as measured with CMake 4.5: a pattern's matches are sorted and spelled
+// way, as measured with CMake 4.5 on Linux (the case rule is the one CMake
+// compiles in for Windows and macOS): a pattern's matches are sorted and spelled
 // as the pattern's directory was written, then `/` and the rest; a pattern that
 // names no absolute directory is the working directory's; a name is matched
 // without case where the host compares names without it (Windows, macOS), and

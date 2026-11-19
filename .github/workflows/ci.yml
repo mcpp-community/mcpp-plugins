@@ -92,7 +92,15 @@ env:
   # older engine, and docs/deps.md states the requirement where cross builds
   # are described. So here, as for 0.20.0's SYCL lane, `MCPP_VERSION` is the
   # newest engine a lane needs and the floor the oldest the collection loads on.
-  MCPP_VERSION: 2026.11.7.1
+  #
+  # 2026.11.19.1 IS WHAT 0.27.0 NEEDS, and the package floor states it
+  # (mcpp#955, SPEC-007 R6.3): a feature's `tools` reaches every build program
+  # that links this package with the feature active, which is how
+  # `tools-steps` brings its runner `steps` to `dist-apk`, `dist-apple` and
+  # tests/steps-consumer. Until that release exists the jobs fetch
+  # `MCPP_BOOTSTRAP`, which the floor refuses, unless `mcpp_source_ref` names
+  # the engine to build.
+  MCPP_VERSION: 2026.11.19.1
   # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
   #
   # `MCPP_VERSION` states the engine this collection's lanes need -- the package

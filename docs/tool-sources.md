@@ -581,6 +581,7 @@ part in the build is what this mechanism exists to prevent.
 | `rules-sycl` | `xim:dpcpp`, `xim:gcc`, `xim:glibc`, `xim:linux-headers` | eager | the compile line is built from the C and C++ libraries |
 | `rules-spirv`, `rules-slang`, `rules-ascendc` | `xim:shaderc` / `glslang`, `xim:slang`, `xim:cann-toolkit` | eager | the plan classifies the compiler it found |
 | `dist-apple` | `xim:macapp-run`, `xim:apple-device-tools` | eager, under `when = "run"` | only `mcpp run` needs them, and a tier states that without a request |
+| `tools-steps`, so `dist-apk` and `dist-apple` | `steps`, this package's own program | the feature's `tools = ["steps"]` (0.27.0) | the engine builds it for the machine that builds and nothing is downloaded |
 | `rules-qt` | none | the project declares `xim:qt-base` in its own `[xlings]` table | the SDK a program links is the project's choice |
 | `rules-metal`, `rules-swift` | none | the host's Xcode | the platform publishes no payload for them |
 

@@ -1,15 +1,19 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.26.0"
-# The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
-# platform's directives `mcpp.plugins.platform` states (`link_driver`,
+version     = "0.27.0"
+# The first mcpp release that gives a feature's `tools` to every build program
+# that links this package with the feature active, a framework's user
+# included (SPEC-007 R6.3, mcpp#955): `[features.tools-steps] tools =
+# ["steps"]` is how the step programs of `dist-apk` and `dist-apple` get their
+# runner. It speaks protocol 20 and carries protocol 17 (SPEC-013, mcpp#847):
+# the platform's directives `mcpp.plugins.platform` states (`link_driver`,
 # `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and
 # `mcpp-package.json` beside every staged tree, which `mcpp::plugins::package`
-# reads. It carries protocol 15 (mcpp#755): `xpkg_source`, `xpkg_program`,
+# reads; and protocol 15 (mcpp#755): `xpkg_source`, `xpkg_program`,
 # `xpkg_request`, `mcpp::decision`, `mcpp::toolchain`, `mcpp::phase`, and the
 # `provision = "on-request"` entries below.
-mcpp        = ">=2026.10.30.1"
+mcpp        = ">=2026.11.19.1"
 description = "Official mcpp build plugins: rule packages under mcpp.rules.*, build-time utilities under mcpp.tools.*, each member selected by a feature"
 license     = "Apache-2.0"
 authors     = ["mcpp-community"]

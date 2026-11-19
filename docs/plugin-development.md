@@ -22,7 +22,7 @@ mcpp is a general build engine with a framework for build plugins. Plugins come 
 
    The level that decided is recorded with `mcpp::fact`. What a plugin returns (a prefix, an SDK root, the deployed files) is its extension point: `build.mcpp` may declare its own actions over it.
 4. **The runtime closure belongs to the package that ships the binaries.** A payload whose libraries load others carries or declares them on every platform, so a packed program starts on a machine with only its operating system. A plugin names the payload's library directories as runtime search directories and nothing beyond them.
-5. **Internals are not part of the contract.** The contract is the set of feature names, `options` fields, returned types and documented environment variables. A consumer's manifest names no program the plugin uses internally. An action's command is the tool itself (`vcpkg`, or `cmake -P` over a script the plugin writes), or a step program for work of more than one command (`mcpp.tools.steps`), never a helper program built from the plugin's package and never a shell script, which a Windows host cannot start.
+5. **Internals are not part of the contract.** The contract is the set of feature names, `options` fields, returned types and documented environment variables. A consumer's manifest names no program the plugin uses internally. An action's command is the tool itself (`vcpkg`, or `cmake -P` over a script the plugin writes); a program of the plugin's own package that the feature using it declares as its tool (`[features.<f>] tools = ["<bin>"]`), which the engine builds for the machine that builds and gives to every build program that links the package with the feature active, so no consumer names it (mcpp 2026.11.19.1, SPEC-007 R6.3); or a step program for work of more than one command (`mcpp.tools.steps`), which this package's runner `steps` performs that way (0.27.0). It is never a shell script, which a Windows host cannot start.
 6. **Work is an action.** Installation, extraction and generation are actions with declared inputs and outputs (SPEC-007 R1.1, R3). A build program plans, and `mcpp emit build-database` never installs.
 7. **Absence is a warning.** A missing tool or SDK is a `mcpp::warning`, and the plan states every path it can (R1.2). A plan never depends on what an action produced (R1.3).
 8. **Engine gaps are reported, not patched.** A capability the engine lacks is filed as an mcpp issue. A workaround that already exists is recorded in the plugin's documentation with the issue number and is removed when the engine provides the capability.
@@ -52,7 +52,7 @@ mcpp-index refuses such a package.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.26.0", features = ["plugins-core"], host-module = true, reexport = true }
+plugins = { version = "0.27.0", features = ["plugins-core"], host-module = true, reexport = true }
 ```
 
 `reexport = true` is needed when the plugin's consumers import L2 modules in
@@ -60,10 +60,13 @@ their own build programs.
 
 **The engine floor.** A plugin states the first mcpp release it needs in
 `[package] mcpp = ">=<release>"`; an older engine stops before any other work
-and names the upgrade. This package's floor is 2026.10.27.1, the release that
-speaks protocol 17 (the platform's directives and the `platform` phase, mcpp
-SPEC-013) and writes `mcpp-package.json` beside every staged tree (SPEC-014);
-it carries protocol 15, which states where each tool and payload comes from.
+and names the upgrade. This package's floor is 2026.11.19.1 (0.27.0), the
+release that gives a feature's tool to every build program that links the
+package with the feature active (SPEC-007 R6.3), which is how `tools-steps`
+brings its runner, and that speaks protocol 20. It carries protocol 17 (the
+platform's directives and the `platform` phase, mcpp SPEC-013, and
+`mcpp-package.json` beside every staged tree, SPEC-014) and protocol 15, which
+states where each tool and payload comes from.
 
 **Where a member's tool comes from.** A member that runs a program resolves it
 through `mcpp.plugins.tool`, which answers in one order for every member:
@@ -220,7 +223,7 @@ A project's own plugin is a module in the project (a path dependency with `host-
 
 ## Optional action progress
 
-`mcpp.plugins.progress` is part of `plugins-core`. `enable(action, requested)` sets the optional action flag when the engine API provides it. With older APIs it reports that telemetry is unavailable and leaves the action usable. Engine support starts at mcpp 2026.11.5.1 (protocol 18); this optional path does not raise the package's 2026.10.30.1 floor.
+`mcpp.plugins.progress` is part of `plugins-core`. `enable(action, requested)` sets the optional action flag when the engine API provides it. With older APIs it reports that telemetry is unavailable and leaves the action usable. Engine support starts at mcpp 2026.11.5.1 (protocol 18), which the package's floor includes from 0.27.0 (2026.11.19.1); until then this optional path did not raise the floor.
 
 Worker programs select `plugins-progress` and import `mcpp.plugins.progress.writer`. `writer` reads `MCPP_ACTION_PROGRESS_FILE`; an absent channel is a no-op. `report({.phase="compile", .done=3, .total=9})` atomically replaces the latest schema-1 snapshot, assigns increasing sequence numbers and publishes at most five times per second. Omit counts when the total is unknown. `report()` returns whether it published; this result does not determine whether the worker's actual task succeeded. The optional writer feature uses `mcpplibs.os.fs` for portable atomic replacement; `plugins-core` depends on `mcpplibs.os` as well (§4).
 

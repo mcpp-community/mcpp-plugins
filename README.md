@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.26.0", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.27.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -51,13 +51,15 @@ naming it to avoid a download, and the scenarios on both sides -- is in
 
 ## Members
 
-From 0.21.0 the package as a whole needs mcpp 2026.10.30.1 (`[package] mcpp`),
-which writes the configuration's contract that `deps-cmake` compiles a cross
-build from (0.20.0 needed 2026.10.27.1, whose protocol 17 states a platform's
-fields and whose `mcpp pack` writes `mcpp-package.json` beside every staged
-tree; 0.19.0 needed 2026.10.1.3, whose
-protocol 15 states where each tool and payload comes from); the column states
-the release each member's behaviour first needed.
+From 0.27.0 the package as a whole needs mcpp 2026.11.19.1 (`[package] mcpp`),
+which gives a feature's tool to every build program that links the package with
+the feature active, the way `tools-steps` brings its runner (0.21.0 needed
+2026.10.30.1, which writes the configuration's contract that `deps-cmake`
+compiles a cross build from; 0.20.0 needed 2026.10.27.1, whose protocol 17
+states a platform's fields and whose `mcpp pack` writes `mcpp-package.json`
+beside every staged tree; 0.19.0 needed 2026.10.1.3, whose protocol 15 states
+where each tool and payload comes from); the column states the release each
+member's behaviour first needed.
 
 Cross CMake subprojects that link executables or shared libraries require
 mcpp 2026.11.7.1 or later; cross configuration requires CMake 3.19 or later.
@@ -75,14 +77,14 @@ mcpp 2026.11.7.1 or later; cross configuration requires CMake 3.19 or later.
 | `rules-sycl` | `mcpp.rules.sycl` | 2026.10.1.3 | Compiles SYCL (`*.sycl`) with DPC++. | [rules](docs/rules.md#rules-sycl) |
 | `tools-embed` | `mcpp.tools.embed` | 2026.9.5.4 | Writes a data file into a header the program compiles in. | [tools-embed](docs/tools-embed.md) |
 | `tools-island` | `mcpp.tools.island` | 2026.9.7.1 | Generates the `extern "C"` boundary and the C++ module of a code island. | [tools-island](docs/tools-island.md) |
-| `tools-steps` | `mcpp.tools.steps` | 2026.10.1.3 | Describes an action whose work is more than one command as portable operations a backend runs; implied by `dist-apk` and `dist-apple`. | [tools-steps](docs/tools-steps.md) |
+| `tools-steps` | `mcpp.tools.steps` | 2026.11.19.1 | Describes an action whose work is more than one command as portable operations, which `steps`, the collection's own runner, performs; implied by `dist-apk` and `dist-apple`. | [tools-steps](docs/tools-steps.md) |
 | `dist-appimage` | `mcpp.dist.appimage` | 2026.10.1.3 | Turns the tree `mcpp pack` stages into an AppImage (Linux). | [dist](docs/dist.md#dist-appimage) |
 | `dist-deb` | `mcpp.dist.deb` | 2026.10.30.1 | Installs the staged tree under `/opt/<name>` with a launcher, a desktop entry and an icon, as a Debian package (Linux targets). | [dist](docs/dist.md#dist-deb-and-dist-rpm) |
 | `dist-rpm` | `mcpp.dist.rpm` | 2026.10.30.1 | The same installation as an RPM package (Linux targets). | [dist](docs/dist.md#dist-deb-and-dist-rpm) |
 | `dist-wix` | `mcpp.dist.wix` | 2026.10.1.3 | Builds an MSI of the staged tree, and a Burn bundle chaining it (Windows). | [dist](docs/dist.md#dist-wix) |
-| `dist-apple` | `mcpp.dist.apple` | 2026.9.14.2 | Lays out a macOS or iOS application bundle, signs it and writes a disk image. | [dist-apple](docs/dist-apple.md) |
+| `dist-apple` | `mcpp.dist.apple` | 2026.11.19.1 | Lays out a macOS or iOS application bundle, signs it and writes a disk image. | [dist-apple](docs/dist-apple.md) |
 | `dist-web` | `mcpp.dist.web` | 2026.9.13.1 | Copies a `wasm32-emscripten` program and its files into a web directory with an `index.html`. | [dist](docs/dist.md#dist-web) |
-| `dist-apk` | `mcpp.dist.apk` | 2026.10.1.3 | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [dist-apk](docs/dist-apk.md) |
+| `dist-apk` | `mcpp.dist.apk` | 2026.11.19.1 | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [dist-apk](docs/dist-apk.md) |
 | `deps-vcpkg` | `mcpp.deps.vcpkg` | 2026.10.1.3 | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [deps](docs/deps.md#deps-vcpkg) |
 | `deps-cmake` | `mcpp.deps.cmake` | 2026.10.1.3; a cross build 2026.10.30.1 | Builds and installs a CMake subproject as an action with Ninja and the toolset mcpp resolved -- for another target, the compilers and words of the engine's contract -- keeps the installation for any build with the same key, and maps the prefix into the build. | [deps](docs/deps.md#deps-cmake) |
 | `deps-archive` | `mcpp.deps.archive` | 2026.10.1.3 | Extracts a zip archive the project keeps and places its tree beside the program. | [deps](docs/deps.md#deps-archive) |
@@ -118,8 +120,9 @@ declaration (0.15.0 removed `rules-qt-xim*`; see [rules-qt](docs/rules-qt.md)).
 ```
 mcpp.toml            the package: one feature per member
 src/plugins.cppm     export module mcpp.plugins;  the version, mcpp::plugins::surface
-                     (the declarations a consumer names), mcpp::plugins::xml and
-                     mcpp::plugins::package (a staged package's metadata)
+                     (the declarations a consumer names), mcpp::plugins::xml,
+                     mcpp::plugins::package (a staged package's metadata) and
+                     mcpp::plugins::steps (the step file the runner reads)
 src/declare.cppm,    the general library for build programs (`plugins-core`):
 src/toolset.cppm,    mcpp.plugins.declare, mcpp.plugins.toolset, mcpp.plugins.fs
 src/fs.cppm
@@ -129,6 +132,8 @@ src/compat/, deps/compat/
                      compatibility units, each retired on the date its header states
 rules/<x>.cppm       export module mcpp.rules.<x>;
 tools/<x>.cppm       export module mcpp.tools.<x>;
+tools/<x>_main.cpp   the package's programs: `steps`, the runner `tools-steps`
+                     carries, and `mcpp-embed`
 dist/<x>.cppm        export module mcpp.dist.<x>;
 deps/<x>.cppm        export module mcpp.deps.<x>;  deps/deps.cppm is shared
 tests/<consumer>/    one project per member, built by CI with the pinned mcpp
