@@ -11,6 +11,7 @@ import mcpp.rules.hip;
 import mcpp.rules.metal;
 import mcpp.rules.qt;
 import mcpp.rules.slang;
+import mcpp.rules.slint;
 import mcpp.rules.spirv;
 import mcpp.rules.swift;
 import mcpp.rules.sycl;
@@ -44,6 +45,7 @@ int main() {
            && mcpp::rules::spirv::compile()
            // No `.swift` source is named, so the Swift rule plans nothing and
            // never asks `xcrun`, as the Metal rule above.
+           && mcpp::rules::slint::compile()
            && mcpp::rules::swift::compile()
            && mcpp::rules::sycl::compile();
     // `tools::embed` has no accelerator gate, so it is asked the one question

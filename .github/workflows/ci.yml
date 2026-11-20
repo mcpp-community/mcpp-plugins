@@ -1872,6 +1872,9 @@ jobs:
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
 
+      - name: rules-slint generates a component, its module, and runs it headless, with the SDK the project declares
+        run: bash tests/slint-consumer/check-slint.sh
+
       # The payload carries QtGui's runtime closure (libdbus, fontconfig, xcb,
       # ...), so a Widgets program links, runs offscreen and packs on Linux.
       - name: rules-qt builds a Widgets program with a .ui form, runs it offscreen and packs it
@@ -2734,6 +2737,9 @@ jobs:
 
       - name: rules-qt runs moc, rcc, lupdate and lrelease, with the SDK the project declares
         run: bash .github/scripts/check-deps-and-qt.sh qt-consumer
+
+      - name: rules-slint generates a component, its module, and runs it headless, with the SDK the project declares
+        run: bash tests/slint-consumer/check-slint.sh
 
       # Windows: the payload carries the VC++ runtime Qt's DLLs import, so the
       # program starts on a machine without the VC++ Redistributable. macOS:

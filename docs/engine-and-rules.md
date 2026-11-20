@@ -97,6 +97,7 @@ Each rule therefore selects the extensions it claims and leaves the rest:
 | `rules-metal` | `.metal` |
 | `rules-qt` | `.ui`, `.qrc`, `.ts`; a header is found by what it declares, since `.h` is already C++ |
 | `rules-slang` | `.slang` |
+| `rules-slint` | `.slint` |
 | `rules-swift` | `.swift` |
 | `rules-sycl` | `.sycl` |
 | `rules-spirv` | `.comp .vert .frag .geom .tesc .tese .mesh .task .rgen .rint .rahit .rchit .rmiss .rcall`, and `.glsl` / `.hlsl` so that a stage-less name is refused by name rather than by absence |

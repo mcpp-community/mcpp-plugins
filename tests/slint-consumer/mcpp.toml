@@ -1,0 +1,35 @@
+# Fixture: a Slint user interface compiled by rules-slint, run headless.
+#
+#   ui/app.slint        a window (through a base component), a struct, an
+#                       enum, a global, a non-window export (no code), and a
+#                       re-exported global under another name
+#   ui/palette.slint    imported by app.slint: its edit regenerates app.h
+#
+# The program imports the generated module `app.ui` and checks properties, a
+# callback, the struct, the global, the alias and the enum, with Slint's
+# software renderer behind a headless platform.
+[package]
+name        = "slint-consumer"
+version     = "0.1.0"
+description = "Fixture: a Slint UI built through rules-slint"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-slint"], host-module = true }
+
+# The SDK is the project's declaration, at the version it chooses.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:slint" = "1.19.0"
+
+[build]
+sources = ["src/*.cpp", "ui/app.slint"]
+
+[targets.slint-consumer]
+kind = "bin"
+main = "src/main.cpp"
