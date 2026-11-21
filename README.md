@@ -152,5 +152,5 @@ what the engine owns and what the member owns is in
 ## Releases
 
 A tag `v<version>` publishes the source archive; the index descriptor
-(`mcpp-index/pkgs/m/mcpp.plugins.lua`) names the GitHub archive and its GitCode
+(`mcpp-index/pkgs/mcpp/mcpp.plugins.lua`) names the GitHub archive and its GitCode
 mirror with one sha256.
