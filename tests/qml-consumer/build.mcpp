@@ -1,0 +1,32 @@
+// The Probe module: its files, its C++ types, the Qt Quick libraries, and `qsTr`
+// strings that `lupdate` keeps in qml_consumer_de.ts. A variant is chosen by
+// MCPP_QML_VARIANT, which the CI script sets to build the same project three
+// more ways: `noaot` (sources embedded, not compiled), `styles` (only the Basic
+// style is placed) and `noconf` (no qt.conf).
+import std;
+import mcpp;
+import mcpp.rules.qml;
+
+int main() {
+    namespace qml = mcpp::rules::qml;
+    mcpp::rerun_if_env_changed("MCPP_QML_VARIANT");
+    const char* v = std::getenv("MCPP_QML_VARIANT");
+    const std::string variant = v ? v : "";
+
+    qml::options o;
+    o.qt.modules        = { "Core", "Gui", "Qml", "Quick" };
+    o.qt.deploy_plugins = { "platforms" };
+    o.qt.i18n.update_sources = true;
+
+    qml::qml_module probe;
+    probe.uri       = "Probe";
+    probe.root      = "qml/Probe";
+    probe.sources   = { "qml/Probe/**/*.qml", "qml/Probe/**/*.js" };
+    probe.resources = { "qml/Probe/data/*" };
+    probe.aot       = variant != "noaot";
+    o.modules = { probe };
+
+    if (variant == "styles") o.styles = { "Basic" };
+    if (variant == "noconf") o.write_qt_conf = false;
+    return qml::compile(o) ? 0 : 1;
+}

@@ -11,6 +11,7 @@ import mcpp.deps;          // the 0.16.0 names, for the compatibility case
 import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
 import mcpp.rules.qt;
+import mcpp.rules.qml;
 import mcpp.plugins.tool;
 import mcpp.plugins.platform;
 import mcpp.plugins.binary;
