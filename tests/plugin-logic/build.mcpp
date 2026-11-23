@@ -389,8 +389,17 @@ t::context with_probe(t::context c) {
         .file("pkg/qml/Probe/helper.qml", "import QtQuick\nItem { }\n")
         .file("pkg/qml/Probe/util.js", ".pragma library\nfunction f() {}\n")
         .file("pkg/qml/Probe/sub/Inner.qml", "import QtQuick\nQtObject { }\n")
-        .file("pkg/qml/Probe/data/a&b<c>.txt", "resource\n")
+        .file("pkg/qml/Probe/data/a&b.txt", "resource\n")
         .file("pkg/src/thing.h", "#include <QtQml/qqmlregistration.h>\nclass Thing : public QObject { Q_OBJECT QML_ELEMENT };\n");
+}
+
+// A resource whose name has `<` and `>`, which XML must escape and a Windows host
+// cannot create: made where it can be, and said.
+void make_odd_resource() {
+    std::error_code ec;
+    const auto file = std::filesystem::path(mcpp::manifest_dir()) / "qml/Probe/data/c<d>.txt";
+    std::ofstream(file) << "resource\n";
+    std::printf("odd=%d\n", std::filesystem::exists(file, ec));
 }
 
 mcpp::rules::qml::options probe_options() {
@@ -1406,7 +1415,7 @@ int main(int argc, char** argv) {
         // ── rules-qml ───────────────────────────────────────────────────────
         { "qml: a module's qmldir, qrc and resource paths",
           with_probe(with_qml_sdk(t::row::linux_gcc())),
-          [] { return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
+          [] { make_odd_resource(); return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
           [](const t::result& r, t::checker& c) {
               c.expect(r.exit_code == 0, "the member succeeds");
               const std::string dir = "out/qml/Probe/";
@@ -1419,8 +1428,11 @@ int main(int argc, char** argv) {
                        "the resources sit under the prefix and the uri as a path, beside the qmldir");
               c.expect(mentions(qrc, "<file alias=\"sub/Inner.qml\">") && mentions(qrc, "<file alias=\"util.js\">"),
                        "a nested file keeps its relative path");
-              c.expect(mentions(qrc, "alias=\"data/a&amp;b&lt;c&gt;.txt\">") && mentions(qrc, "a&amp;b&lt;c&gt;.txt</file>"),
-                       "a name with &, < and > is escaped in the alias and the path");
+              c.expect(mentions(qrc, "alias=\"data/a&amp;b.txt\">") && mentions(qrc, "a&amp;b.txt</file>"),
+                       "a name with & is escaped in the alias and the path");
+              if (r.has_line("odd=1"))
+                  c.expect(mentions(qrc, "alias=\"data/c&lt;d&gt;.txt\">") && mentions(qrc, "c&lt;d&gt;.txt</file>"),
+                           "so are < and >, where a host can name such a file");
               c.expect(!mentions(qrc, "\\"), "no backslash");
               c.expect(r.has_line("mcpp:rerun-if-changed=", {"qml/Probe/Main.qml"}) && r.has_line("mcpp:rerun-if-changed=", {"qml/Probe/sub/Inner.qml"})
                        && r.has_line("mcpp:rerun-if-changed-glob=qml/Probe/**/*.qml"),
@@ -1441,7 +1453,7 @@ int main(int argc, char** argv) {
                        "the SDK's type descriptions are foreign types");
               c.expect(mentions(reg, "Probe_qmltyperegistrations.cpp") && mentions(reg, "moc_thing.cpp.json"), "its output and input");
               const auto rcc = action_of(r, "qml:rcc:Probe");
-              c.expect(mentions(rcc, "qrc_Probe.cpp") && mentions(rcc, "qml/Probe/Main.qml") && mentions(rcc, "data/a&b<c>.txt"),
+              c.expect(mentions(rcc, "qrc_Probe.cpp") && mentions(rcc, "qml/Probe/Main.qml") && mentions(rcc, "data/a&b.txt"),
                        "rcc reads every file of the module and writes qrc_<module>.cpp");
               const auto cg = action_of(r, "qml:cachegen:Probe:sub/Inner.qml");
               c.expect(mentions(cg, "\"--bare\"") && mentions(cg, "\"--resource-path\",\"/qt/qml/Probe/sub/Inner.qml\"")

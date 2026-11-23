@@ -541,6 +541,7 @@ struct step {
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     std::vector<std::pair<std::string, std::string>> env;
+    std::string depfile;        // a Make-style file the command writes, when it can
     const char* role = mcpp::roles::source;
 };
 
@@ -549,6 +550,7 @@ inline void submit(const step& s) {
     a.id = s.id.c_str();
     a.role = s.role;
     a.description = s.description.c_str();
+    if (!s.depfile.empty()) a.depfile = s.depfile.c_str();
     for (auto const& x : s.argv) a.arg(x.c_str());
     for (auto const& x : s.inputs) a.input(x.c_str());
     for (auto const& x : s.outputs) a.output(x.c_str());
@@ -882,7 +884,10 @@ inline bool compile(options opt) {
             detail::step s;
             s.id = "qml:rcc:" + m.uri;
             s.description = "RCC " + m.uri;
-            s.argv = { rcc, "--name", p.san, generic(p.qrc), "-o", out };
+            // `rcc --depfile` lists the files the qrc names: what the action reads
+            // beyond the inputs it declares (a file the qrc gains is one).
+            s.depfile = out + ".d";
+            s.argv = { rcc, "--name", p.san, "--depfile", s.depfile, generic(p.qrc), "-o", out };
             s.inputs = { generic(p.qrc), generic(p.qmldir) };
             for (auto const& [file, rel] : p.files) s.inputs.push_back(generic(file));
             for (auto const& q : qsb_outputs) s.inputs.push_back(q);
