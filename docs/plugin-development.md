@@ -25,7 +25,7 @@ mcpp is a general build engine with a framework for build plugins. Plugins come 
 5. **Internals are not part of the contract.** The contract is the set of feature names, `options` fields, returned types and documented environment variables. A consumer's manifest names no program the plugin uses internally. An action's command is the tool itself (`vcpkg`, or `cmake -P` over a script the plugin writes), or a step program for work of more than one command (`mcpp.tools.steps`), never a helper program built from the plugin's package and never a shell script, which a Windows host cannot start.
 6. **Work is an action.** Installation, extraction and generation are actions with declared inputs and outputs (SPEC-007 R1.1, R3). A build program plans, and `mcpp emit build-database` never installs.
 7. **Absence is a warning.** A missing tool or SDK is a `mcpp::warning`, and the plan states every path it can (R1.2). A plan never depends on what an action produced (R1.3).
-8. **Engine gaps are reported, not patched.** A capability the engine lacks is filed as an mcpp issue. A workaround that already exists is recorded in the plugin's documentation with the issue number and is removed when the engine provides the capability. A workaround is marked in the source with `// ENGINE-GAP WORKAROUND`, its `gap:`, its `issue:` and the condition to `remove when:`, and `.github/scripts/check-engine-gaps.sh` fails CI for a mark that lacks one of them or for an issue the documentation does not name. The one that exists is `plugin_closure` (mcpp#1011, [rules-qt](rules-qt.md#engine-gap-mcpp1011)).
+8. **Engine gaps are reported, not patched.** A capability the engine lacks is filed as an mcpp issue. A workaround that already exists is recorded in the plugin's documentation with the issue number and is removed when the engine provides the capability.
 9. **Every behaviour has a criterion.** Each documented behaviour has a CI check, run on every platform the plugin claims.
 10. **Documentation is concise.** A plugin's page opens with one summary paragraph, followed by use, options and behaviour, in plain declarative sentences. The README is an index.
 
@@ -34,7 +34,7 @@ mcpp is a general build engine with a framework for build plugins. Plugins come 
 | layer | modules | provided by |
 |---|---|---|
 | L1 `mcpp.core` | `mcpp.core`, spelled `mcpp` as well (the two are permanently equivalent) | the engine |
-| L2 general library | `mcpp.plugins.declare`, `mcpp.plugins.toolset`, `mcpp.plugins.fs`, `mcpp.plugins.tool`; `mcpp.plugins.testing`, `mcpp.plugins.toolchain`, `mcpp.plugins.platform`, `mcpp.plugins.binary` | this package, feature `plugins-core` (`plugins-testing` for the kit, `plugins-toolchain` for the toolchain builders, `plugins-platform` for a platform's plugin and a package format's provider, `plugins-binary` for the reader of a compiled file's dependencies, which imports `std` alone) |
+| L2 general library | `mcpp.plugins.declare`, `mcpp.plugins.toolset`, `mcpp.plugins.fs`, `mcpp.plugins.tool`; `mcpp.plugins.testing`, `mcpp.plugins.toolchain`, `mcpp.plugins.platform` | this package, feature `plugins-core` (`plugins-testing` for the kit, `plugins-toolchain` for the toolchain builders, `plugins-platform` for a platform's plugin and a package format's provider) |
 | L3 plugins | `mcpp.deps.*`, `mcpp.rules.*`, `mcpp.dist.*`, `mcpp.tools.*` here; `mcpp.<namespace>.*` elsewhere | this package, by feature; any package |
 
 A layer depends only on the layers below it. L2 knows no foreign tool: it turns

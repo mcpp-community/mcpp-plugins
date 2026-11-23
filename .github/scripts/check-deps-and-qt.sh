@@ -441,7 +441,8 @@ qt_widgets_consumer() {
         done
         echo "ok: the packed tree carries Qt and QtGui's runtime closure"
         # The platform plugin is opened at run time, and the library it loads
-        # is in no import table: `plugin_closure` carries it (mcpp#1011).
+        # is in no import table: the engine carries it, from mcpp's release that
+        # takes what is deployed beside the program as a root (mcpp#1011).
         find target/dist -name 'libQt6XcbQpa.so.6' | grep -q . ||
             fail "the packed tree carries no libQt6XcbQpa.so.6, which the xcb platform plugin loads"
         echo "ok: the packed tree carries the library the xcb platform plugin loads"
@@ -534,51 +535,9 @@ needed_by_tool() {
     fi
 }
 
-# `mcpp.plugins.binary` reads real files as the platform's own tool does: every
-# library and plugin of the SDK a QML fixture built with (Linux: 180 ELF files
-# measured against readelf; macOS: otool; Windows: llvm-readobj).
-reader() {
-    local sdk list
-    sdk=$(cd "$ROOT/tests/qml-consumer" && qt_sdk_root)
-    cd "$ROOT/tests/binary-reader"
-    rm -rf target
-    mkdir -p target/ci
-    list="$PWD/target/ci/files.txt"
-    if is_windows; then
-        find "$sdk/bin" "$sdk/plugins" "$sdk/qml" -type f -name '*.dll' | sort > "$list"
-    elif is_macos; then
-        find "$sdk/lib" "$sdk/plugins" "$sdk/qml" -type f \( -name '*.dylib' -o -path '*.framework/Versions/A/Qt*' \) ! -name '*.prl' | sort > "$list"
-    else
-        find "$sdk/lib" "$sdk/libexec" "$sdk/plugins" "$sdk/qml" -type f \( -name '*.so' -o -name '*.so.*' \) | sort > "$list"
-    fi
-    [ -s "$list" ] || fail "no library of the SDK at $sdk"
-    if is_windows && [ -z "$(llvm_readobj)" ]; then
-        echo "::notice::SKIP reader: no llvm-readobj to compare with on this job"
-        return 0
-    fi
-    MCPP_READER_LIST="$list" "$MCPP" build 2>&1 | tee target/ci/build.log
-    local out; out=$(find target -name needed.txt | head -1)
-    [ -n "$out" ] || fail "the build program wrote no needed.txt"
-    local n=0 wrong=0 path got want
-    while IFS=$'\t' read -r path got; do
-        got=${got%$'\r'}
-        want=$(needed_by_tool "$path" | sort | paste -sd, -) || true
-        case "$got" in ERROR*) echo "reader: $path: $got"; wrong=$((wrong + 1)); continue ;; esac
-        got=$(printf '%s' "$got" | tr ',' '\n' | sort | paste -sd, -)
-        n=$((n + 1))
-        if [ "$got" != "$want" ]; then
-            echo "reader: $path"; echo "   reader: $got"; echo "   tool:   $want"
-            wrong=$((wrong + 1))
-        fi
-    done < "$out"
-    [ "$n" -gt 20 ] || fail "only $n files were read"
-    [ "$wrong" -eq 0 ] || fail "$wrong of $((n + wrong)) files differ from the platform's tool"
-    echo "ok: mcpp.plugins.binary equals the platform's tool on $n real files"
-}
-
 # Every library a packed file needs and the SDK provides is in the packed tree:
 # the closure `mcpp pack` computes from the program does not reach what a
-# plugin loads (mcpp#1011), and the plugin_closure workaround does.
+# plugin loads (mcpp#1011), and the engine's closure from the deployed plugins does.
 assert_packed_closure() {
     local sdk="$1" tree="$2" f n missing=0 checked=0
     if is_windows && [ -z "$(llvm_readobj)" ]; then
@@ -673,7 +632,7 @@ qml_consumer() {
     find "$tree" -name qt.conf | head -1 | xargs grep -q '^Qml2Imports = qml$' || fail "the packed tree has no qt.conf with Qml2Imports"
     find "$tree" -path '*qml/QtQuick/Controls/qmldir' | grep -q . || fail "QtQuick.Controls is not in the packed tree"
     if ! is_windows && ! is_macos; then
-        find "$tree" -name 'libQt6XcbQpa.so.6' | grep -q . || fail "the xcb platform plugin's library is not in the packed tree (mcpp#1011)"
+        find "$tree" -name 'libQt6XcbQpa.so.6' | grep -q . || fail "the xcb platform plugin's library is not in the packed tree (mcpp#1011: needs an mcpp that closes over deployed libraries)"
     fi
     echo "ok: the packed tree has qt.conf, the Controls module and, on Linux, the xcb plugin's library"
 
@@ -779,23 +738,6 @@ PY
     # program's loader is set to the ecosystem's, as `mcpp run` does.
     if ! is_windows && ! is_macos; then
         qml_deploy_without_sdk "$sdk" "$tree"
-    fi
-
-    # THE CANARY OF THE ENGINE GAP (mcpp#1011). Built once more without the
-    # workaround: if the packed tree is complete anyway, the engine has taken
-    # deployed libraries into its closure and the workaround can go.
-    if ! is_windows && ! is_macos; then
-        MCPP_QML_PLUGIN_CLOSURE=off "$MCPP" build > target/ci/canary-build.log 2>&1 || fail "the build without plugin_closure failed"
-        rm -rf target/dist
-        MCPP_QML_PLUGIN_CLOSURE=off "$MCPP" pack --format dir > target/ci/canary-pack.log 2>&1 || fail "pack without plugin_closure failed"
-        tree=$(packed_tree)
-        if find "$tree" -name 'libQt6QuickLayouts.so.6' | grep -q . && find "$tree" -name 'libQt6XcbQpa.so.6' | grep -q .; then
-            echo "::notice::NOTICE: the engine now closes deployed libraries (mcpp#1011); remove the plugin_closure workaround (see docs/rules-qt.md, Engine gap)"
-            echo "NOTICE: the engine now closes deployed libraries (mcpp#1011); remove the plugin_closure workaround"
-        else
-            echo "ok: the engine gap still exists (mcpp#1011), and the workaround is what closes it"
-        fi
-        "$MCPP" build > target/ci/restore-build.log 2>&1 || fail "the build with plugin_closure failed"
     fi
 }
 
@@ -1080,11 +1022,10 @@ case "${1:-}" in
     qml-deploy)          qml_deploy ;;
     qml-import-only)     qml_import_only ;;
     qml-shaders)         qml_shaders ;;
-    reader)              reader ;;
     plugin-logic)        plugin_logic ;;
     vcpkg-crt)           vcpkg_crt ;;
     vcpkg-managed)       vcpkg_managed ;;
     vcpkg-msbuild-refused) vcpkg_msbuild_refused ;;
     vcpkg-make-port)     vcpkg_make_port ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|cmake-cross|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|qml-consumer|qml-modules|qml-deploy|qml-import-only|qml-shaders|reader|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|cmake-cross|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|qml-consumer|qml-modules|qml-deploy|qml-import-only|qml-shaders|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
 esac

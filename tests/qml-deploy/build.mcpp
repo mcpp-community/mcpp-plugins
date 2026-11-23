@@ -4,15 +4,9 @@ import mcpp.rules.qml;
 
 int main() {
     namespace qml = mcpp::rules::qml;
-    // The canary of CI (tests/../check-deps-and-qt.sh qml-deploy) builds once with the
-    // plugin-closure workaround off, to see whether the engine has taken it over.
-    mcpp::rerun_if_env_changed("MCPP_QML_PLUGIN_CLOSURE");
-    const char* closure = std::getenv("MCPP_QML_PLUGIN_CLOSURE");
-
     qml::options o;
     o.qt.modules        = { "Core", "Gui", "Qml", "Quick" };
     o.qt.deploy_plugins = { "platforms" };
-    if (closure && std::string_view(closure) == "off") o.qt.plugin_closure = false;
     o.imports      = { "QtQuick.Shapes" };
     o.import_paths = { "extra" };
 

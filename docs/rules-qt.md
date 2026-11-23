@@ -1,6 +1,6 @@
 # `rules-qt`
 
-`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0 (0.27.0 adds `plugin_closure`, `moc_json`, `moc_includes`, `i18n.extensions` and `compile_ex`; QML is [rules-qml](rules-qml.md)), 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
+`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0 (0.27.0 adds `moc_json`, `moc_includes`, `i18n.extensions` and `compile_ex`; QML is [rules-qml](rules-qml.md)), 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
 
 ## Use
 
@@ -78,7 +78,6 @@ A package that enables `rules-qt` only to import `mcpp.rules.qt`, and has no `bu
 | `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
 | `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as an action whose output is the `.ts` it rewrites, reading `sources`, or when that is empty the package's C++ sources and headers, found by the walk that finds moc's headers; `extensions` (default `cpp`, `h`, `hpp`, `ixx`, `cppm`: what `lupdate -extensions` reads and what the package walk collects; add `qml` and `js` for `qsTr` in QML); `tr_function_alias`; `deploy_to` (default `translations`); `out_dir` (default `<out dir>/qt/translations`); `qt_languages`: the linked modules' catalogs combined by `lconvert` into `qt_<language>.qm`, the file windeployqt writes |
 | `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
-| `plugin_closure` | default `true`: the libraries the deployed plugins load are linked into the program, or placed beside it on Windows (see [Engine gap](#engine-gap-mcpp1011)) |
 | `moc_json` | `moc --output-json`: each `moc_<stem>.cpp` is accompanied by `moc_<stem>.cpp.json`, the type description `qmltyperegistrar` reads; default `false` |
 | `moc_includes` | `moc` is given the SDK's include directories (`-I<sdk>/include`, one `-I<sdk>/include/Qt<Module>` per linked module, `-F<sdk>/lib` on macOS), without which it drops `QML_ELEMENT` for want of the header that defines it; default `false` |
 | `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
@@ -107,17 +106,3 @@ A program packed by `mcpp pack` starts on a machine that has only its operating 
 The rule names none of these libraries (0.15.0; 0.13.0 and 0.14.0 declared glib, zstd and zlib on Linux and served QtCore only). A Qt from elsewhere carries what its installer arranged. On Linux, QtNetwork additionally loads `libgssapi_krb5` and `libbrotlidec`, which the ecosystem does not publish yet.
 
 Qt's official Linux build uses the shared libstdc++, so a Linux program states `cxx_runtime = "toolchain-coupled"` (mcpp's docs/20) in its Linux host rows, `[target.x86_64-linux-gnu]` and `[target.aarch64-linux-gnu]`, and builds with a gcc toolchain; under a libc++ toolchain the rule warns. A plain `mcpp build` applies the host's row since mcpp 2026.9.27.1 (mcpp#704); with an older engine the statement goes in `[build]`, which applies it on every platform.
-
-## Engine gap (mcpp#1011)
-
-`mcpp pack` finds the libraries a program needs from the program alone. A plugin the rule places beside it (`platforms/libqxcb.so`) is opened at run time, so the libraries it loads (`libQt6XcbQpa.so.6`) are in no import table and a packed tree lacks them. The same holds for `libqwayland.so` and `libqeglfs.so`. The engine is asked to take deployed libraries into the closure in mcpp#1011.
-
-Until it does, `plugin_closure` (default `true`) reads each deployed plugin's dependencies with `mcpp.plugins.binary` and, for those that are files of the SDK and that the program does not already hold:
-
-| platform | what the rule does |
-|---|---|
-| Linux | puts the library on the link line inside `-Wl,--push-state,--no-as-needed` and `--pop-state`; `--as-needed`, which gcc applies by default, would drop a library nothing in the program refers to |
-| macOS | links it with `-Wl,-needed_library,<path>` |
-| Windows | places the DLL beside the program, where the engine places the DLLs the program imports |
-
-A project sets nothing. The workaround adds link inputs and nothing else: a library the engine also stages is the same file for the same destination, so a fixed engine gives the same answer. The source is marked `ENGINE-GAP WORKAROUND` with the issue and the condition for removing it, and `.github/scripts/check-engine-gaps.sh` fails a mark that lacks either. A file whose dependencies cannot be read is a warning. `tests/qml-deploy` builds once more with `plugin_closure = false`, and prints a notice, `the engine now closes deployed libraries`, in the CI log when the packed tree is complete without the workaround.

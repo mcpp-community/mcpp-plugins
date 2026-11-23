@@ -48,7 +48,7 @@ llvm_full=(
     "archive-consumer|^archive-consumer: 'greetings from the archive'"
     "spirv-module-consumer|^all ok"
 )
-llvm_configure_only=(qt-consumer qt-widgets-consumer qt-sdk-consumer qt-import-only qml-consumer qml-modules qml-deploy qml-shaders qml-import-only binary-reader)
+llvm_configure_only=(qt-consumer qt-widgets-consumer qt-sdk-consumer qt-import-only qml-consumer qml-modules qml-deploy qml-shaders qml-import-only)
 
 llvm_lane() {
     : "${MCPP:?MCPP names the mcpp under test}"

@@ -1806,9 +1806,6 @@ jobs:
       - name: compatibility units retire themselves
         run: bash .github/scripts/check-compat-retirement.sh
 
-      # A workaround for a gap in mcpp names the issue and says when to remove it.
-      - name: engine-gap workarounds are marked
-        run: bash .github/scripts/check-engine-gaps.sh
 
       # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
       #
@@ -1891,16 +1888,12 @@ jobs:
       # nested file and a resource, compiled ahead of time; then the same
       # project as three variants; several modules with a type derived across
       # them; the Qt modules a program loads at run time placed beside it, in a
-      # tree that runs without the SDK; and the reader of dependencies those
-      # steps rest on, compared with the platform's own tool.
+      # tree that runs without the SDK.
       - name: rules-qml enables its module alone without a report
         run: bash .github/scripts/check-deps-and-qt.sh qml-import-only
 
       - name: rules-qml builds a QML module with C++ types, compiles it ahead of time, and rebuilds only what an edit reaches
         run: bash .github/scripts/check-deps-and-qt.sh qml-consumer
-
-      - name: mcpp.plugins.binary reads the SDK's libraries as the platform's own tool does
-        run: bash .github/scripts/check-deps-and-qt.sh reader
 
       - name: rules-qml builds several modules, one with a type derived from another's
         run: bash .github/scripts/check-deps-and-qt.sh qml-modules
@@ -2786,16 +2779,12 @@ jobs:
       # nested file and a resource, compiled ahead of time; then the same
       # project as three variants; several modules with a type derived across
       # them; the Qt modules a program loads at run time placed beside it, in a
-      # tree that runs without the SDK; and the reader of dependencies those
-      # steps rest on, compared with the platform's own tool.
+      # tree that runs without the SDK.
       - name: rules-qml enables its module alone without a report
         run: bash .github/scripts/check-deps-and-qt.sh qml-import-only
 
       - name: rules-qml builds a QML module with C++ types, compiles it ahead of time, and rebuilds only what an edit reaches
         run: bash .github/scripts/check-deps-and-qt.sh qml-consumer
-
-      - name: mcpp.plugins.binary reads the SDK's libraries as the platform's own tool does
-        run: bash .github/scripts/check-deps-and-qt.sh reader
 
       - name: rules-qml builds several modules, one with a type derived from another's
         run: bash .github/scripts/check-deps-and-qt.sh qml-modules

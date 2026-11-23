@@ -100,7 +100,6 @@ comes from, one order for every member, 0.19.0). Every member implies it; a buil
 only these modules, and a third-party plugin built on them, name it on the
 dependency edge. `plugins-testing` adds `mcpp.plugins.testing`, which runs a
 plugin function against a stated build context and compares what it declared.
-`plugins-binary` adds `mcpp.plugins.binary`, the libraries an ELF, PE or Mach-O file names as dependencies, read from its bytes with `std` alone (0.27.0); `rules-qt` and `rules-qml` read the plugins they deploy with it.
 `plugins-toolchain` adds `mcpp.plugins.toolchain`, the builders a root build
 program states the build toolchain with (0.19.0).
 `plugins-platform` adds `mcpp.plugins.platform`, what a platform's plugin and a
@@ -125,7 +124,6 @@ src/plugins.cppm     export module mcpp.plugins;  the version, mcpp::plugins::su
 src/declare.cppm,    the general library for build programs (`plugins-core`):
 src/toolset.cppm,    mcpp.plugins.declare, mcpp.plugins.toolset, mcpp.plugins.fs
 src/fs.cppm
-src/binary.cppm      mcpp.plugins.binary (`plugins-binary`)
 src/testing.cppm     mcpp.plugins.testing (`plugins-testing`)
 src/platform.cppm    mcpp.plugins.platform (`plugins-platform`)
 src/compat/, deps/compat/

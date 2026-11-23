@@ -24,8 +24,9 @@
 // `import` statements of the project's `.qml` files and follows the SDK's
 // `qmldir` files and the `.qml` files of the modules they name (the closure
 // `qmlimportscanner` computes, by text, at plan time), then deploys each module
-// under `qml/`, the libraries its plugins load (see `mcpp.rules.qt`'s
-// `plugin_closure`), and a `qt.conf` that points Qt at them.
+// under `qml/`, and a `qt.conf` that points Qt at them. The libraries a plugin
+// loads are the engine's: `mcpp pack` takes what the build deploys beside the
+// program as a root of its runtime closure.
 //
 // A MISSING SDK OR TOOL IS A WARNING, as in `mcpp.rules.qt`: the plan says what
 // it could not find and declares what it can, so `mcpp emit build-database`
@@ -79,7 +80,7 @@ struct qml_module {
 struct options {
     std::vector<qml_module> modules;
     // Everything `mcpp.rules.qt` takes: the modules, the plugins, the SDK, the
-    // translations, `plugin_closure`. `Qml` is always linked.
+    // translations. `Qml` is always linked.
     qt::options qt;
     // Plugin directories a Qt Quick program needs, placed beside the program
     // with `qt.deploy_plugins`. Only those the SDK has are placed. Set it empty
@@ -497,11 +498,6 @@ inline std::vector<fs::path> module_files(const fs::path& dir) {
     }
     std::ranges::sort(out);
     return out;
-}
-
-inline bool is_runtime_library(const fs::path& p) {
-    const auto e = p.extension().string();
-    return qt::detail::is_windows() ? e == ".dll" : qt::detail::is_macos() ? e == ".dylib" : e == ".so";
 }
 
 // ─── Generated text ────────────────────────────────────────────────────────
@@ -978,7 +974,6 @@ inline bool compile(options opt) {
             std::cerr << std::format("{}: {} import(s) are in no SDK or import path and are not placed: {}. A type "
                                      "registered by the program at run time is one.\n", who, notes.size(), detail::joined(notes, ", "));
 
-        std::vector<fs::path> libraries;
         for (auto const& mod : found.modules) {
             const fs::path origin = [&] {
                 for (auto const& d : import_dirs)
@@ -988,11 +983,8 @@ inline bool compile(options opt) {
             for (auto const& f : detail::module_files(mod.dir)) {
                 const std::string to = "qml/" + generic(f.parent_path().lexically_relative(origin));
                 mcpp::deploy(generic(f).c_str(), to.c_str());
-                if (detail::is_runtime_library(f)) libraries.push_back(f);
             }
         }
-        // ENGINE-GAP WORKAROUND (mcpp#1011), see `qt::link_plugin_libs`.
-        if (opt.qt.plugin_closure) qt::link_plugin_libs(sdks, built.held, libraries);
     }
 
     // ── qt.conf ──
