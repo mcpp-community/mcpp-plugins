@@ -471,9 +471,10 @@ inline imports_found import_closure(std::vector<std::string> roots, const std::v
 }
 
 // The files of a Qt module that go beside the program: everything in its
-// directory except what is not run time, and except a directory that is a
+// directory except what is not run time (`qt_sdk`: and, as only Qt's own SDK
+// does, the debug twin of a library), and except a directory that is a
 // module of its own (it is deployed when it is imported).
-inline std::vector<fs::path> module_files(const fs::path& dir) {
+inline std::vector<fs::path> module_files(const fs::path& dir, bool qt_sdk) {
     std::vector<fs::path> out;
     std::error_code ec;
     std::vector<fs::path> pending = { dir };
@@ -492,7 +493,7 @@ inline std::vector<fs::path> module_files(const fs::path& dir) {
             const auto ext = p.extension().string();
             if (ext == ".qmltypes" || ext == ".prl" || ext == ".debug" || ext == ".pdb") continue;
             // The Windows SDK ships each plugin twice, `x.dll` and the debug `xd.dll`.
-            if (qt::detail::is_windows() && ext == ".dll") {
+            if (qt_sdk && qt::detail::is_windows() && ext == ".dll") {
                 const auto stem = p.stem().string();
                 if (stem.ends_with("d") && fs::exists(p.parent_path() / (stem.substr(0, stem.size() - 1) + ".dll"), ec))
                     continue;
@@ -994,7 +995,9 @@ inline bool compile(options opt) {
                     if (fs::is_regular_file(d / detail::uri_path(mod.uri) / "qmldir", ec)) return d;
                 return fs::path();
             }();
-            for (auto const& f : detail::module_files(mod.dir)) {
+            bool qt_sdk = false;
+            for (auto const& r : sdks) qt_sdk = qt_sdk || generic(origin) == generic(r / "qml");
+            for (auto const& f : detail::module_files(mod.dir, qt_sdk)) {
                 const std::string to = "qml/" + generic(f.parent_path().lexically_relative(origin));
                 mcpp::deploy(generic(f).c_str(), to.c_str());
             }
