@@ -1,0 +1,47 @@
+# Fixture: a shader compiled by `qsb` and embedded in a QML module (Linux).
+#
+# `shaders/wave.frag` becomes `shaders/wave.frag.qsb` in the module's resources;
+# the program reads it through `:/qt/qml/Shade/shaders/wave.frag.qsb`, and
+# `Main.qml` names it as a ShaderEffect's `fragmentShader`. `qsb` is part of the
+# additional libraries, `xim:qt-addons`, which the project declares beside
+# `xim:qt` (a second SDK prefix: both are searched for tools).
+#
+# The check script runs `qsb --version` first, under the environment the rule
+# runs it with, and skips this fixture with a notice where it does not start:
+# an `xim:qt-addons` published before openxlings/xim-pkgindex#1262 left `qsb`
+# on the system's loader, and it then fails with the distribution's Qt.
+[package]
+name        = "qml-shaders"
+version     = "0.1.0"
+description = "Fixture: A shader compiled by qsb and embedded through rules-qml"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qml"], host-module = true }
+
+# QML needs the Quick libraries, which `xim:qt-base` does not carry.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt" = "6.11.1"
+"xim:qt-addons" = "6.11.1"
+
+[build]
+sources = ["src/*.cpp"]
+
+[targets.qml-shaders]
+kind = "bin"
+main = "src/main.cpp"
+
+# As tests/qt-consumer: Qt's Linux libraries load the shared libstdc++, so on
+# Linux the program uses the toolchain's shared C++ runtime (mcpp's docs/20).
+# Windows and macOS keep the engine's default toolchain.
+[target.x86_64-linux-gnu]
+cxx_runtime = "toolchain-coupled"
+
+[target.aarch64-linux-gnu]
+cxx_runtime = "toolchain-coupled"

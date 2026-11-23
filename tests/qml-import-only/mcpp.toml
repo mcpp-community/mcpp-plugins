@@ -1,0 +1,28 @@
+# Fixture: a package that enables `rules-qml` only to import `mcpp.rules.qml`,
+# the shape of a library of build logic that other packages' build programs
+# import. As tests/qt-import-only: no `build.mcpp`, no `.ui`, `.qrc` or `.ts`, and
+# no Qt declared, so mcpp synthesises no build program and nothing reports a
+# missing SDK. The consumer writes `host-module = true`; the feature names no
+# `rule_module` (a `.qml` file needs a uri and a version that `[build] sources`
+# cannot state), and the `rules-qt` it implies keeps its own.
+[package]
+name        = "qml-import-only"
+version     = "0.1.0"
+description = "Fixture: rules-qml enabled only for its module"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qml"], host-module = true }
+
+[build]
+sources = ["src/*.cpp"]
+
+[targets.qml-import-only]
+kind = "bin"
+main = "src/main.cpp"

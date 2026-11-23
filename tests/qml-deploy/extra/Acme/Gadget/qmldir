@@ -1,0 +1,2 @@
+module Acme.Gadget
+singleton Gadget 1.0 Gadget.qml

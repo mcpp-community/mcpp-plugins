@@ -1,0 +1,43 @@
+# Fixture: several QML modules in one program, through rules-qml.
+#
+#   app.core   C++ type `Base`, and `Card.qml`
+#   app.ui     a dotted uri; C++ type `Derived`, derived from `app.core`'s `Base`,
+#              so its type description names a base class of another module
+#   Plain      no C++ type: only `Chip.qml`, so no registrar runs for it
+#
+# The program loads `app.ui`'s Main, which uses all three, and prints what the
+# inheritance across modules and the QML types of the others produced.
+[package]
+name        = "qml-modules"
+version     = "0.1.0"
+description = "Fixture: Three QML modules built through rules-qml"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qml"], host-module = true }
+
+# QML needs the Quick libraries, which `xim:qt-base` does not carry.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt" = "6.11.1"
+
+[build]
+sources = ["src/*.cpp"]
+
+[targets.qml-modules]
+kind = "bin"
+main = "src/main.cpp"
+
+# As tests/qt-consumer: Qt's Linux libraries load the shared libstdc++, so on
+# Linux the program uses the toolchain's shared C++ runtime (mcpp's docs/20).
+# Windows and macOS keep the engine's default toolchain.
+[target.x86_64-linux-gnu]
+cxx_runtime = "toolchain-coupled"
+
+[target.aarch64-linux-gnu]
+cxx_runtime = "toolchain-coupled"

@@ -1,0 +1,33 @@
+// Three modules. `app.ui`'s C++ type derives from `app.core`'s, so each header is
+// assigned to its module explicitly: with more than one module the rule does not
+// guess.
+import std;
+import mcpp;
+import mcpp.rules.qml;
+
+int main() {
+    namespace qml = mcpp::rules::qml;
+    qml::options o;
+    o.qt.modules = { "Core", "Gui", "Qml", "Quick" };
+    o.qt.deploy_plugins = { "platforms" };
+
+    qml::qml_module core;
+    core.uri     = "app.core";
+    core.root    = "qml/core";
+    core.sources = { "qml/core/*.qml" };
+    core.headers = { "src/core/base.h" };
+
+    qml::qml_module ui;
+    ui.uri     = "app.ui";
+    ui.root    = "qml/ui";
+    ui.sources = { "qml/ui/*.qml" };
+    ui.headers = { "src/ui/derived.h" };
+
+    qml::qml_module plain;
+    plain.uri     = "Plain";
+    plain.root    = "qml/plain";
+    plain.sources = { "qml/plain/*.qml" };
+
+    o.modules = { core, ui, plain };
+    return qml::compile(o) ? 0 : 1;
+}
