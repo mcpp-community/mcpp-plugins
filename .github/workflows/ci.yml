@@ -1887,6 +1887,37 @@ jobs:
       - name: a package that enables rules-qt only for its module builds without a report
         run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
 
+      # rules-qml (0.27.0). One module with C++ types, singletons, a script, a
+      # nested file and a resource, compiled ahead of time; then the same
+      # project as three variants; several modules with a type derived across
+      # them; the Qt modules a program loads at run time placed beside it, in a
+      # tree that runs without the SDK; and the reader of dependencies those
+      # steps rest on, compared with the platform's own tool.
+      - name: rules-qml enables its module alone without a report
+        run: bash .github/scripts/check-deps-and-qt.sh qml-import-only
+
+      - name: rules-qml builds a QML module with C++ types, compiles it ahead of time, and rebuilds only what an edit reaches
+        run: bash .github/scripts/check-deps-and-qt.sh qml-consumer
+
+      - name: mcpp.plugins.binary reads the SDK's libraries as the platform's own tool does
+        run: bash .github/scripts/check-deps-and-qt.sh reader
+
+      - name: rules-qml builds several modules, one with a type derived from another's
+        run: bash .github/scripts/check-deps-and-qt.sh qml-modules
+
+      # The patched loader of the packed tree is set with patchelf, and the
+      # SDK's directory is renamed away while it runs.
+      - name: patchelf, for running a packed program without the SDK
+        run: sudo apt-get install -y --no-install-recommends patchelf
+
+      - name: rules-qml places Qt's QML modules and their libraries; the packed program runs without the SDK
+        run: bash .github/scripts/check-deps-and-qt.sh qml-deploy
+
+      # `qsb` is in `xim:qt-addons`; the step says SKIP where the published
+      # payload's qsb does not start (xim-pkgindex#1262 fixes it).
+      - name: rules-qml compiles a shader with qsb and embeds it
+        run: bash .github/scripts/check-deps-and-qt.sh qml-shaders
+
   # ── THE OTHER TWO WAYS THIS CODE IS COMPILED ON LINUX (0.19.1) ─────────────
   #
   # The consumers job builds with the default toolchain, GCC with libstdc++.
@@ -2750,6 +2781,27 @@ jobs:
 
       - name: a package that enables rules-qt only for its module builds without a report
         run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
+
+      # rules-qml (0.27.0). One module with C++ types, singletons, a script, a
+      # nested file and a resource, compiled ahead of time; then the same
+      # project as three variants; several modules with a type derived across
+      # them; the Qt modules a program loads at run time placed beside it, in a
+      # tree that runs without the SDK; and the reader of dependencies those
+      # steps rest on, compared with the platform's own tool.
+      - name: rules-qml enables its module alone without a report
+        run: bash .github/scripts/check-deps-and-qt.sh qml-import-only
+
+      - name: rules-qml builds a QML module with C++ types, compiles it ahead of time, and rebuilds only what an edit reaches
+        run: bash .github/scripts/check-deps-and-qt.sh qml-consumer
+
+      - name: mcpp.plugins.binary reads the SDK's libraries as the platform's own tool does
+        run: bash .github/scripts/check-deps-and-qt.sh reader
+
+      - name: rules-qml builds several modules, one with a type derived from another's
+        run: bash .github/scripts/check-deps-and-qt.sh qml-modules
+
+      - name: rules-qml places Qt's QML modules and their libraries
+        run: bash .github/scripts/check-deps-and-qt.sh qml-deploy
 
   # ── deps WITHOUT VISUAL STUDIO (0.17.0, mcpp#734) ───────────────────────────
   #

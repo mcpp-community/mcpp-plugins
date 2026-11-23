@@ -440,6 +440,11 @@ qt_widgets_consumer() {
             find target/dist -name "$so*" | grep -q . || fail "the packed tree carries no $so"
         done
         echo "ok: the packed tree carries Qt and QtGui's runtime closure"
+        # The platform plugin is opened at run time, and the library it loads
+        # is in no import table: `plugin_closure` carries it (mcpp#1011).
+        find target/dist -name 'libQt6XcbQpa.so.6' | grep -q . ||
+            fail "the packed tree carries no libQt6XcbQpa.so.6, which the xcb platform plugin loads"
+        echo "ok: the packed tree carries the library the xcb platform plugin loads"
     fi
 }
 
@@ -484,6 +489,366 @@ qt_import_only() {
     ! grep -q 'no Qt SDK' target/ci/build.log ||
         fail "a package with no Qt source reported a missing SDK"
     echo "ok: a package that enables rules-qt only for its module runs no build program and reports nothing"
+}
+
+# ─── rules-qml (0.27.0) ──────────────────────────────────────────────────────
+
+# The SDK a fixture built with, from the fact `rules-qt` records.
+qt_sdk_root() {
+    local fact
+    fact=$(grep -h -o 'rules-qt\.sdk=[^"]*' target/.build-mcpp/build.mcpp.cache | tail -1)
+    case "$fact" in
+        "rules-qt.sdk=xlings: "*) echo "${fact#rules-qt.sdk=xlings: }" ;;
+        *) fail "the fixture's SDK was not the payload it declares: $fact" ;;
+    esac
+}
+
+# The program as the build left it (bin/<name>, bin/<name>.exe on Windows).
+built_program() {
+    find target -path '*/bin/*' \( -name "$1" -o -name "$1.exe" \) -type f | head -1
+}
+
+# The directory `mcpp pack --format dir` wrote.
+packed_tree() {
+    find target/dist -mindepth 1 -maxdepth 1 -type d | head -1
+}
+
+# A compiled file's dependencies, one per line, by the platform's own tool: the
+# reference `mcpp.plugins.binary` is held to. Prints nothing and returns 1 where
+# the platform has no tool in this job.
+llvm_readobj() {
+    find "${MCPP_HOME:-$HOME/.mcpp}/registry/data/xpkgs" -path '*xim-x-llvm*' \( -name llvm-readobj -o -name llvm-readobj.exe \) 2>/dev/null | head -1
+}
+needed_by_tool() {
+    local f="$1" id tool
+    if is_macos; then
+        id=$(otool -D "$f" 2>/dev/null | tail -n +2)
+        otool -L "$f" 2>/dev/null | tail -n +2 | awk '{print $1}' | while IFS= read -r n; do
+            [ "$n" = "$id" ] || echo "$n"
+        done
+    elif is_windows; then
+        tool=$(llvm_readobj); [ -n "$tool" ] || return 1
+        "$tool" --needed-libs "$f" 2>/dev/null | tr -d '\r' | sed -n '/NeededLibraries \[/,/\]/p' | grep -v 'NeededLibraries\|^\]' | sed 's/^ *//'
+    else
+        readelf -d "$f" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'
+    fi
+}
+
+# `mcpp.plugins.binary` reads real files as the platform's own tool does: every
+# library and plugin of the SDK a QML fixture built with (Linux: 180 ELF files
+# measured against readelf; macOS: otool; Windows: llvm-readobj).
+reader() {
+    local sdk list
+    sdk=$(cd "$ROOT/tests/qml-consumer" && qt_sdk_root)
+    cd "$ROOT/tests/binary-reader"
+    rm -rf target
+    mkdir -p target/ci
+    list="$PWD/target/ci/files.txt"
+    if is_windows; then
+        find "$sdk/bin" "$sdk/plugins" "$sdk/qml" -type f -name '*.dll' | sort > "$list"
+    elif is_macos; then
+        find "$sdk/lib" "$sdk/plugins" "$sdk/qml" -type f \( -name '*.dylib' -o -path '*.framework/Versions/A/Qt*' \) ! -name '*.prl' | sort > "$list"
+    else
+        find "$sdk/lib" "$sdk/libexec" "$sdk/plugins" "$sdk/qml" -type f \( -name '*.so' -o -name '*.so.*' \) | sort > "$list"
+    fi
+    [ -s "$list" ] || fail "no library of the SDK at $sdk"
+    if is_windows && [ -z "$(llvm_readobj)" ]; then
+        echo "::notice::SKIP reader: no llvm-readobj to compare with on this job"
+        return 0
+    fi
+    MCPP_READER_LIST="$list" "$MCPP" build 2>&1 | tee target/ci/build.log
+    local out; out=$(find target -name needed.txt | head -1)
+    [ -n "$out" ] || fail "the build program wrote no needed.txt"
+    local n=0 wrong=0 path got want
+    while IFS=$'\t' read -r path got; do
+        got=${got%$'\r'}
+        want=$(needed_by_tool "$path" | sort | paste -sd, -) || true
+        case "$got" in ERROR*) echo "reader: $path: $got"; wrong=$((wrong + 1)); continue ;; esac
+        got=$(printf '%s' "$got" | tr ',' '\n' | sort | paste -sd, -)
+        n=$((n + 1))
+        if [ "$got" != "$want" ]; then
+            echo "reader: $path"; echo "   reader: $got"; echo "   tool:   $want"
+            wrong=$((wrong + 1))
+        fi
+    done < "$out"
+    [ "$n" -gt 20 ] || fail "only $n files were read"
+    [ "$wrong" -eq 0 ] || fail "$wrong of $((n + wrong)) files differ from the platform's tool"
+    echo "ok: mcpp.plugins.binary equals the platform's tool on $n real files"
+}
+
+# Every library a packed file needs and the SDK provides is in the packed tree:
+# the closure `mcpp pack` computes from the program does not reach what a
+# plugin loads (mcpp#1011), and the plugin_closure workaround does.
+assert_packed_closure() {
+    local sdk="$1" tree="$2" f n missing=0 checked=0
+    if is_windows && [ -z "$(llvm_readobj)" ]; then
+        echo "::notice::SKIP the packed-closure check: no llvm-readobj to read the imports with on this job"
+        return 0
+    fi
+    while IFS= read -r f; do
+        if ! is_windows && ! is_macos; then
+            [ "$(head -c4 "$f" 2>/dev/null | tr -d '\0')" = "$(printf '\177ELF')" ] || continue
+        fi
+        for n in $(needed_by_tool "$f" 2>/dev/null || true); do
+            checked=$((checked + 1))
+            if is_macos; then
+                case "$n" in
+                    @rpath/*.framework/*) local fw=${n#@rpath/}; fw=${fw%%/*}
+                        find "$tree" -path "*$fw/*" | grep -q . || { echo "missing: $fw (needed by $f)"; missing=$((missing + 1)); } ;;
+                esac
+            elif is_windows; then
+                if find "$sdk/bin" -maxdepth 1 -iname "$n" | grep -q .; then
+                    find "$tree" -iname "$n" | grep -q . || { echo "missing: $n (needed by $f)"; missing=$((missing + 1)); }
+                fi
+            else
+                if [ -e "$sdk/lib/$n" ]; then
+                    [ -e "$tree/lib/$n" ] || { echo "missing: $n (needed by $f)"; missing=$((missing + 1)); }
+                fi
+            fi
+        done
+    done < <(find "$tree" -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.dll' -o -name '*.dylib' -o -perm -u+x \) 2>/dev/null)
+    [ "$missing" -eq 0 ] || fail "$missing libraries of the SDK that packed files load are not in the packed tree"
+    echo "ok: every SDK library the packed files load is in the packed tree ($checked dependencies read)"
+}
+
+qml_consumer() {
+    cd "$ROOT/tests/qml-consumer"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    "$MCPP" run | tr -d '\r' | tee target/ci/run.log
+    grep -q '^cpp=84 singleton=red js=42 nested=7 resource=hello-resource theme=9$' target/ci/run.log ||
+        fail "the module's C++ type, singleton, script, nested file, resource or C++ singleton did not reach the program"
+    grep -q '^tr=Hallo controls=1$' target/ci/run.log ||
+        fail "the qsTr translation or the Qt Quick Controls module did not reach the program"
+    echo "ok: the Probe module is in the program: C++ types, singletons, a script, a nested file, a resource, a translation"
+
+    # AOT: a unit per file and the loader, compiled into the program.
+    local g
+    for g in Probe_Main_qml Probe_Style_qml Probe_Util_js Probe_sub_Inner_qml Probe_qmlcache_loader Probe_qmltyperegistrations qrc_Probe; do
+        find target -name "$g.cpp" | grep -q . || fail "no generated $g.cpp"
+    done
+    local exe; exe=$(built_program qml-consumer)
+    [ -n "$exe" ] || fail "no program under target/"
+    if ! is_windows; then
+        [ "$(nm "$exe" 2>/dev/null | grep -c QmlCacheGeneratedCode || true)" -gt 0 ] ||
+            fail "the program holds no compiled QML (no QmlCacheGeneratedCode symbol)"
+    else
+        find target \( -name 'Probe_Main_qml*.obj' -o -name 'Probe_Main_qml*.o' \) | grep -q . ||
+            fail "the compiled form of Main.qml was not compiled into the program"
+    fi
+    echo "ok: qmlcachegen's units and loader are generated and linked into the program"
+
+    # `qsTr` is found in QML by lupdate, and the committed .ts is its output.
+    grep -q '<source>Hello</source>' qml_consumer_de.ts || fail "the .ts has no string from the .qml file"
+    git -C "$ROOT" diff --quiet -- tests/qml-consumer/qml_consumer_de.ts ||
+        fail "lupdate changed the committed .ts; commit its output"
+    echo "ok: lupdate read qsTr from the .qml file"
+
+    # One .qml changed re-generates its own compiled unit and the resources,
+    # and nothing else. Time stamps, not the build's log, whose format is not a contract.
+    sleep 2.2
+    touch target/ci/before-edit
+    sleep 2.2
+    cp qml/Probe/Main.qml target/ci/Main.qml.orig
+    printf '// edited\n' >> qml/Probe/Main.qml
+    "$MCPP" build > target/ci/edit-build.log 2>&1 || { cat target/ci/edit-build.log; mv target/ci/Main.qml.orig qml/Probe/Main.qml; fail "the build after an edit failed"; }
+    mv target/ci/Main.qml.orig qml/Probe/Main.qml
+    local gen
+    for g in Probe_Main_qml qrc_Probe; do
+        gen=$(find target -name "$g.cpp" | head -1)
+        [ -n "$(find "$gen" -newer target/ci/before-edit)" ] || fail "$g.cpp was not regenerated after an edit of Main.qml"
+    done
+    for g in Probe_Style_qml Probe_Util_js Probe_sub_Inner_qml Probe_qmltyperegistrations Probe_qmlcache_loader; do
+        gen=$(find target -name "$g.cpp" | head -1)
+        [ -z "$(find "$gen" -newer target/ci/before-edit)" ] || fail "$g.cpp was regenerated although its input did not change"
+    done
+    echo "ok: an edit of one .qml regenerated its unit and the resources, and nothing else"
+
+    # Packed: qt.conf, Qt's modules and the closure they need.
+    "$MCPP" build > target/ci/build2.log 2>&1 || fail "the build failed after the edit was undone"
+    "$MCPP" pack --format dir | tee target/ci/pack.log
+    local tree; tree=$(packed_tree)
+    [ -n "$tree" ] || fail "no packed tree"
+    find "$tree" -name qt.conf | head -1 | xargs grep -q '^Qml2Imports = qml$' || fail "the packed tree has no qt.conf with Qml2Imports"
+    find "$tree" -path '*qml/QtQuick/Controls/qmldir' | grep -q . || fail "QtQuick.Controls is not in the packed tree"
+    if ! is_windows && ! is_macos; then
+        find "$tree" -name 'libQt6XcbQpa.so.6' | grep -q . || fail "the xcb platform plugin's library is not in the packed tree (mcpp#1011)"
+    fi
+    echo "ok: the packed tree has qt.conf, the Controls module and, on Linux, the xcb plugin's library"
+
+    # Variants of the same project.
+    qml_variant noaot
+    qml_variant styles
+    qml_variant noconf
+}
+
+# One project, built another way by MCPP_QML_VARIANT (see its build.mcpp).
+qml_variant() {
+    local v="$1" tree
+    rm -rf target
+    mkdir -p target/ci
+    MCPP_QML_VARIANT="$v" "$MCPP" build > "target/ci/build-$v.log" 2>&1 || { cat "target/ci/build-$v.log"; fail "the $v variant did not build"; }
+    case "$v" in
+        noaot)
+            MCPP_QML_VARIANT="$v" "$MCPP" run | tr -d '\r' | grep -q '^cpp=84 singleton=red' || fail "noaot: the program did not run"
+            ! find target -name 'Probe_*_qml.cpp' | grep -q . || fail "noaot: a compiled unit was generated"
+            if ! is_windows; then
+                [ "$(nm "$(built_program qml-consumer)" 2>/dev/null | grep -c QmlCacheGeneratedCode || true)" -eq 0 ] ||
+                    fail "noaot: the program holds compiled QML"
+            fi
+            echo "ok: aot = false embeds the sources, generates no unit, and the program runs" ;;
+        styles)
+            MCPP_QML_VARIANT="$v" "$MCPP" pack --format dir > "target/ci/pack-$v.log" 2>&1 || { cat "target/ci/pack-$v.log"; fail "styles: pack failed"; }
+            tree=$(packed_tree)
+            find "$tree" -path '*qml/QtQuick/Controls/Basic/qmldir' | grep -q . || fail "styles: the Basic style is not placed"
+            ! find "$tree" -path '*qml/QtQuick/Controls/Material/qmldir' | grep -q . || fail "styles: the Material style is placed"
+            echo "ok: styles = { Basic } places the Basic style and not the others" ;;
+        noconf)
+            MCPP_QML_VARIANT="$v" "$MCPP" pack --format dir > "target/ci/pack-$v.log" 2>&1 || { cat "target/ci/pack-$v.log"; fail "noconf: pack failed"; }
+            ! find "$(packed_tree)" -name qt.conf | grep -q . || fail "noconf: a qt.conf is in the packed tree"
+            echo "ok: write_qt_conf = false places no qt.conf" ;;
+    esac
+}
+
+qml_modules() {
+    cd "$ROOT/tests/qml-modules"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    "$MCPP" run | tr -d '\r' | tee target/ci/run.log
+    grep -q '^sum=19 viaBase=7 label=chip$' target/ci/run.log ||
+        fail "a type derived across modules, a type of another module or a module with no C++ type did not work"
+    find target -name 'app_core_qmltyperegistrations.cpp' | grep -q . || fail "no registrations for app.core"
+    find target -name 'app_ui_qmltyperegistrations.cpp' | grep -q . || fail "no registrations for app.ui"
+    ! find target -name 'Plain_qmltyperegistrations.cpp' | grep -q . || fail "a module with no C++ type ran the registrar"
+    echo "ok: three modules, a C++ type derived from another module's, and one with no C++ type"
+}
+
+qml_import_only() {
+    cd "$ROOT/tests/qml-import-only"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    ! find target -name 'build.mcpp.bin' -o -name 'build.mcpp.exe' | grep -q . ||
+        fail "mcpp synthesised a build program for a package with no QML source"
+    ! grep -q 'no Qt SDK' target/ci/build.log ||
+        fail "a package with no QML source reported a missing SDK"
+    echo "ok: a package that enables rules-qml only for its module runs no build program and reports nothing"
+}
+
+qml_deploy() {
+    cd "$ROOT/tests/qml-deploy"
+    rm -rf target
+    mkdir -p target/ci
+    "$MCPP" build 2>&1 | tee target/ci/build.log
+    "$MCPP" run | tr -d '\r' | tee target/ci/run.log
+    grep -q '^layout=47 gadget=42 shape=1 button=1$' target/ci/run.log ||
+        fail "a Qt module, a module of import_paths or one named in imports did not load from the deployed qml/"
+    echo "ok: Layouts, Controls.Material, Shapes (named) and a module of import_paths load from the deployed qml/"
+    local sdk; sdk=$(qt_sdk_root)
+    "$MCPP" pack --format dir | tee target/ci/pack.log
+    local tree; tree=$(packed_tree)
+    [ -n "$tree" ] || fail "no packed tree"
+
+    # The deployed modules cover what qmlimportscanner finds: more is allowed, less is not.
+    local scanner="$sdk/libexec/qmlimportscanner"
+    is_windows && scanner="$sdk/bin/qmlimportscanner.exe"
+    "$scanner" -rootPath qml/App -importPath "$sdk/qml" -importPath extra > target/ci/scanner.json ||
+        fail "qmlimportscanner failed"
+    local rel miss=0 n=0
+    local py=python3
+    command -v python3 > /dev/null 2>&1 || py=python
+    for rel in $("$py" -I - target/ci/scanner.json <<'PY'
+import json, sys
+for e in json.load(open(sys.argv[1], encoding="utf-8")):
+    if e.get("type") == "module" and e.get("relativePath"):
+        print(e["relativePath"])
+PY
+    ); do
+        n=$((n + 1))
+        find "$tree" -path "*/qml/$rel/qmldir" | grep -q . || { echo "missing module: $rel"; miss=$((miss + 1)); }
+    done
+    [ "$n" -gt 5 ] || fail "the scanner found only $n modules"
+    [ "$miss" -eq 0 ] || fail "$miss modules the scanner finds are not in the packed tree"
+    echo "ok: the packed tree holds all $n modules qmlimportscanner finds"
+
+    assert_packed_closure "$sdk" "$tree"
+
+    # The packed program runs without the SDK: Linux only, where the packed
+    # program's loader is set to the ecosystem's, as `mcpp run` does.
+    if ! is_windows && ! is_macos; then
+        qml_deploy_without_sdk "$sdk" "$tree"
+    fi
+
+    # THE CANARY OF THE ENGINE GAP (mcpp#1011). Built once more without the
+    # workaround: if the packed tree is complete anyway, the engine has taken
+    # deployed libraries into its closure and the workaround can go.
+    if ! is_windows && ! is_macos; then
+        MCPP_QML_PLUGIN_CLOSURE=off "$MCPP" build > target/ci/canary-build.log 2>&1 || fail "the build without plugin_closure failed"
+        rm -rf target/dist
+        MCPP_QML_PLUGIN_CLOSURE=off "$MCPP" pack --format dir > target/ci/canary-pack.log 2>&1 || fail "pack without plugin_closure failed"
+        tree=$(packed_tree)
+        if find "$tree" -name 'libQt6QuickLayouts.so.6' | grep -q . && find "$tree" -name 'libQt6XcbQpa.so.6' | grep -q .; then
+            echo "::notice::NOTICE: the engine now closes deployed libraries (mcpp#1011); remove the plugin_closure workaround (see docs/rules-qt.md, Engine gap)"
+            echo "NOTICE: the engine now closes deployed libraries (mcpp#1011); remove the plugin_closure workaround"
+        else
+            echo "ok: the engine gap still exists (mcpp#1011), and the workaround is what closes it"
+        fi
+        "$MCPP" build > target/ci/restore-build.log 2>&1 || fail "the build with plugin_closure failed"
+    fi
+}
+
+# Runs the packed program with the SDK's directory renamed away. The packed
+# program is linked to the system's loader and its libraries are the ecosystem's,
+# so its interpreter is set to the one the build used.
+qml_deploy_without_sdk() {
+    local sdk="$1" tree="$2" interp copy
+    command -v patchelf > /dev/null 2>&1 || { echo "::notice::SKIP running the packed program without the SDK: no patchelf"; return 0; }
+    # The ecosystem's loader, whose directory also holds libstdc++ and libc: the
+    # libraries a packed program takes from its own tree are built against them.
+    interp=$(find "${XLINGS_HOME:-$HOME/.xlings}" -maxdepth 6 -path '*linux-x86_64-glibc/ld-linux-x86-64.so.2' 2>/dev/null | head -1 || true)
+    [ -n "$interp" ] || { echo "::notice::SKIP running the packed program without the SDK: no ecosystem loader found"; return 0; }
+    copy=$(mktemp -d)
+    cp -R "$tree" "$copy/pkg"
+    patchelf --set-interpreter "$interp" "$copy/pkg/bin/qml-deploy" || { echo "::notice::SKIP running without the SDK: patchelf failed"; return 0; }
+    if ! mv "$sdk" "$sdk.away" 2> /dev/null; then
+        echo "::notice::SKIP running the packed program without the SDK: its directory cannot be renamed"
+        rm -rf "$copy"
+        return 0
+    fi
+    local status=0 out
+    out=$(cd "$copy" && env -i HOME="$HOME" PATH=/usr/bin:/bin "$copy/pkg/bin/qml-deploy" 2>&1) || status=$?
+    mv "$sdk.away" "$sdk"
+    rm -rf "$copy"
+    echo "$out" | tail -3
+    [ "$status" -eq 0 ] && echo "$out" | grep -q '^layout=47 gadget=42 shape=1 button=1$' ||
+        fail "the packed program did not run without the SDK (status $status)"
+    echo "ok: the packed program runs with the SDK's directory renamed away"
+}
+
+# A shader compiled by `qsb` and embedded in a module (Linux). `qsb` is in
+# `xim:qt-addons`; an index that publishes it before xim-pkgindex#1262 leaves it
+# on the system's loader, so the fixture states that it is skipped.
+qml_shaders() {
+    if is_windows || is_macos; then echo "skip: qml-shaders is a Linux fixture"; return 0; fi
+    cd "$ROOT/tests/qml-shaders"
+    rm -rf target
+    mkdir -p target/ci
+    if ! "$MCPP" build > target/ci/build.log 2>&1; then
+        local qsb
+        qsb=$(find "${XLINGS_HOME:-$HOME/.xlings}/data/xpkgs" -maxdepth 4 -path '*xim-x-qt-addons*/bin/qsb' 2>/dev/null | head -1 || true)
+        if [ -n "$qsb" ] && ! "$qsb" --version > target/ci/qsb-probe.log 2>&1; then
+            echo "::notice::SKIP qml-shaders: qsb does not start ($(head -c 200 target/ci/qsb-probe.log | tr '\n' ' '))"
+            return 0
+        fi
+        cat target/ci/build.log
+        fail "the qml-shaders build failed"
+    fi
+    "$MCPP" run | tr -d '\r' | tee target/ci/run.log
+    grep -qE '^qsb=[1-9][0-9]* bytes shader=qrc:/qt/qml/Shade/shaders/wave.frag.qsb$' target/ci/run.log ||
+        fail "the compiled shader is not a resource of the module"
+    echo "ok: qsb compiled the shader and it is a resource of the module"
 }
 
 # THE TEST KIT (0.17.0). The deps members' decisions -- which mechanism, which
@@ -710,10 +1075,16 @@ case "${1:-}" in
     qt-widgets-consumer) qt_widgets_consumer ;;
     qt-sdk-consumer)     qt_sdk_consumer ;;
     qt-import-only)      qt_import_only ;;
+    qml-consumer)        qml_consumer ;;
+    qml-modules)         qml_modules ;;
+    qml-deploy)          qml_deploy ;;
+    qml-import-only)     qml_import_only ;;
+    qml-shaders)         qml_shaders ;;
+    reader)              reader ;;
     plugin-logic)        plugin_logic ;;
     vcpkg-crt)           vcpkg_crt ;;
     vcpkg-managed)       vcpkg_managed ;;
     vcpkg-msbuild-refused) vcpkg_msbuild_refused ;;
     vcpkg-make-port)     vcpkg_make_port ;;
-    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|cmake-cross|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
+    *) echo "usage: $0 vcpkg-consumer|vcpkg-libcxx|archive-consumer|vcpkg-workspace|cmake-consumer|cmake-cache|cmake-cross|qt-consumer|qt-widgets-consumer|qt-sdk-consumer|qt-import-only|qml-consumer|qml-modules|qml-deploy|qml-import-only|qml-shaders|reader|plugin-logic|tool-sources|vcpkg-crt|vcpkg-managed|vcpkg-msbuild-refused|vcpkg-make-port"; exit 2 ;;
 esac

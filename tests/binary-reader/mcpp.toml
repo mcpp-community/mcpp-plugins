@@ -1,0 +1,27 @@
+# Fixture: `mcpp.plugins.binary` reading real files. The unit cases of
+# tests/plugin-logic read files built byte by byte; this package's build program
+# reads the files named in the list that MCPP_READER_LIST points to (CI lists the
+# Qt SDK's libraries and plugins) and writes what the reader found, one line
+# per file, for the script to compare with the platform's own tool
+# (`readelf`, `otool`, `llvm-readobj`).
+[package]
+name        = "binary-reader"
+version     = "0.1.0"
+description = "Fixture: the dependency reader on real files"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = true
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["plugins-binary"], host-module = true }
+
+[build]
+sources = ["src/*.cpp"]
+
+[targets.binary-reader]
+kind = "bin"
+main = "src/main.cpp"

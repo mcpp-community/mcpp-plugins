@@ -10,6 +10,7 @@ import mcpp.rules.cuda;
 import mcpp.rules.hip;
 import mcpp.rules.metal;
 import mcpp.rules.qt;
+import mcpp.rules.qml;
 import mcpp.rules.slang;
 import mcpp.rules.spirv;
 import mcpp.rules.swift;
@@ -118,6 +119,8 @@ int main() {
     // `rules-qt` declares no SDK and this fixture declares none, so the
     // question that plans nothing is where the SDK would be: nowhere.
     ok = ok && mcpp::rules::qt::roots({ .root = "no-such-qt-sdk" }).empty();
+    // `rules-qml` states its generated files' directory without asking for an SDK.
+    ok = ok && !mcpp::rules::qml::import_root({}).empty();
     // The `deps-*` members install through an action; asked only what they
     // derive without one -- the triplet this target defaults to, and the file
     // a library name denotes.
