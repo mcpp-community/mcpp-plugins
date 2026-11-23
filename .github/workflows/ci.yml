@@ -1806,6 +1806,10 @@ jobs:
       - name: compatibility units retire themselves
         run: bash .github/scripts/check-compat-retirement.sh
 
+      # A workaround for a gap in mcpp names the issue and says when to remove it.
+      - name: engine-gap workarounds are marked
+        run: bash .github/scripts/check-engine-gaps.sh
+
       # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
       #
       # vcpkg keeps everything it reuses in one per-user directory -- its

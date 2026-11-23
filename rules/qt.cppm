@@ -53,6 +53,7 @@ import std;
 import mcpp;
 import mcpp.plugins;
 import mcpp.plugins.tool;
+import mcpp.plugins.binary;
 
 export namespace mcpp::rules::qt {
 
@@ -119,6 +120,13 @@ struct options {
     // second prefix (see the header).
     std::string root;
     std::vector<std::string> extra_roots;
+    // Complete the libraries the deployed plugins load (0.27.0). A plugin is
+    // opened at run time and no import table of the program names what it needs,
+    // so `mcpp pack` does not carry those libraries (mcpp#1011): the program
+    // is linked with them (Linux, macOS) or they are placed beside it (Windows).
+    // On by default and silent; the workaround is marked at `link_plugin_libs`
+    // and recorded in docs/rules-qt.md.
+    bool plugin_closure = true;
     std::string out_dir = std::string(mcpp::out_dir());
 };
 
@@ -402,6 +410,144 @@ inline std::string root(const options& opt = {}) {
 
 // ─── What the program loads ────────────────────────────────────────────────
 
+namespace detail {
+
+inline std::filesystem::path real_path(const std::filesystem::path& p) {
+    std::error_code ec;
+    auto c = std::filesystem::canonical(p, ec);
+    return ec ? p.lexically_normal() : c;
+}
+
+// The SDK's runtime libraries by name: where a dependency a file states
+// (`libQt6Gui.so.6`, `Qt6Gui.dll`, `@rpath/QtGui.framework/Versions/A/QtGui`)
+// is a file of the SDK, and nothing for a system library.
+struct library_index {
+    std::vector<std::filesystem::path> dirs;       // `lib/`, or `bin/` on Windows
+    std::map<std::string, std::filesystem::path> lowercase;   // Windows: a name is not case-sensitive
+
+    library_index(std::span<const std::filesystem::path> roots) {
+        std::error_code ec;
+        for (auto const& r : roots) {
+            dirs.push_back(r / (is_windows() ? "bin" : "lib"));
+            if (!is_windows()) continue;
+            for (auto const& e : std::filesystem::directory_iterator(dirs.back(), ec)) {
+                if (!e.is_regular_file(ec) || e.path().extension() != ".dll") continue;
+                std::string name = e.path().filename().string();
+                for (std::size_t i = 0; i < name.size(); ++i)
+                    name[i] = char(std::tolower(static_cast<unsigned char>(name[i])));
+                lowercase.try_emplace(name, e.path());
+            }
+        }
+    }
+
+    std::filesystem::path find(const std::string& name) const {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        std::string rel;
+        if (is_macos()) {
+            // `@rpath/QtGui.framework/Versions/A/QtGui` is `lib/QtGui.framework/QtGui`.
+            if (!name.starts_with("@rpath/")) return {};
+            const std::string rest = name.substr(7);
+            const auto fw = rest.find(".framework/");
+            rel = fw == std::string::npos ? rest : rest.substr(0, fw) + ".framework/" + rest.substr(0, fw);
+            if (fw != std::string::npos && !mcpp::plugins::binary::plain_name(rest.substr(0, fw))) return {};
+            if (fw == std::string::npos && !mcpp::plugins::binary::plain_name(rest)) return {};
+        } else {
+            if (!mcpp::plugins::binary::plain_name(name)) return {};
+            rel = name;
+        }
+        for (auto const& d : dirs)
+            if (fs::is_regular_file(d / rel, ec)) return d / rel;
+        if (is_windows()) {
+            std::string low = name;
+            for (std::size_t i = 0; i < low.size(); ++i) low[i] = char(std::tolower(static_cast<unsigned char>(low[i])));
+            if (auto it = lowercase.find(low); it != lowercase.end()) return it->second;
+        }
+        return {};
+    }
+};
+
+// Every library of the SDK `file` needs, directly or through other SDK
+// libraries, in the order they are met.
+inline void sdk_closure(const library_index& index, const std::filesystem::path& file,
+                        std::vector<std::filesystem::path>& order, std::set<std::filesystem::path>& seen,
+                        std::vector<std::string>& problems) {
+    const auto read = mcpp::plugins::binary::needed(file);
+    if (!read.ok()) {
+        problems.push_back(generic(file) + ": " + read.error);
+        return;
+    }
+    for (auto const& name : read.names) {
+        const auto found = index.find(name);
+        if (found.empty() || !seen.insert(real_path(found)).second) continue;
+        order.push_back(found);
+        sdk_closure(index, found, order, seen, problems);
+    }
+}
+
+} // namespace detail
+
+// ENGINE-GAP WORKAROUND
+//   gap:         mcpp pack's runtime closure starts at the program; a library placed beside it with `mcpp::deploy` is not a root
+//   issue:       mcpp#1011
+//   remove when: the engine takes deployed role=library files into the closure
+//   note:        idempotent: a library the engine also stages is the same file for the same destination, so the answer does not change
+//
+// A plugin is opened at run time, and no import table of the program names what
+// it loads: the platform plugin `libqxcb.so` needs `libQt6XcbQpa.so.6`, the QML
+// plugin `libqquicklayoutsplugin.so` needs `libQt6QuickLayouts.so.6`. `mcpp pack`
+// finds a program's libraries from the program alone, so a packed tree has the
+// plugin and lacks the library it opens. The rule reads each deployed plugin's
+// dependencies (`mcpp.plugins.binary`) and gives the program those that are
+// files of the SDK and that it does not already hold:
+//
+//   Linux    the library on the link line, inside `--no-as-needed`, which
+//            keeps a library nothing in the program refers to (`--as-needed`
+//            drops it, and with it the closure entry)
+//   macOS    `-needed_library`, the same for Mach-O
+//   Windows  the DLL placed beside the program, which is where the engine
+//            places the DLLs the program imports
+//
+// `held` is the libraries the program has (the modules, and what an earlier
+// call added); the call adds the ones it links. A failure to read a file is a
+// warning: the program is built, and the packed tree may lack a library.
+inline void link_plugin_libs(std::span<const std::filesystem::path> sdks,
+                             std::vector<std::filesystem::path>& held,
+                             std::span<const std::filesystem::path> plugins) {
+    if (plugins.empty()) return;
+    const detail::library_index index(sdks);
+    std::vector<std::string> problems;
+    // What the program already holds, with everything those libraries load.
+    std::set<std::filesystem::path> covered;
+    for (auto const& h : held) {
+        covered.insert(detail::real_path(h));
+        std::vector<std::filesystem::path> ignore;
+        detail::sdk_closure(index, h, ignore, covered, problems);
+    }
+    std::vector<std::filesystem::path> add;
+    for (auto const& f : plugins) detail::sdk_closure(index, f, add, covered, problems);
+    if (!problems.empty()) {
+        std::string list;
+        for (auto const& p : problems) list += "\n    " + p;
+        detail::warn(std::format("mcpp.rules.qt: the dependencies of a file could not be read, so the packed "
+                                 "program may lack a library it loads (mcpp#1011):{}", list));
+    }
+    if (add.empty()) return;
+    if (detail::is_windows()) {
+        for (auto const& a : add) mcpp::deploy(detail::generic(a).c_str(), ".");
+    } else if (detail::is_macos()) {
+        for (auto const& a : add) {
+            const std::string flag = "-Wl,-needed_library," + detail::generic(a);
+            mcpp::link_flag(flag.c_str());
+        }
+    } else {
+        mcpp::link_flag("-Wl,--push-state,--no-as-needed");
+        for (auto const& a : add) mcpp::link_flag(detail::generic(a).c_str());
+        mcpp::link_flag("-Wl,--pop-state");
+    }
+    held.insert(held.end(), add.begin(), add.end());
+}
+
 // The SDK's shared-library directories, as runtime search directories
 // (SPEC-007 R4.1). The engine renders them as the program's run path, puts
 // them on `mcpp run`'s load path, searches them for `mcpp pack`'s closure, and
@@ -435,6 +581,7 @@ struct outcome {
     sdk_source source;                       // empty `roots` when there is no SDK
     std::string gen;                         // `<out dir>/qt`
     std::vector<std::string> linked;         // the modules found and linked, as `Core`
+    std::vector<std::filesystem::path> held; // the libraries the program holds: the modules, and what the plugin closure added
     std::vector<moc_unit> mocs;              // headers only, in `moc_<stem>.cpp` order
 };
 
@@ -519,6 +666,7 @@ inline outcome compile_ex(options opt = {}) {
             mcpp::define(def.c_str());
             if (!detail::is_macos()) mocInclude.push_back("-I" + generic(headers));
             res.linked.push_back(m);
+            res.held.push_back(detail::is_windows() ? r / "bin" / ("Qt6" + m + ".dll") : lib);
             found = true;
             break;
         }
@@ -799,6 +947,7 @@ inline outcome compile_ex(options opt = {}) {
     }
 
     // ── what Qt loads at run time ──
+    std::vector<fs::path> deployedPlugins;
     for (auto const& dir : opt.deploy_plugins) {
         bool any = false;
         for (auto const& r : sdks) {
@@ -823,6 +972,7 @@ inline outcome compile_ex(options opt = {}) {
                         continue;
                 }
                 mcpp::deploy(generic(f).c_str(), dir.c_str());
+                deployedPlugins.push_back(f);
                 any = true;
             }
         }
@@ -830,6 +980,8 @@ inline outcome compile_ex(options opt = {}) {
             detail::warn(std::format("{}: no plugin directory `{}` under {}/plugins; nothing placed "
                                      "for it.", who, dir, generic(main)));
     }
+    // ENGINE-GAP WORKAROUND (mcpp#1011), see `link_plugin_libs`.
+    if (opt.plugin_closure) link_plugin_libs(sdks, res.held, deployedPlugins);
     if (opt.deploy_software_gl && detail::is_windows()) {
         for (auto const* f : { "opengl32sw.dll", "d3dcompiler_47.dll" })
             for (auto const& r : sdks)

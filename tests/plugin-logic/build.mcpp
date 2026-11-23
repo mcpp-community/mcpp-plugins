@@ -303,8 +303,8 @@ std::vector<std::pair<std::string, bytes>> samples() {
 t::context with_full_qt(t::context c) {
     for (auto const* tool : { "moc", "uic", "rcc", "lupdate", "lrelease", "lconvert" })
         c = c.file(std::string("qt/bin/") + tool);
-    return c.file("qt/lib/libQt6Core.so.6").file("qt/lib/libQt6Core.so").file("qt/include/QtCore/qobject.h")
-        .file("qt/plugins/platforms/libqxcb.so", bin::elf(true, {"libQt6Core.so.6"}))
+    return c.file("qt/lib/libQt6Core.so", bin::elf(true, {})).file("qt/include/QtCore/qobject.h")
+        .file("qt/plugins/platforms/libqxcb.so", bin::elf(true, {"libQt6Core.so"}))
         .file("pkg/widget.h", "class Widget { Q_OBJECT };\n")
         .file("pkg/form.ui").file("pkg/res/app.qrc", "<RCC><qresource prefix=\"/\"></qresource></RCC>\n")
         .file("pkg/app.ts");
@@ -1162,7 +1162,7 @@ int main(int argc, char** argv) {
 
 
         { "qt: moc_json and moc_includes add the type description and the SDK's include directories to moc",
-          with_full_qt(t::row::linux_gcc()).file("qt/lib/libQt6Qml.so.6").file("qt/lib/libQt6Qml.so"),
+          with_full_qt(t::row::linux_gcc()).file("qt/lib/libQt6Qml.so", bin::elf(true, {})),
           [] {
               mcpp::rules::qt::options o;
               o.root = "../qt";
@@ -1209,6 +1209,114 @@ int main(int argc, char** argv) {
               c.expect(u.find("pkg/ui/Main.qml") != std::string::npos && u.find("pkg/ui/util.js") != std::string::npos,
                        "the walk collects the files of those extensions");
               c.expect(r.has_line("mcpp:rerun-if-changed-glob=**/*.qml"), "a new file of one of them re-plans");
+          } },
+
+
+        // ── the plugin closure (mcpp#1011) ──────────────────────────────────
+        { "plugin closure, Linux: a plugin's SDK libraries are linked inside --no-as-needed, the rest are not",
+          t::row::linux_gcc()
+              .file("qt/lib/libQt6Core.so", bin::elf(true, {"libc.so.6"}))
+              .file("qt/lib/libQt6XcbQpa.so.6.11.1", bin::elf(true, {"libQt6Gui.so.6", "libQt6Core.so.6", "libxcb.so.1"}))
+              .file("qt/lib/libQt6Gui.so.6.11.1", bin::elf(true, {"libQt6Core.so.6", "libc.so.6"}))
+              .file("qt/plugins/platforms/libqxcb.so", bin::elf(true, {"libQt6XcbQpa.so.6", "libc.so.6", "../escape.so", "libQt6Core.so.6"}))
+              .file("qt/plugins/platforms/libqbroken.so"),
+          [] {
+              namespace fs = std::filesystem;
+              const fs::path lib = fs::path(mcpp::manifest_dir()).parent_path() / "qt" / "lib";
+              std::error_code ec;
+              fs::create_symlink("libQt6Core.so", lib / "libQt6Core.so.6", ec);
+              const bool linked = !ec;
+              fs::create_symlink("libQt6XcbQpa.so.6.11.1", lib / "libQt6XcbQpa.so.6", ec);
+              fs::create_symlink("libQt6Gui.so.6.11.1", lib / "libQt6Gui.so.6", ec);
+              std::printf("symlinks=%d\n", linked && !ec);
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {"platforms"};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              if (!r.has_line("symlinks=1")) return;   // a host that cannot make a link states nothing about it
+              const std::string q = r.root.generic_string() + "/qt/lib/";
+              std::string flags;
+              for (auto const& l : r.lines) if (l.starts_with("mcpp:link-flag=")) flags += l.substr(15) + "|";
+              c.expect(flags == q + "libQt6Core.so|-Wl,--push-state,--no-as-needed|" + q + "libQt6XcbQpa.so.6|" + q + "libQt6Gui.so.6|-Wl,--pop-state|",
+                       "the module, then the plugin's SDK libraries between push and pop, each once, none of the system, escaping or held ones; got " + flags);
+              c.expect(r.has_line("mcpp:warning=", {"libqbroken.so", "mcpp#1011"}),
+                       "a plugin whose dependencies cannot be read is a warning that names it");
+              c.expect(r.has_line("mcpp:deploy=", {"libqxcb.so", "platforms"}), "the plugin is placed as before");
+          } },
+
+        { "plugin closure: plugin_closure = false is the 0.26 link line, and an empty plugin set adds nothing",
+          t::row::linux_gcc()
+              .file("qt/lib/libQt6Core.so", bin::elf(true, {}))
+              .file("qt/lib/libQt6XcbQpa.so.6", bin::elf(true, {}))
+              .file("qt/plugins/platforms/libqxcb.so", bin::elf(true, {"libQt6XcbQpa.so.6"})),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {"platforms"};
+              o.plugin_closure = false;
+              if (!mcpp::rules::qt::compile(o)) return 1;
+              o.plugin_closure = true;
+              o.deploy_plugins = {};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              std::size_t links = 0;
+              for (auto const& l : r.lines) if (l.starts_with("mcpp:link-flag=")) ++links;
+              c.expect(links == 2, "two runs, one module each, and no plugin library linked in either");
+              c.expect(!r.has_line("mcpp:link-flag=-Wl,--push-state,--no-as-needed"), "no --no-as-needed group");
+          } },
+
+        { "plugin closure, macOS: a framework a plugin loads is `-needed_library`",
+          t::row::linux_libcxx().set("MCPP_TARGET_OS", "macos")
+              .file("qt/lib/QtCore.framework/QtCore", bin::macho_thin(true, "@rpath/QtCore.framework/Versions/A/QtCore", {{0xc, "/usr/lib/libSystem.B.dylib"}}))
+              .file("qt/lib/QtGui.framework/QtGui", bin::macho_thin(true, "@rpath/QtGui.framework/Versions/A/QtGui", {{0xc, "@rpath/QtCore.framework/Versions/A/QtCore"}}))
+              .file("qt/lib/libqt-extra.dylib", bin::macho_thin(true, "@rpath/libqt-extra.dylib", {}))
+              .file("qt/plugins/platforms/libqcocoa.dylib", bin::macho_thin(true, "libqcocoa.dylib",
+                    {{0xc, "@rpath/QtGui.framework/Versions/A/QtGui"}, {0xc, "@rpath/QtCore.framework/Versions/A/QtCore"},
+                     {0xc, "@rpath/libqt-extra.dylib"}, {0xc, "/usr/lib/libSystem.B.dylib"}, {0xc, "@rpath/../x.dylib"}})),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {"platforms"};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const std::string q = r.root.generic_string() + "/qt/lib/";
+              std::string flags;
+              for (auto const& l : r.lines) if (l.starts_with("mcpp:link-flag=")) flags += l.substr(15) + "|";
+              c.expect(flags == q + "QtCore.framework/QtCore|-Wl,-needed_library," + q + "QtGui.framework/QtGui|-Wl,-needed_library," + q + "libqt-extra.dylib|",
+                       "the held framework is not repeated; a framework and a plain dylib of the SDK are; a system library and a path that escapes are not; got " + flags);
+          } },
+
+        { "plugin closure, Windows: a DLL a plugin imports is placed beside the program, whatever its case",
+          t::row::windows_managed()
+              .file("qt/lib/Qt6Core.lib").file("qt/bin/Qt6Core.dll", bin::pe(true, {"KERNEL32.dll"}, {}))
+              .file("qt/bin/Qt6Gui.dll", bin::pe(true, {"QT6CORE.DLL", "USER32.dll"}, {}))
+              .file("qt/bin/Qt6Network.dll", bin::pe(true, {"Qt6Core.dll"}, {}))
+              .file("qt/plugins/platforms/qwindows.dll", bin::pe(true, {"Qt6Gui.dll", "Qt6Core.dll", "KERNEL32.dll"}, {"Qt6Network.dll"})),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {"platforms"};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.has_line("mcpp:deploy=", {"/qt/bin/Qt6Gui.dll"}) && r.has_line("mcpp:deploy=", {"/qt/bin/Qt6Network.dll"}),
+                       "the DLLs the plugin imports, the delay-loaded one too, are deployed");
+              c.expect(!r.has_line("mcpp:deploy=", {"/qt/bin/Qt6Core.dll"}), "the module the program imports is the engine's to place");
+              std::size_t gui = 0;
+              for (auto const& l : r.lines) if (l.starts_with("mcpp:deploy=") && l.find("Qt6Gui.dll") != std::string::npos) ++gui;
+              c.expect(gui == 1, "each DLL once");
           } },
 
         // ── mcpp.plugins.binary ─────────────────────────────────────────────
