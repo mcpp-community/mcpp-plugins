@@ -298,6 +298,33 @@ std::vector<std::pair<std::string, bytes>> samples() {
 
 } // namespace bin
 
+// A stand-in SDK with every tool rules-qt runs and one plugin directory, whose
+// plugin is a real (minimal) ELF that needs only a module the program links.
+t::context with_full_qt(t::context c) {
+    for (auto const* tool : { "moc", "uic", "rcc", "lupdate", "lrelease", "lconvert" })
+        c = c.file(std::string("qt/bin/") + tool);
+    return c.file("qt/lib/libQt6Core.so.6").file("qt/lib/libQt6Core.so").file("qt/include/QtCore/qobject.h")
+        .file("qt/plugins/platforms/libqxcb.so", bin::elf(true, {"libQt6Core.so.6"}))
+        .file("pkg/widget.h", "class Widget { Q_OBJECT };\n")
+        .file("pkg/form.ui").file("pkg/res/app.qrc", "<RCC><qresource prefix=\"/\"></qresource></RCC>\n")
+        .file("pkg/app.ts");
+}
+
+// What a case printed that the engine would read: the directives, with the
+// case's own directory replaced, so one text serves every host.
+std::string directives(const t::result& r) {
+    std::string out;
+    const std::string root = r.root.generic_string();
+    for (auto const& l : r.lines) {
+        if (!l.starts_with("mcpp:") || l.starts_with("mcpp:decision=") || l.starts_with("mcpp:fact=mcpp.plugins=")
+            || l.starts_with("mcpp:protocol=")) continue;
+        std::string x = l;
+        for (std::size_t at = x.find(root); at != std::string::npos; at = x.find(root, at + 6)) x.replace(at, root.size(), "<R>");
+        out += x + "\n";
+    }
+    return out;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1109,6 +1136,80 @@ int main(int argc, char** argv) {
                        "an executable's pattern begins with {name}");
           } },
 
+
+
+        { "qt: a project that names no 0.27 option gets the directives of 0.26",
+          with_full_qt(t::row::linux_gcc()),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {"platforms"};
+              o.forms = {"form.ui"};
+              o.resources = {"res/app.qrc"};
+              o.i18n.ts = {"app.ts"};
+              o.i18n.update_sources = true;
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              // The text is the directives of 0.26.1 for these options, recorded before
+              // any 0.27 change: a later change that alters one fails here.
+              std::ifstream in(std::filesystem::path(mcpp::manifest_dir()) / "golden" / "qt-0.26.txt");
+              const std::string golden{std::istreambuf_iterator<char>(in), {}};
+              c.expect(!golden.empty() && directives(r) == golden, "every directive is what 0.26 stated; got:\n" + directives(r));
+          } },
+
+
+        { "qt: moc_json and moc_includes add the type description and the SDK's include directories to moc",
+          with_full_qt(t::row::linux_gcc()).file("qt/lib/libQt6Qml.so.6").file("qt/lib/libQt6Qml.so"),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core", "Qml"};
+              o.deploy_plugins = {};
+              o.moc_json = true;
+              o.moc_includes = true;
+              const auto done = mcpp::rules::qt::compile_ex(o);
+              std::printf("ok=%d linked=%zu mocs=%zu\n", done.ok, done.linked.size(), done.mocs.size());
+              for (auto const& m : done.mocs)
+                  std::printf("unit=%s|%s|%s\n", std::filesystem::path(m.header).filename().string().c_str(),
+                              std::filesystem::path(m.cpp).filename().string().c_str(),
+                              std::filesystem::path(m.json).filename().string().c_str());
+              return done.ok ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.has_line("ok=1 linked=2 mocs=1"), "compile_ex reports the modules it linked and the moc units");
+              c.expect(r.has_line("unit=widget.h|moc_widget.cpp|moc_widget.cpp.json"), "a unit names its header, source and description");
+              const auto a = r.line("mcpp:action=", {"qt:moc:moc_widget.cpp"});
+              c.expect(a.find("\"--output-json\"") != std::string::npos, "moc writes the description");
+              c.expect(a.find("moc_widget.cpp.json\"]") != std::string::npos, "the description is a declared output");
+              c.expect(a.find("\"-I" + r.root.generic_string() + "/qt/include\"") != std::string::npos
+                       && a.find("\"-I" + r.root.generic_string() + "/qt/include/QtCore\"") != std::string::npos
+                       && a.find("\"-I" + r.root.generic_string() + "/qt/include/QtQml\"") != std::string::npos,
+                       "moc is given the SDK's include directory and each linked module's");
+          } },
+
+        { "qt: lupdate reads the extensions the project names",
+          with_full_qt(t::row::linux_gcc()).file("pkg/ui/Main.qml", "Text { text: qsTr(\"hi\") }\n").file("pkg/ui/util.js"),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {};
+              o.i18n.ts = {"app.ts"};
+              o.i18n.update_sources = true;
+              o.i18n.extensions = {"cpp", "h", "qml", "js"};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              const auto u = r.line("mcpp:action=", {"qt:lupdate:app"});
+              c.expect(u.find("\"-extensions\",\"cpp,h,qml,js\"") != std::string::npos, "the extensions reach lupdate");
+              c.expect(u.find("pkg/ui/Main.qml") != std::string::npos && u.find("pkg/ui/util.js") != std::string::npos,
+                       "the walk collects the files of those extensions");
+              c.expect(r.has_line("mcpp:rerun-if-changed-glob=**/*.qml"), "a new file of one of them re-plans");
+          } },
 
         // ── mcpp.plugins.binary ─────────────────────────────────────────────
         { "binary: each format's dependencies are read from minimal files, widths and kinds",
