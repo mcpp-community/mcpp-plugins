@@ -210,14 +210,18 @@ inline std::string without_comments_and_strings(const std::string& t) {
             while (i < t.size() && t[i] != '\n') ++i;
         } else if (c == '/' && i + 1 < t.size() && t[i + 1] == '*') {
             const auto end = t.find("*/", i + 2);
-            i = end == std::string::npos ? t.size() : end + 2;
+            const std::size_t stop = end == std::string::npos ? t.size() : end + 2;
+            // A line break inside the comment stays one: `import` is read a line at a time.
             out += ' ';
+            for (; i < stop; ++i)
+                if (t[i] == '\n') out += '\n';
         } else if (c == '"' || c == '\'' || c == '`') {
             std::size_t j = i + 1;
-            while (j < t.size() && t[j] != c) j += t[j] == '\\' ? 2 : 1;
+            // Only a template literal spans lines; a quote left open ends at the line.
+            while (j < t.size() && t[j] != c && (c == '`' || t[j] != '\n')) j += t[j] == '\\' ? 2 : 1;
             out += c;
             out += c;
-            i = j + 1;
+            i = j < t.size() && t[j] == c ? j + 1 : j;
         } else {
             out += c;
             ++i;
@@ -813,22 +817,38 @@ inline bool compile(options opt) {
             if (!claim(p.san + "/" + rel, generic(file))) return false;
             qrc_files.emplace_back(rel, generic(file));
         }
+        // Shaders are compiled when `qsb` is there; without it they are left out of the
+        // resources, so the build still links and the warning says what is missing.
+        std::string qsb;
+        if (!p.shaders.empty()) {
+            qsb = qt::detail::tool(sdks, "qsb");
+            if (qsb.empty())
+                detail::warn(std::format("{}: `qsb` not found; it is part of the additional libraries (`xim:qt-addons`), and "
+                                         "the shaders of {} are not compiled.", who, m.uri));
+        }
         std::vector<std::string> qsb_outputs;
-        for (auto const& s : p.shaders) {
-            const std::string name = s.filename().string() + ".qsb";
-            const std::string out = generic(p.work / "shaders" / name);
-            qrc_files.emplace_back("shaders/" + name, out);
-            qsb_outputs.push_back(out);
+        if (!qsb.empty()) {
+            fs::create_directories(p.work / "shaders", ec);
+            for (auto const& s : p.shaders) {
+                const std::string name = s.filename().string() + ".qsb";
+                if (!claim(p.san + "/shaders/" + name, generic(s))) return false;
+                const std::string out = generic(p.work / "shaders" / name);
+                qrc_files.emplace_back("shaders/" + name, out);
+                qsb_outputs.push_back(out);
+            }
         }
         mcpp::plugins::fs::write_if_changed(p.qrc, detail::qrc_text(p.resource_dir, generic(p.qmldir), qrc_files));
 
         // C++ types: the type description, then the registrations.
         if (types) {
-            std::vector<std::string> jsons, foreign = { foreign_sdk };
+            // What the registrar reads as its own, and what it may only refer to: the
+            // SDK's types and every other moc'd header, a plain base class included.
+            std::vector<std::string> jsons, foreign;
+            if (!foreign_sdk.empty()) foreign.push_back(foreign_sdk);
+            const std::size_t sdk_entries = foreign.size();
             for (auto const& u : p.units) jsons.push_back(u.json);
-            for (auto const& o : plan)
-                if (&o != &p)
-                    for (auto const& u : o.units) foreign.push_back(u.json);
+            for (auto const& u : built.mocs)
+                if (!u.json.empty() && std::ranges::find(jsons, u.json) == jsons.end()) foreign.push_back(u.json);
             const std::string regs = generic(p.work / (p.san + "_qmltyperegistrations.cpp"));
             if (!claim(p.san + "_qmltyperegistrations.cpp", p.module->uri)) return false;
             detail::step s;
@@ -839,20 +859,14 @@ inline bool compile(options opt) {
                        "--foreign-types=" + detail::joined(foreign, ","), "-o", regs };
             for (auto const& j : jsons) s.argv.push_back(j);
             s.inputs = jsons;
-            for (std::size_t i = 1; i < foreign.size(); ++i) s.inputs.push_back(foreign[i]);
+            for (std::size_t i = sdk_entries; i < foreign.size(); ++i) s.inputs.push_back(foreign[i]);
             s.outputs = { regs, generic(p.qmltypes) };
             detail::submit(s);
             for (auto const& u : p.units) include_dirs.insert(generic(fs::path(u.header).parent_path()));
         }
 
         // Shaders.
-        for (std::size_t i = 0; i < p.shaders.size(); ++i) {
-            const auto qsb = qt::detail::tool(sdks, "qsb");
-            if (qsb.empty()) {
-                detail::warn(std::format("{}: `qsb` not found; it is part of the additional libraries (`xim:qt-addons`), and "
-                                         "the shaders of {} are not compiled.", who, m.uri));
-                break;
-            }
+        for (std::size_t i = 0; i < qsb_outputs.size(); ++i) {
             detail::step s;
             s.id = "qml:qsb:" + m.uri + ":" + p.shaders[i].filename().string();
             s.description = "QSB " + p.shaders[i].filename().string();
