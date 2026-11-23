@@ -13,6 +13,7 @@ import mcpp.deps.cmake;
 import mcpp.rules.qt;
 import mcpp.plugins.tool;
 import mcpp.plugins.platform;
+import mcpp.plugins.binary;
 import mcpp.plugins;
 import mcpp.plugins.accel;
 import mcpp.plugins.progress;
@@ -141,6 +142,161 @@ std::string first_linux_name;
 mcpp::plugins::tool::found tool_resolve(mcpp::plugins::tool::choice c = {}) {
     return mcpp::plugins::tool::resolve(mcpp::deps::cmake_spec("mcpp.deps.cmake"), c);
 }
+
+
+// ─── mcpp.plugins.binary: files built byte by byte ──────────────────────────
+//
+// The reader is tested on minimal files this program writes itself, one per
+// format and width, so no binary is committed. The real-file comparison (180 ELF
+// files against `readelf`, PE and Mach-O against LLVM's tools) is CI's
+// (`check-deps-and-qt.sh reader`).
+namespace bin {
+
+using bytes = std::string;
+
+void put(bytes& b, std::size_t at, std::uint64_t v, unsigned n, bool big = false) {
+    if (b.size() < at + n) b.resize(at + n, '\0');
+    for (unsigned i = 0; i < n; ++i)
+        b[at + (big ? n - 1 - i : i)] = static_cast<char>((v >> (8 * i)) & 0xff);
+}
+void text(bytes& b, std::size_t at, std::string_view s) {
+    if (b.size() < at + s.size() + 1) b.resize(at + s.size() + 1, '\0');
+    std::ranges::copy(s, b.begin() + static_cast<std::ptrdiff_t>(at));
+}
+
+// A shared object that names `libs` as dependencies. `wide` is ELF64.
+bytes elf(bool wide, const std::vector<std::string>& libs) {
+    bytes b;
+    const std::size_t ehdr = wide ? 64 : 52, phsz = wide ? 56 : 32, dynent = wide ? 16 : 8;
+    const std::size_t phoff = ehdr, dyn = phoff + 2 * phsz;
+    const std::size_t dynsz = (libs.size() + 2) * dynent, str = dyn + dynsz;
+    bytes strtab(1, '\0');
+    std::vector<std::size_t> at;
+    for (auto const& l : libs) { at.push_back(strtab.size()); strtab += l; strtab.push_back('\0'); }
+    const std::uint64_t base = 0x400000;
+    b.resize(str + strtab.size(), '\0');
+    text(b, 0, std::string_view("\x7f" "ELF", 4));
+    b[4] = wide ? 2 : 1;
+    b[5] = 1;
+    b[6] = 1;
+    if (wide) { put(b, 32, phoff, 8); put(b, 54, phsz, 2); put(b, 56, 2, 2); }
+    else      { put(b, 28, phoff, 4); put(b, 42, phsz, 2); put(b, 44, 2, 2); }
+    // PT_LOAD of the whole file at `base`, PT_DYNAMIC over the dynamic section.
+    auto phdr = [&](std::size_t i, std::uint32_t type, std::uint64_t off, std::uint64_t va, std::uint64_t sz) {
+        const std::size_t h = phoff + i * phsz;
+        put(b, h, type, 4);
+        if (wide) { put(b, h + 8, off, 8); put(b, h + 16, va, 8); put(b, h + 32, sz, 8); }
+        else      { put(b, h + 4, off, 4); put(b, h + 8, va, 4); put(b, h + 16, sz, 4); }
+    };
+    phdr(0, 1, 0, base, b.size());
+    phdr(1, 2, dyn, base + dyn, dynsz);
+    std::size_t e = dyn;
+    auto dentry = [&](std::uint64_t tag, std::uint64_t val) {
+        put(b, e, tag, wide ? 8 : 4);
+        put(b, e + (wide ? 8 : 4), val, wide ? 8 : 4);
+        e += dynent;
+    };
+    for (auto a : at) dentry(1, a);
+    dentry(5, base + str);
+    dentry(0, 0);
+    std::ranges::copy(strtab, b.begin() + static_cast<std::ptrdiff_t>(str));
+    return b;
+}
+
+// A PE with one section holding the import table (`imports`) and the delay-load
+// table (`delayed`).
+bytes pe(bool wide, const std::vector<std::string>& imports, const std::vector<std::string>& delayed) {
+    bytes b;
+    const std::size_t lfanew = 0x80, opt = lfanew + 24, optsz = wide ? 240 : 224;
+    const std::size_t sec = opt + optsz, raw = 0x200, rva = 0x1000;
+    put(b, 0, 0x5a4d, 2);
+    put(b, 0x3c, lfanew, 4);
+    put(b, lfanew, 0x00004550, 4);
+    put(b, lfanew + 6, 1, 2);
+    put(b, lfanew + 20, optsz, 2);
+    put(b, opt, wide ? 0x20b : 0x10b, 2);
+    const std::size_t dirs = opt + (wide ? 112 : 96);
+    const std::size_t imp = raw, del = imp + (imports.size() + 1) * 20, names = del + (delayed.size() + 1) * 32;
+    std::size_t nm = names;
+    for (std::size_t i = 0; i < imports.size(); ++i) {
+        put(b, imp + i * 20 + 12, rva + (nm - raw), 4);
+        text(b, nm, imports[i]); nm += imports[i].size() + 1;
+    }
+    for (std::size_t i = 0; i < delayed.size(); ++i) {
+        put(b, del + i * 32, 1, 4);
+        put(b, del + i * 32 + 4, rva + (nm - raw), 4);
+        text(b, nm, delayed[i]); nm += delayed[i].size() + 1;
+    }
+    if (!imports.empty()) { put(b, dirs + 8, rva, 4); put(b, dirs + 12, (imports.size() + 1) * 20, 4); }
+    if (!delayed.empty()) { put(b, dirs + 13 * 8, rva + (del - raw), 4); put(b, dirs + 13 * 8 + 4, (delayed.size() + 1) * 32, 4); }
+    put(b, sec + 8, nm - raw, 4);       // VirtualSize
+    put(b, sec + 12, rva, 4);           // VirtualAddress
+    put(b, sec + 16, nm - raw, 4);      // SizeOfRawData
+    put(b, sec + 20, raw, 4);           // PointerToRawData
+    if (b.size() < nm) b.resize(nm, '\0');
+    return b;
+}
+
+// A Mach-O naming `id` as itself and `libs` as dependencies, one command per
+// entry: the first by `cmd` (LC_LOAD_DYLIB unless a case says otherwise).
+bytes macho_thin(bool wide, const std::string& id, const std::vector<std::pair<std::uint32_t, std::string>>& libs) {
+    bytes b;
+    put(b, 0, wide ? 0xfeedfacf : 0xfeedface, 4);
+    std::vector<std::pair<std::uint32_t, std::string>> all = { {0xd, id} };
+    for (auto const& l : libs) all.push_back(l);
+    put(b, 16, all.size(), 4);
+    std::size_t at = wide ? 32 : 28;
+    for (auto const& [cmd, name] : all) {
+        const std::size_t size = (24 + name.size() + 1 + 7) / 8 * 8;
+        put(b, at, cmd, 4);
+        put(b, at + 4, size, 4);
+        put(b, at + 8, 24, 4);
+        text(b, at + 24, name);
+        at += size;
+        if (b.size() < at) b.resize(at, '\0');
+    }
+    return b;
+}
+
+// A fat file of two thin ones, `wide` for FAT_MAGIC_64.
+bytes fat(bool wide, const bytes& a, const bytes& c) {
+    bytes b;
+    const std::size_t entry = wide ? 32 : 20, first = 8 + 2 * entry;
+    const std::size_t offa = (first + 15) / 16 * 16, offc = (offa + a.size() + 15) / 16 * 16;
+    put(b, 0, wide ? 0xcafebabf : 0xcafebabe, 4, true);
+    put(b, 4, 2, 4, true);
+    for (int i = 0; i < 2; ++i) {
+        const std::size_t e = 8 + i * entry, off = i == 0 ? offa : offc, size = i == 0 ? a.size() : c.size();
+        put(b, e + 8, off, wide ? 8 : 4, true);
+        put(b, e + 8 + (wide ? 8 : 4), size, wide ? 8 : 4, true);
+    }
+    b.resize(offc + c.size(), '\0');
+    std::ranges::copy(a, b.begin() + static_cast<std::ptrdiff_t>(offa));
+    std::ranges::copy(c, b.begin() + static_cast<std::ptrdiff_t>(offc));
+    return b;
+}
+
+std::string joined(const mcpp::plugins::binary::result& r) {
+    std::string out;
+    for (auto const& n : r.names) out += (out.empty() ? "" : ",") + n;
+    return r.ok() ? out : "ERROR:" + r.error;
+}
+
+std::vector<std::pair<std::string, bytes>> samples() {
+    constexpr std::uint32_t load = 0xc, weak = 0x80000018, reexport = 0x8000001f, lazy = 0x20, upward = 0x80000023;
+    return {
+        {"elf64", elf(true, {"libQt6Core.so.6", "libc.so.6"})},
+        {"elf32", elf(false, {"libz.so.1"})},
+        {"pe64", pe(true, {"KERNEL32.dll", "Qt6Core.dll"}, {"d3d11.dll"})},
+        {"pe32", pe(false, {"USER32.dll"}, {})},
+        {"macho64", macho_thin(true, "@rpath/libx.dylib", {{load, "@rpath/QtCore.framework/Versions/A/QtCore"}, {weak, "/usr/lib/libz.1.dylib"}, {reexport, "/usr/lib/libr.dylib"}, {lazy, "/usr/lib/liblazy.dylib"}, {upward, "/usr/lib/libup.dylib"}})},
+        {"macho32", macho_thin(false, "libx.dylib", {{load, "/usr/lib/libSystem.B.dylib"}})},
+        {"fat", fat(false, macho_thin(true, "libx.dylib", {{load, "/usr/lib/liba.dylib"}}), macho_thin(true, "libx.dylib", {{load, "/usr/lib/liba.dylib"}, {load, "/usr/lib/libb.dylib"}}))},
+        {"fat64", fat(true, macho_thin(true, "libx.dylib", {{load, "/usr/lib/libc.dylib"}}), macho_thin(true, "libx.dylib", {{load, "/usr/lib/libc.dylib"}}))},
+    };
+}
+
+} // namespace bin
 
 } // namespace
 
@@ -951,6 +1107,80 @@ int main(int argc, char** argv) {
                        "a refusal names the call and the values it takes");
               c.expect(r.has_line("mcpp:warning=", {"artifact_names", "at its start"}),
                        "an executable's pattern begins with {name}");
+          } },
+
+
+        // ── mcpp.plugins.binary ─────────────────────────────────────────────
+        { "binary: each format's dependencies are read from minimal files, widths and kinds",
+          t::row::linux_gcc(),
+          [] {
+              for (auto const& [name, data] : bin::samples()) {
+                  std::printf("%s=%s\n", name.c_str(), bin::joined(mcpp::plugins::binary::needed_from_bytes(data)).c_str());
+              }
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the body runs");
+              c.expect(r.has_line("elf64=libQt6Core.so.6,libc.so.6"), "ELF64 DT_NEEDED, in file order");
+              c.expect(r.has_line("elf32=libz.so.1"), "ELF32");
+              c.expect(r.has_line("pe64=KERNEL32.dll,Qt6Core.dll,d3d11.dll"), "PE32+: imports, then delay-load imports");
+              c.expect(r.has_line("pe32=USER32.dll"), "PE32");
+              c.expect(r.has_line("macho64=@rpath/QtCore.framework/Versions/A/QtCore,/usr/lib/libz.1.dylib,/usr/lib/libr.dylib,/usr/lib/liblazy.dylib,/usr/lib/libup.dylib"),
+                       "Mach-O: load, weak, reexport, lazy and upward commands, and not the file's own LC_ID_DYLIB");
+              c.expect(r.has_line("macho32=/usr/lib/libSystem.B.dylib"), "32-bit Mach-O");
+              c.expect(r.has_line("fat=/usr/lib/liba.dylib,/usr/lib/libb.dylib"), "a fat file's slices combined, once each");
+              c.expect(r.has_line("fat64=/usr/lib/libc.dylib"), "FAT_MAGIC_64");
+          } },
+
+        { "binary: a file that is not read says so, and a file is told by its magic",
+          t::row::linux_gcc().file("pkg/lib.so", bin::elf(true, {"libm.so.6"})).file("pkg/note.txt", "plain text\n")
+              .file("pkg/empty.bin"),
+          [] {
+              namespace b = mcpp::plugins::binary;
+              const auto dir = std::filesystem::path(mcpp::manifest_dir());
+              std::printf("file=%s\n", bin::joined(b::needed(dir / "lib.so")).c_str());
+              std::printf("text=%s\n", bin::joined(b::needed(dir / "note.txt")).c_str());
+              std::printf("empty=%s\n", bin::joined(b::needed(dir / "empty.bin")).c_str());
+              std::printf("missing=%s\n", bin::joined(b::needed(dir / "nope.so")).c_str());
+              auto be = bin::elf(true, {"libm.so.6"});
+              be[5] = 2;
+              std::printf("bigendian=%s\n", bin::joined(b::needed_from_bytes(be)).c_str());
+              std::printf("plain=%d%d%d%d%d%d\n", b::plain_name("libz.so.1"), b::plain_name(""), b::plain_name(".."),
+                          b::plain_name("../x"), b::plain_name("a/b"), b::plain_name("a\\b"));
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("file=libm.so.6"), "a path opens and is read");
+              c.expect(r.has_line("text=ERROR:an unrecognised binary format"), "text is not a binary");
+              c.expect(r.has_line("empty=ERROR:"), "an empty file is an error");
+              c.expect(r.has_line("missing=ERROR:cannot read"), "a missing file is an error");
+              c.expect(r.has_line("bigendian=ERROR:a big-endian ELF is not read"), "a big-endian ELF is refused, not misread");
+              c.expect(r.has_line("plain=100000"), "plain_name accepts one file name and refuses '', '..', a separator of either kind");
+          } },
+
+        { "binary: every truncation and a fixed set of damaged files are errors or answers, never a crash",
+          t::row::linux_gcc(),
+          [] {
+              std::size_t ok = 0, error = 0;
+              for (auto const& [name, data] : bin::samples()) {
+                  // Every prefix of the file.
+                  for (std::size_t n = 0; n < data.size(); ++n)
+                      (mcpp::plugins::binary::needed_from_bytes(std::string_view(data).substr(0, n)).ok() ? ok : error) += 1;
+                  // One byte changed, from a fixed seed: 400 per sample.
+                  std::uint64_t x = 0x9e3779b97f4a7c15ull ^ data.size();
+                  for (int i = 0; i < 400; ++i) {
+                      x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                      std::string copy = data;
+                      copy[x % copy.size()] = static_cast<char>((x >> 32) & 0xff);
+                      (mcpp::plugins::binary::needed_from_bytes(copy).ok() ? ok : error) += 1;
+                  }
+              }
+              std::printf("scanned=%zu errors>0=%d\n", ok + error, error > 0);
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "no crash");
+              c.expect(r.has_line("scanned=", {"errors>0=1"}), "damaged files are reported");
           } },
 
         // ── compatibility ───────────────────────────────────────────────────

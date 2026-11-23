@@ -123,6 +123,14 @@ implies = ["plugins-core"]
 sources = ["src/platform.cppm"]
 implies = ["plugins-core"]
 
+# `mcpp.plugins.binary` -- the libraries an ELF, PE or Mach-O file names as
+# dependencies, read from its bytes with `std` alone (0.27.0). `rules-qt` and
+# `rules-qml` read the plugins they deploy with it. Its own feature rather than
+# part of `plugins-core`: it imports nothing, so it is also usable in an
+# ordinary program, and a build program that does not ask compiles none of it.
+[features.plugins-binary]
+sources = ["src/binary.cppm"]
+
 # The test kit: a plugin function runs against a stated build context, and its
 # directives are compared. Separate from `plugins-core`, so that no build
 # program compiles it unless it asks.
@@ -208,7 +216,7 @@ device_extensions = [".sycl"]
 # project's own `sources` names are routed.
 [features.rules-qt]
 sources           = ["rules/qt.cppm"]
-implies           = ["plugins-core"]
+implies           = ["plugins-core", "plugins-binary"]
 rule_module       = "mcpp.rules.qt"
 device_extensions = [".ui", ".qrc", ".ts"]
 
