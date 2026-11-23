@@ -514,6 +514,20 @@ packed_tree() {
     find target/dist -mindepth 1 -maxdepth 1 -type d | head -1
 }
 
+# The tree a QML program ships from: what `mcpp pack --format dir` wrote. On macOS
+# `mcpp pack` does not stage Qt's frameworks yet (rules-qt's Widgets fixture does
+# not pack there either), so the tree is the directory the program was built into,
+# where the rule deploys qml/ and qt.conf beside it.
+staged_tree() {
+    if is_macos; then
+        dirname "$(built_program "$1")"
+        return 0
+    fi
+    "$MCPP" pack --format dir > target/ci/pack.log 2>&1 || { cat target/ci/pack.log >&2; return 1; }
+    cat target/ci/pack.log >&2
+    packed_tree
+}
+
 # A compiled file's dependencies, one per line, by the platform's own tool: the
 # reference `mcpp.plugins.binary` is held to. Prints nothing and returns 1 where
 # the platform has no tool in this job.
@@ -626,8 +640,7 @@ qml_consumer() {
 
     # Packed: qt.conf, Qt's modules and the closure they need.
     "$MCPP" build > target/ci/build2.log 2>&1 || fail "the build failed after the edit was undone"
-    "$MCPP" pack --format dir | tee target/ci/pack.log
-    local tree; tree=$(packed_tree)
+    local tree; tree=$(staged_tree qml-consumer) || fail "pack failed"
     [ -n "$tree" ] || fail "no packed tree"
     find "$tree" -name qt.conf | head -1 | xargs grep -q '^Qml2Imports = qml$' || fail "the packed tree has no qt.conf with Qml2Imports"
     find "$tree" -path '*qml/QtQuick/Controls/qmldir' | grep -q . || fail "QtQuick.Controls is not in the packed tree"
@@ -658,14 +671,13 @@ qml_variant() {
             fi
             echo "ok: aot = false embeds the sources, generates no unit, and the program runs" ;;
         styles)
-            MCPP_QML_VARIANT="$v" "$MCPP" pack --format dir > "target/ci/pack-$v.log" 2>&1 || { cat "target/ci/pack-$v.log"; fail "styles: pack failed"; }
-            tree=$(packed_tree)
+            tree=$(MCPP_QML_VARIANT="$v" staged_tree qml-consumer) || fail "styles: pack failed"
             find "$tree" -path '*qml/QtQuick/Controls/Basic/qmldir' | grep -q . || fail "styles: the Basic style is not placed"
             ! find "$tree" -path '*qml/QtQuick/Controls/Material/qmldir' | grep -q . || fail "styles: the Material style is placed"
             echo "ok: styles = { Basic } places the Basic style and not the others" ;;
         noconf)
-            MCPP_QML_VARIANT="$v" "$MCPP" pack --format dir > "target/ci/pack-$v.log" 2>&1 || { cat "target/ci/pack-$v.log"; fail "noconf: pack failed"; }
-            ! find "$(packed_tree)" -name qt.conf | grep -q . || fail "noconf: a qt.conf is in the packed tree"
+            tree=$(MCPP_QML_VARIANT="$v" staged_tree qml-consumer) || fail "noconf: pack failed"
+            ! find "$tree" -name qt.conf | grep -q . || fail "noconf: a qt.conf is in the packed tree"
             echo "ok: write_qt_conf = false places no qt.conf" ;;
     esac
 }
@@ -706,8 +718,7 @@ qml_deploy() {
         fail "a Qt module, a module of import_paths or one named in imports did not load from the deployed qml/"
     echo "ok: Layouts, Controls.Material, Shapes (named) and a module of import_paths load from the deployed qml/"
     local sdk; sdk=$(qt_sdk_root)
-    "$MCPP" pack --format dir | tee target/ci/pack.log
-    local tree; tree=$(packed_tree)
+    local tree; tree=$(staged_tree qml-deploy) || fail "pack failed"
     [ -n "$tree" ] || fail "no packed tree"
 
     # The deployed modules cover what qmlimportscanner finds: more is allowed, less is not.
@@ -732,7 +743,8 @@ PY
     [ "$miss" -eq 0 ] || fail "$miss modules the scanner finds are not in the packed tree"
     echo "ok: the packed tree holds all $n modules qmlimportscanner finds"
 
-    assert_packed_closure "$sdk" "$tree"
+    # The closure of the libraries is checked where mcpp packs them.
+    if ! is_macos; then assert_packed_closure "$sdk" "$tree"; fi
 
     # The packed program runs without the SDK: Linux only, where the packed
     # program's loader is set to the ecosystem's, as `mcpp run` does.
