@@ -99,7 +99,9 @@ struct options {
     // (0.27.0, for `mcpp.rules.qml`). `moc` then also writes `<out>.json`.
     bool moc_json = false;
     // Give `moc` the SDK's include directories (`-I<sdk>/include`, one
-    // `-I<sdk>/include/Qt<Module>` per linked module; `-F<sdk>/lib` on macOS).
+    // `-I<sdk>/include/Qt<Module>` per linked module; `-F<sdk>/lib` and `-I<sdk>/include`
+    // on macOS, where the include directory holds the header-only modules, and where
+    // the compiler is given it as well).
     // Without them `moc` drops `QML_ELEMENT` and its relatives for want of the
     // header that defines them, so a type is described without its QML name.
     // Off by default: a project's moc output does not change (0.27.0).
@@ -493,6 +495,12 @@ inline outcome compile_ex(options opt = {}) {
             const std::string f = "-F" + generic(r / "lib");
             mcpp::cxxflag(f.c_str());
             mocInclude.push_back(f);
+            // A module that is only headers (QtQmlIntegration, which QtQml's own header
+            // includes) is not a framework: its headers are in `include/`.
+            if (opt.moc_includes && fs::is_directory(r / "include", ec)) {
+                mcpp::include_dir(generic(r / "include").c_str());
+                mocInclude.push_back("-I" + generic(r / "include"));
+            }
         } else {
             mcpp::include_dir(generic(r / "include").c_str());
             mocInclude.push_back("-I" + generic(r / "include"));
