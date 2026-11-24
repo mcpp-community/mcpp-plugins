@@ -1,6 +1,6 @@
 # `rules-qml`
 
-`mcpp.rules.qml` builds a QML application: for each QML module the project states, it declares the chain Qt's `qt_add_qml_module` runs (`moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc`, `qsb`) as actions, so the module is compiled into the executable and loaded with `loadFromModule`; it places the Qt QML modules the program imports beside it, and writes a `qt.conf` that points Qt at them. It builds on [rules-qt](rules-qt.md), which it implies, and takes its options. Module `mcpp.rules.qml`; engine floor 2026.10.1.3 (the floor of `rules-qt`; the package needs 2026.10.30.1, and the lowest release the fixtures were run on is 2026.10.31.3); from 0.27.0.
+`mcpp.rules.qml` builds a QML application: for each QML module the project states, it declares the chain Qt's `qt_add_qml_module` runs (`moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc`, `qsb`) as actions, so the module is compiled into the executable and loaded with `loadFromModule`; it places the Qt QML modules the program imports beside it, and writes a `qt.conf` that points Qt at them. It builds on [rules-qt](rules-qt.md), which it implies, and takes its options. Module `mcpp.rules.qml`; engine floor 2026.10.1.3 (the floor of `rules-qt`; the package needs 2026.10.30.1, and the lowest release the fixtures were run on is 2026.10.31.3), and 2026.11.23.1 for a `mcpp pack` that carries the libraries the QML plugins load (mcpp#1011); from 0.27.0.
 
 ## Use
 
@@ -100,7 +100,7 @@ A Qt module (`QtQuick.Controls`, `QtQuick.Layouts`) is a directory of files and 
 
 The sizes are worth knowing. `QtQuick` with `QtQuick.Controls` places 24 modules, 1231 files and 6.8 MB with every style; `styles = { "Material" }` places 15 modules and 173 files; `{ "Basic" }`, 12 modules and 100 files. The style a program uses is chosen at run time (`QQuickStyle`, `qtquickcontrols2.conf`), so the default places all of them.
 
-The plugin libraries of those modules load Qt libraries the program does not link (`libQt6QuickLayouts.so.6`). `mcpp pack` takes what the build deploys beside the program as a root of its runtime closure, so it carries them (mcpp#1011; the release that does it is the engine floor of this member).
+The plugin libraries of those modules load Qt libraries the program does not link (`libQt6QuickLayouts.so.6`). `mcpp pack` takes what the build deploys beside the program as a root of its runtime closure, so it carries them (mcpp#1011, from 2026.11.23.1; an older engine builds and runs the program, and its pack leaves those libraries out). On macOS `mcpp pack` does not stage Qt's frameworks yet, for `rules-qt` as well, so CI checks `qml/` and `qt.conf` in the directory the program is built into.
 
 ## `qt.conf`
 
