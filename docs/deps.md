@@ -224,6 +224,7 @@ takes it.
 | option | meaning |
 |---|---|
 | `toolset`, `crt_linkage` | as `deps-vcpkg` takes them (0.17.0) |
+| `build_shared_libs` | unset (the default) leaves the kind of library to the subproject; `true` or `false` passes `-DBUILD_SHARED_LIBS=ON` or `OFF` to the configure step, so a subproject that follows CMake's convention builds its libraries shared or static. `shared` states only what the subproject installs, so the two usually agree; the value is part of the installation's key, and a `BUILD_SHARED_LIBS` in `cache_args` as well is refused |
 | `generator` | `default` (and `ninja`, its 0.17.0 spelling): the Ninja generator with the toolset named, wherever the toolset is resolved; `visual_studio`: CMake's Visual Studio generator on the instance mcpp resolved, for a subproject that needs MSBuild (0.18.0) |
 | `cache` | where installations are kept: a directory, `"off"`, or empty for `MCPP_DEPS_CMAKE_CACHE` and then the user's cache directory (0.18.0) |
 | `cmake` | the `cmake` program: a path (as before), `tool::root(dir)` or `tool::on_path()`; empty is the `xim:cmake` payload, or an override of it. A tool named here is not downloaded (0.19.0) |
