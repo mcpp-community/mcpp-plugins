@@ -562,7 +562,7 @@ assert_packed_closure() {
         if ! is_windows && ! is_macos; then
             [ "$(head -c4 "$f" 2>/dev/null | tr -d '\0')" = "$(printf '\177ELF')" ] || continue
         fi
-        for n in $(needed_by_tool "$f" 2>/dev/null || true); do
+        for n in $({ needed_by_tool "$f" 2>/dev/null || true; } | tr -d '\r'); do
             checked=$((checked + 1))
             if is_macos; then
                 case "$n" in
@@ -729,7 +729,8 @@ qml_deploy() {
     local rel miss=0 n=0
     local py=python3
     command -v python3 > /dev/null 2>&1 || py=python
-    for rel in $("$py" -I - target/ci/scanner.json <<'PY'
+    # Python writes `\r\n` on Windows; a module name with the `\r` matches no path.
+    for rel in $("$py" -I - target/ci/scanner.json <<'PY' | tr -d '\r'
 import json, sys
 for e in json.load(open(sys.argv[1], encoding="utf-8")):
     if e.get("type") == "module" and e.get("relativePath"):
@@ -800,7 +801,9 @@ qml_shaders() {
         fail "the qml-shaders build failed"
     fi
     "$MCPP" run | tr -d '\r' | tee target/ci/run.log
-    grep -qE '^qsb=[1-9][0-9]* bytes shader=qrc:/qt/qml/Shade/shaders/wave.frag.qsb$' target/ci/run.log ||
+    # The resource is opened by path and read (`qsb=<bytes>`); the url the component
+    # reports for it is relative when its code is compiled ahead of time.
+    grep -qE '^qsb=[1-9][0-9]* bytes shader=(qrc:/qt/qml/Shade/)?shaders/wave.frag.qsb$' target/ci/run.log ||
         fail "the compiled shader is not a resource of the module"
     echo "ok: qsb compiled the shader and it is a resource of the module"
 }
