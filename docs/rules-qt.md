@@ -1,6 +1,6 @@
 # `rules-qt`
 
-`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0, 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
+`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0 (0.27.0 adds `moc_json`, `moc_includes`, `i18n.extensions` and `compile_ex`; QML is [rules-qml](rules-qml.md)), 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
 
 ## Use
 
@@ -76,8 +76,10 @@ A package that enables `rules-qt` only to import `mcpp.rules.qt`, and has no `bu
 | `private_modules` | modules whose private headers are included |
 | `moc`, `moc_headers` | `moc_scan::project_headers` (default) scans the package's headers by content; `moc_scan::listed` takes `moc_headers` only |
 | `forms`, `resources` | `.ui` and `.qrc` files beside those in `[build] sources` |
-| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as an action whose output is the `.ts` it rewrites, reading `sources`, or when that is empty the package's C++ sources and headers, found by the walk that finds moc's headers; `tr_function_alias`; `deploy_to` (default `translations`); `out_dir` (default `<out dir>/qt/translations`); `qt_languages`: the linked modules' catalogs combined by `lconvert` into `qt_<language>.qm`, the file windeployqt writes |
+| `i18n` | `.ts` files beside those in `[build] sources`; `update_sources` runs `lupdate` as an action whose output is the `.ts` it rewrites, reading `sources`, or when that is empty the package's C++ sources and headers, found by the walk that finds moc's headers; `extensions` (default `cpp`, `h`, `hpp`, `ixx`, `cppm`: what `lupdate -extensions` reads and what the package walk collects; add `qml` and `js` for `qsTr` in QML); `tr_function_alias`; `deploy_to` (default `translations`); `out_dir` (default `<out dir>/qt/translations`); `qt_languages`: the linked modules' catalogs combined by `lconvert` into `qt_<language>.qm`, the file windeployqt writes |
 | `deploy_plugins` | plugin directories placed beside the program; default `platforms` |
+| `moc_json` | `moc --output-json`: each `moc_<stem>.cpp` is accompanied by `moc_<stem>.cpp.json`, the type description `qmltyperegistrar` reads; default `false` |
+| `moc_includes` | `moc` is given the SDK's include directories (`-I<sdk>/include`, one `-I<sdk>/include/Qt<Module>` per linked module, `-F<sdk>/lib` on macOS, and there `-I<sdk>/include` too, which the compiler is given as well: the header-only modules such as QtQmlIntegration are not frameworks), without which it drops `QML_ELEMENT` for want of the header that defines it; default `false` |
 | `deploy_software_gl` | Windows: `opengl32sw.dll` and `d3dcompiler_47.dll` beside the program |
 | `root`, `extra_roots` | level 1 of the SDK lookup |
 

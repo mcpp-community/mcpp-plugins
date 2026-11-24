@@ -1,0 +1,18 @@
+import std;
+import mcpp;
+import mcpp.rules.qml;
+
+int main() {
+    namespace qml = mcpp::rules::qml;
+    qml::options o;
+    o.qt.modules        = { "Core", "Gui", "Qml", "Quick" };
+    o.qt.deploy_plugins = { "platforms" };
+
+    qml::qml_module shade;
+    shade.uri     = "Shade";
+    shade.root    = "qml/Shade";
+    shade.sources = { "qml/Shade/*.qml" };
+    shade.shaders = { "shaders/wave.frag" };
+    o.modules = { shade };
+    return qml::compile(o) ? 0 : 1;
+}

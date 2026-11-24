@@ -1,0 +1,44 @@
+# Fixture: the Qt modules a program loads at run time, placed beside it.
+#
+# `qml/App/Main.qml` imports QtQuick.Layouts, QtQuick.Controls and
+# QtQuick.Controls.Material, which the program does not link: Qt opens their
+# plugin libraries when the engine reads the imports. The program also creates a
+# `QtQuick.Shapes` object from text, which no `import` statement shows, so the
+# build program names it (`options::imports`), and imports a module that lives
+# in this project (`extra/Acme/Gadget`, `options::import_paths`). `mcpp pack`
+# then has to carry the plugins, the libraries they load, and qt.conf, and
+# the packed program has to run without the SDK.
+[package]
+name        = "qml-deploy"
+version     = "0.1.0"
+description = "Fixture: Qt modules placed beside a QML program"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qml"], host-module = true }
+
+# QML needs the Quick libraries, which `xim:qt-base` does not carry.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt" = "6.11.1"
+
+[build]
+sources = ["src/*.cpp"]
+
+[targets.qml-deploy]
+kind = "bin"
+main = "src/main.cpp"
+
+# As tests/qt-consumer: Qt's Linux libraries load the shared libstdc++, so on
+# Linux the program uses the toolchain's shared C++ runtime (mcpp's docs/20).
+# Windows and macOS keep the engine's default toolchain.
+[target.x86_64-linux-gnu]
+cxx_runtime = "toolchain-coupled"
+
+[target.aarch64-linux-gnu]
+cxx_runtime = "toolchain-coupled"

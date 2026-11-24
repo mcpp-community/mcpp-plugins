@@ -92,7 +92,12 @@ env:
   # older engine, and docs/deps.md states the requirement where cross builds
   # are described. So here, as for 0.20.0's SYCL lane, `MCPP_VERSION` is the
   # newest engine a lane needs and the floor the oldest the collection loads on.
-  MCPP_VERSION: 2026.11.7.1
+  #
+  # 2026.11.23.1 IS WHAT 0.27.0'S RULES-QML PACKS NEED (mcpp#1011): `mcpp pack`
+  # takes what the build deploys beside the program -- the QML plugins' libraries
+  # -- as roots of its runtime closure. The build itself, and the package floor,
+  # stay on the older engine, as for 0.21.0 above.
+  MCPP_VERSION: 2026.11.23.1
   # THE RELEASE EVERY JOB FETCHES, WHICH IS NOT ALWAYS THE ONE UNDER TEST.
   #
   # `MCPP_VERSION` states the engine this collection's lanes need -- the package
@@ -103,7 +108,7 @@ env:
   #
   # It moves to `MCPP_VERSION` once that release exists, so the ordinary path
   # runs the engine this collection states.
-  MCPP_BOOTSTRAP: 2026.11.7.1
+  MCPP_BOOTSTRAP: 2026.11.23.1
   # AN ENGINE BUILT FROM SOURCE, WHEN A DISPATCH NAMES ONE.
   #
   # Empty on every push and pull request, so the steps run the release above,
@@ -126,7 +131,7 @@ env:
   # one-line change here. The mcpp is the bootstrap release, which also builds
   # the engine under review when `MCPP_SOURCE_REF` names one.
   MCPPLS_VERSION: 0.0.15
-  MCPP_EDITOR_VERSION: 2026.11.7.1
+  MCPP_EDITOR_VERSION: 2026.11.23.1
   # PINNED, AND WITHOUT IT THE CACHE BELOW CACHED NOTHING.
   #
   # A released mcpp is self-contained: with no `MCPP_HOME`, `mcpp self env`
@@ -1806,6 +1811,7 @@ jobs:
       - name: compatibility units retire themselves
         run: bash .github/scripts/check-compat-retirement.sh
 
+
       # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
       #
       # vcpkg keeps everything it reuses in one per-user directory -- its
@@ -1882,6 +1888,33 @@ jobs:
 
       - name: a package that enables rules-qt only for its module builds without a report
         run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
+
+      # rules-qml (0.27.0). One module with C++ types, singletons, a script, a
+      # nested file and a resource, compiled ahead of time; then the same
+      # project as three variants; several modules with a type derived across
+      # them; the Qt modules a program loads at run time placed beside it, in a
+      # tree that runs without the SDK.
+      - name: rules-qml enables its module alone without a report
+        run: bash .github/scripts/check-deps-and-qt.sh qml-import-only
+
+      - name: rules-qml builds a QML module with C++ types, compiles it ahead of time, and rebuilds only what an edit reaches
+        run: bash .github/scripts/check-deps-and-qt.sh qml-consumer
+
+      - name: rules-qml builds several modules, one with a type derived from another's
+        run: bash .github/scripts/check-deps-and-qt.sh qml-modules
+
+      # The patched loader of the packed tree is set with patchelf, and the
+      # SDK's directory is renamed away while it runs.
+      - name: patchelf, for running a packed program without the SDK
+        run: sudo apt-get install -y --no-install-recommends patchelf
+
+      - name: rules-qml places Qt's QML modules and their libraries; the packed program runs without the SDK
+        run: bash .github/scripts/check-deps-and-qt.sh qml-deploy
+
+      # `qsb` is in `xim:qt-addons`; the step says SKIP where the published
+      # payload's qsb does not start (xim-pkgindex#1262 fixes it).
+      - name: rules-qml compiles a shader with qsb and embeds it
+        run: bash .github/scripts/check-deps-and-qt.sh qml-shaders
 
   # ── THE OTHER TWO WAYS THIS CODE IS COMPILED ON LINUX (0.19.1) ─────────────
   #
@@ -2746,6 +2779,23 @@ jobs:
 
       - name: a package that enables rules-qt only for its module builds without a report
         run: bash .github/scripts/check-deps-and-qt.sh qt-import-only
+
+      # rules-qml (0.27.0). One module with C++ types, singletons, a script, a
+      # nested file and a resource, compiled ahead of time; then the same
+      # project as three variants; several modules with a type derived across
+      # them; the Qt modules a program loads at run time placed beside it, in a
+      # tree that runs without the SDK.
+      - name: rules-qml enables its module alone without a report
+        run: bash .github/scripts/check-deps-and-qt.sh qml-import-only
+
+      - name: rules-qml builds a QML module with C++ types, compiles it ahead of time, and rebuilds only what an edit reaches
+        run: bash .github/scripts/check-deps-and-qt.sh qml-consumer
+
+      - name: rules-qml builds several modules, one with a type derived from another's
+        run: bash .github/scripts/check-deps-and-qt.sh qml-modules
+
+      - name: rules-qml places Qt's QML modules and their libraries
+        run: bash .github/scripts/check-deps-and-qt.sh qml-deploy
 
   # ── deps WITHOUT VISUAL STUDIO (0.17.0, mcpp#734) ───────────────────────────
   #

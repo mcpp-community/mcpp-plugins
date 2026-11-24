@@ -1,0 +1,66 @@
+import std;
+import mcpp;
+import mcpp.rules.qt;
+namespace fs = std::filesystem;
+static std::deque<std::string> keep;
+static void act(const std::string& id, std::vector<std::string> argv, std::vector<std::string> in, std::vector<std::string> out) {
+    mcpp::action a; keep.push_back(id); a.id = keep.back().c_str(); a.role = mcpp::roles::source;
+    for (auto& s : argv) { keep.push_back(s); a.arg(keep.back().c_str()); }
+    for (auto& s : in)   { keep.push_back(s); a.input(keep.back().c_str()); }
+    for (auto& s : out)  { keep.push_back(s); a.output(keep.back().c_str()); }
+    a.submit();
+}
+struct mod { std::string uri, srcdir; std::vector<std::string> headers; };
+int main() {
+    mcpp::rules::qt::options o;
+    o.modules = { "Core", "Gui", "Qml", "Quick" }; o.deploy_plugins = { "platforms" };
+    o.moc = mcpp::rules::qt::moc_scan::listed;
+    if (!mcpp::rules::qt::compile(o)) return 1;
+    fs::path Q = mcpp::rules::qt::roots(o).front(), root = mcpp::manifest_dir();
+    auto g = [](fs::path p){ return p.generic_string(); };
+    fs::path gen = fs::path(std::string(mcpp::out_dir())) / "qml";
+    std::vector<mod> mods = { {"app.core", "qml/core", {"src/base.h"}}, {"app.ui", "qml/ui", {"src/derived.h"}} };
+    auto san = [](std::string u) { std::ranges::replace(u, '.', '_'); return u; };
+    auto upath = [](std::string u) { std::ranges::replace(u, '.', '/'); return u; };
+    std::string M = g(Q/"metatypes"), qtjson = M+"/qt6core_metatypes.json,"+M+"/qt6gui_metatypes.json,"+M+"/qt6qml_metatypes.json,"+M+"/qt6quick_metatypes.json";
+    // every module's qmldir and qmltypes are inputs of every cachegen action (conservative)
+    std::vector<std::string> allMeta;
+    for (auto& m : mods) { allMeta.push_back(g(gen/upath(m.uri)/"qmldir")); if (!m.headers.empty()) allMeta.push_back(g(gen/upath(m.uri)/(san(m.uri)+".qmltypes"))); }
+    for (auto& m : mods) {
+        const std::string s = san(m.uri), prefix = "/qt/qml/" + upath(m.uri);
+        fs::path mdir = gen/upath(m.uri), work = gen/s, srcroot = root/m.srcdir;
+        fs::create_directories(mdir); fs::create_directories(work);
+        std::vector<std::string> jsons;
+        for (auto& h : m.headers) {   // moc with json
+            std::string stem = fs::path(h).stem().string();
+            act("qml:moc:"+stem, { g(Q/"libexec/moc"), g(root/h), "-o", g(work/("moc_"+stem+".cpp")), "--output-json", "-I"+g(Q/"include"), "-I"+g(Q/"include/QtCore"), "-I"+g(Q/"include/QtQml"), "-I"+g(root/"src") },
+                { g(root/h) }, { g(work/("moc_"+stem+".cpp")), g(work/("moc_"+stem+".cpp.json")) });
+            jsons.push_back(g(work/("moc_"+stem+".cpp.json")));
+        }
+        std::vector<std::string> foreign;   // other modules' json as foreign types
+        for (auto& o2 : mods) if (o2.uri != m.uri) for (auto& h : o2.headers) foreign.push_back(g(gen/san(o2.uri)/("moc_"+fs::path(h).stem().string()+".cpp.json")));
+        if (!jsons.empty()) {
+            std::string ft = qtjson; for (auto& f : foreign) ft += "," + f;
+            std::vector<std::string> argv = { g(Q/"libexec/qmltyperegistrar"), "--generate-qmltypes="+g(mdir/(s+".qmltypes")), "--import-name="+m.uri, "--major-version=1", "--minor-version=0", "--foreign-types="+ft, "-o", g(work/(s+"_qmltyperegistrations.cpp")) };
+            for (auto& j : jsons) argv.push_back(j);
+            act("qml:registrar:"+m.uri, argv, jsons, { g(work/(s+"_qmltyperegistrations.cpp")), g(mdir/(s+".qmltypes")) });
+        }
+        std::vector<fs::path> rel; for (auto& e : fs::recursive_directory_iterator(srcroot)) if (e.is_regular_file()) rel.push_back(fs::relative(e.path(), srcroot)); std::ranges::sort(rel);
+        { std::ofstream f(mdir/"qmldir"); f << "module " << m.uri << "\n"; if (!jsons.empty()) f << "typeinfo " << s << ".qmltypes\n"; f << "prefer :" << prefix << "/\n";
+          if (m.uri == "app.ui") f << "depends app.core\n";
+          for (auto& r : rel) if (r.extension() == ".qml" && std::isupper((unsigned char)r.stem().string()[0])) f << r.stem().string() << " 1.0 " << g(r) << "\n"; }
+        { std::ofstream f(work/(s+".qrc")); f << "<RCC><qresource prefix=\"" << prefix << "\">\n<file alias=\"qmldir\">" << g(mdir/"qmldir") << "</file>\n"; for (auto& r : rel) f << "<file alias=\"" << g(r) << "\">" << g(srcroot/r) << "</file>\n"; f << "</qresource></RCC>\n"; }
+        std::vector<std::string> in = { g(work/(s+".qrc")), g(mdir/"qmldir") }; for (auto& r : rel) in.push_back(g(srcroot/r));
+        act("qml:rcc:"+m.uri, { g(Q/"libexec/rcc"), "--name", s, g(work/(s+".qrc")), "-o", g(work/("qrc_"+s+".cpp")) }, in, { g(work/("qrc_"+s+".cpp")) });
+        std::ofstream rsp(work/"loader.rsp"); rsp << "--resource\n" << g(work/(s+".qrc")) << "\n";
+        for (auto& r : rel) { if (r.extension() != ".qml") continue; std::string flat = g(r); std::ranges::replace(flat, '/', '_'); std::ranges::replace(flat, '.', '_');
+            std::string out = g(work/(s+"_"+flat+".cpp"));
+            std::vector<std::string> ins = { g(srcroot/r), g(work/(s+".qrc")) }; for (auto& x : allMeta) ins.push_back(x);
+            act("qml:cachegen:"+m.uri+":"+g(r), { g(Q/"libexec/qmlcachegen"), "--bare", "--resource-path", prefix+"/"+g(r), "-I", g(Q/"qml"), "-I", g(gen), "-i", g(mdir/"qmldir"), "--resource", g(work/(s+".qrc")), "-o", out, g(srcroot/r) }, ins, { out });
+            rsp << prefix << "/" << g(r) << "\n"; }
+        rsp.close();
+        act("qml:loader:"+m.uri, { g(Q/"libexec/qmlcachegen"), "--resource-name", "qmlcache_"+s, "-o", g(work/(s+"_qmlcache_loader.cpp")), "@"+g(work/"loader.rsp") }, { g(work/"loader.rsp"), g(work/(s+".qrc")) }, { g(work/(s+"_qmlcache_loader.cpp")) });
+    }
+    mcpp::include_dir(g(root/"src").c_str());
+    return 0;
+}

@@ -11,6 +11,7 @@ import mcpp.deps;          // the 0.16.0 names, for the compatibility case
 import mcpp.deps.vcpkg;
 import mcpp.deps.cmake;
 import mcpp.rules.qt;
+import mcpp.rules.qml;
 import mcpp.plugins.tool;
 import mcpp.plugins.platform;
 import mcpp.plugins;
@@ -140,6 +141,125 @@ std::string first_linux_name;
 // The resolver under the `deps-cmake` spec, which every case above shares.
 mcpp::plugins::tool::found tool_resolve(mcpp::plugins::tool::choice c = {}) {
     return mcpp::plugins::tool::resolve(mcpp::deps::cmake_spec("mcpp.deps.cmake"), c);
+}
+
+
+// A stand-in SDK with every tool rules-qt runs and one plugin directory.
+t::context with_full_qt(t::context c) {
+    for (auto const* tool : { "moc", "uic", "rcc", "lupdate", "lrelease", "lconvert" })
+        c = c.file(std::string("qt/bin/") + tool);
+    return c.file("qt/lib/libQt6Core.so").file("qt/include/QtCore/qobject.h")
+        .file("qt/plugins/platforms/libqxcb.so")
+        .file("pkg/widget.h", "class Widget { Q_OBJECT };\n")
+        .file("pkg/form.ui").file("pkg/res/app.qrc", "<RCC><qresource prefix=\"/\"></qresource></RCC>\n")
+        .file("pkg/app.ts");
+}
+
+// What a case printed that the engine would read: the directives, with the
+// case's own directory replaced, so one text serves every host.
+std::string directives(const t::result& r) {
+    std::string out;
+    const std::string root = r.root.generic_string();
+    for (auto const& l : r.lines) {
+        if (!l.starts_with("mcpp:") || l.starts_with("mcpp:decision=") || l.starts_with("mcpp:fact=mcpp.plugins=")
+            || l.starts_with("mcpp:protocol=")) continue;
+        std::string x = l;
+        for (std::size_t at = x.find(root); at != std::string::npos; at = x.find(root, at + 6)) x.replace(at, root.size(), "<R>");
+        out += x + "\n";
+    }
+    return out;
+}
+
+
+// ─── rules-qml: a stand-in SDK and the package it builds ────────────────────
+
+// The SDK of a QML program: every tool rules-qml runs, two linked modules, and a
+// tree of QML modules whose `qmldir` files and `.qml` files import one another
+// the way Qt's do.
+t::context with_qml_sdk(t::context c, bool with_qsb = true) {
+    for (auto const* tool : { "moc", "rcc", "qmltyperegistrar", "qmlcachegen" }) c = c.file(std::string("qt/libexec/") + tool);
+    c = c.file("qt/bin/qmllint");
+    if (with_qsb) c = c.file("qt/bin/qsb");
+    c = c.file("qt/lib/libQt6Core.so").file("qt/lib/libQt6Qml.so")
+         .file("qt/include/QtCore/qobject.h").file("qt/include/QtQml/qqmlregistration.h")
+         .file("qt/metatypes/qt6core_metatypes.json").file("qt/metatypes/qt6qml_metatypes.json")
+         .file("qt/plugins/platforms/libqoffscreen.so")
+         .file("qt/plugins/imageformats/libqpng.so");
+    return c
+        .file("qt/qml/QtQuick/qmldir", "module QtQuick\nplugin qtquick2plugin\nimport QtQml\ndepends QtQml.Models 2.0\n")
+        .file("qt/qml/QtQuick/libqtquick2plugin.so")
+        .file("qt/qml/QtQuick/plugins.qmltypes", "Module {}\n")
+        .file("qt/qml/QtQuick/designer/Hidden.qml", "import QtQuick.Templates\nItem {}\n")
+        .file("qt/qml/QtQml/qmldir", "module QtQml\n")
+        .file("qt/qml/QtQml/Models/qmldir", "module QtQml.Models\n")
+        .file("qt/qml/QtQuick/Controls/qmldir",
+              "module QtQuick.Controls\ndefault import QtQuick.Controls.Basic\n"
+              "optional import QtQuick.Controls.Material auto\noptional import QtQuick.Controls.Fusion auto\n"
+              "import QtQuick.Templates\n")
+        .file("qt/qml/QtQuick/Controls/Button.qml", "import QtQuick\nItem {}\n")
+        .file("qt/qml/QtQuick/Controls/Basic/qmldir", "module QtQuick.Controls.Basic\n")
+        .file("qt/qml/QtQuick/Controls/Material/qmldir", "module QtQuick.Controls.Material\n")
+        .file("qt/qml/QtQuick/Controls/Material/Button.qml",
+              "import QtQuick.Templates as T // a comment: import NotAModule\nimport QtQuick.Controls.Material.impl;\nItem {}\n")
+        .file("qt/qml/QtQuick/Controls/Material/impl/qmldir", "module QtQuick.Controls.Material.impl\n")
+        .file("qt/qml/QtQuick/Controls/Material/impl/Ripple.qml", "import QtQuick\nimport QtQuick.Controls.Material\nItem {}\n")
+        .file("qt/qml/QtQuick/Controls/Fusion/qmldir", "module QtQuick.Controls.Fusion\n")
+        .file("qt/qml/QtQuick/Templates/qmldir", "module QtQuick.Templates\n");
+}
+
+// The `mcpp:deploy=` directives of a case, as `<to>/<file name>`.
+std::set<std::string> deployed(const t::result& r) {
+    std::set<std::string> out;
+    for (auto const& l : r.lines) {
+        if (!l.starts_with("mcpp:deploy=")) continue;
+        const auto tab = l.find('\t');
+        const std::string file = l.substr(12, tab - 12), to = l.substr(tab + 1);
+        out.insert(to + "/" + file.substr(file.rfind('/') + 1));
+    }
+    return out;
+}
+
+// The action a case declared, by the start of its id, as JSON text.
+std::string action_of(const t::result& r, const std::string& id) {
+    return r.line("mcpp:action=", {"\"id\":\"" + id});
+}
+
+bool mentions(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+// A package with one module `Probe`: two QML types (one a singleton), a script, a
+// nested file, a resource whose name needs XML escaping, and a header with a QML type.
+t::context with_probe(t::context c) {
+    return c.file("pkg/qml/Probe/Main.qml", "import QtQuick\nimport QtQuick.Controls\nItem { }\n")
+        .file("pkg/qml/Probe/Style.qml", "pragma Singleton\nimport QtQuick\nQtObject { }\n")
+        .file("pkg/qml/Probe/helper.qml", "import QtQuick\nItem { }\n")
+        .file("pkg/qml/Probe/util.js", ".pragma library\nfunction f() {}\n")
+        .file("pkg/qml/Probe/sub/Inner.qml", "import QtQuick\nQtObject { }\n")
+        .file("pkg/qml/Probe/data/a&b.txt", "resource\n")
+        .file("pkg/src/thing.h", "#include <QtQml/qqmlregistration.h>\nclass Thing : public QObject { Q_OBJECT QML_ELEMENT };\n");
+}
+
+// A resource whose name has `<` and `>`, which XML must escape and a Windows host
+// cannot create: made where it can be, and said.
+void make_odd_resource() {
+    std::error_code ec;
+    const auto file = std::filesystem::path(mcpp::manifest_dir()) / "qml/Probe/data/c<d>.txt";
+    std::ofstream(file) << "resource\n";
+    std::printf("odd=%d\n", std::filesystem::exists(file, ec));
+}
+
+mcpp::rules::qml::options probe_options() {
+    mcpp::rules::qml::options o;
+    o.qt.root = "../qt";
+    o.qt.modules = {"Core"};
+    o.qt.deploy_plugins = {"platforms"};
+    mcpp::rules::qml::qml_module m;
+    m.uri = "Probe";
+    m.version = "1.2";
+    m.root = "qml/Probe";
+    m.sources = {"qml/Probe/**/*.qml", "qml/Probe/**/*.js"};
+    m.resources = {"qml/Probe/data/*"};
+    o.modules = {m};
+    return o;
 }
 
 } // namespace
@@ -951,6 +1071,407 @@ int main(int argc, char** argv) {
                        "a refusal names the call and the values it takes");
               c.expect(r.has_line("mcpp:warning=", {"artifact_names", "at its start"}),
                        "an executable's pattern begins with {name}");
+          } },
+
+
+
+        { "qt: a project that names no 0.27 option gets the directives of 0.26",
+          with_full_qt(t::row::linux_gcc()),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {"platforms"};
+              o.forms = {"form.ui"};
+              o.resources = {"res/app.qrc"};
+              o.i18n.ts = {"app.ts"};
+              o.i18n.update_sources = true;
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              // The text is the directives of 0.26.1 for these options, recorded before
+              // any 0.27 change: a later change that alters one fails here.
+              std::ifstream in(std::filesystem::path(mcpp::manifest_dir()) / "golden" / "qt-0.26.txt");
+              const std::string golden{std::istreambuf_iterator<char>(in), {}};
+              c.expect(!golden.empty() && directives(r) == golden, "every directive is what 0.26 stated; got:\n" + directives(r));
+          } },
+
+
+        { "qt: moc_json and moc_includes add the type description and the SDK's include directories to moc",
+          with_full_qt(t::row::linux_gcc()).file("qt/lib/libQt6Qml.so"),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core", "Qml"};
+              o.deploy_plugins = {};
+              o.moc_json = true;
+              o.moc_includes = true;
+              const auto done = mcpp::rules::qt::compile_ex(o);
+              std::printf("ok=%d linked=%zu mocs=%zu\n", done.ok, done.linked.size(), done.mocs.size());
+              for (auto const& m : done.mocs)
+                  std::printf("unit=%s|%s|%s\n", std::filesystem::path(m.header).filename().string().c_str(),
+                              std::filesystem::path(m.cpp).filename().string().c_str(),
+                              std::filesystem::path(m.json).filename().string().c_str());
+              return done.ok ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.has_line("ok=1 linked=2 mocs=1"), "compile_ex reports the modules it linked and the moc units");
+              c.expect(r.has_line("unit=widget.h|moc_widget.cpp|moc_widget.cpp.json"), "a unit names its header, source and description");
+              const auto a = r.line("mcpp:action=", {"qt:moc:moc_widget.cpp"});
+              c.expect(a.find("\"--output-json\"") != std::string::npos, "moc writes the description");
+              c.expect(a.find("moc_widget.cpp.json\"]") != std::string::npos, "the description is a declared output");
+              c.expect(a.find("\"-I" + r.root.generic_string() + "/qt/include\"") != std::string::npos
+                       && a.find("\"-I" + r.root.generic_string() + "/qt/include/QtCore\"") != std::string::npos
+                       && a.find("\"-I" + r.root.generic_string() + "/qt/include/QtQml\"") != std::string::npos,
+                       "moc is given the SDK's include directory and each linked module's");
+          } },
+
+        { "qt: lupdate reads the extensions the project names",
+          with_full_qt(t::row::linux_gcc()).file("pkg/ui/Main.qml", "Text { text: qsTr(\"hi\") }\n").file("pkg/ui/util.js"),
+          [] {
+              mcpp::rules::qt::options o;
+              o.root = "../qt";
+              o.modules = {"Core"};
+              o.deploy_plugins = {};
+              o.i18n.ts = {"app.ts"};
+              o.i18n.update_sources = true;
+              o.i18n.extensions = {"cpp", "h", "qml", "js"};
+              return mcpp::rules::qt::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              const auto u = r.line("mcpp:action=", {"qt:lupdate:app"});
+              c.expect(u.find("\"-extensions\",\"cpp,h,qml,js\"") != std::string::npos, "the extensions reach lupdate");
+              c.expect(u.find("pkg/ui/Main.qml") != std::string::npos && u.find("pkg/ui/util.js") != std::string::npos,
+                       "the walk collects the files of those extensions");
+              c.expect(r.has_line("mcpp:rerun-if-changed-glob=**/*.qml"), "a new file of one of them re-plans");
+          } },
+
+
+        // ── rules-qml ───────────────────────────────────────────────────────
+        { "qml: a module's qmldir, qrc and resource paths",
+          with_probe(with_qml_sdk(t::row::linux_gcc())),
+          [] { make_odd_resource(); return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              const std::string dir = "out/qml/Probe/";
+              c.expect(r.file(dir + "qmldir") ==
+                       "module Probe\ntypeinfo Probe.qmltypes\nprefer :/qt/qml/Probe/\n"
+                       "Main 1.2 Main.qml\nsingleton Style 1.2 Style.qml\nInner 1.2 sub/Inner.qml\n",
+                       "the qmldir: module, typeinfo, prefer, then a line per type; a singleton marked, a lowercase file and a script not listed; got:\n" + r.file(dir + "qmldir"));
+              const std::string qrc = r.file("out/qml/Probe/Probe.qrc");
+              c.expect(mentions(qrc, "<qresource prefix=\"/qt/qml/Probe\">") && mentions(qrc, "<file alias=\"qmldir\">"),
+                       "the resources sit under the prefix and the uri as a path, beside the qmldir");
+              c.expect(mentions(qrc, "<file alias=\"sub/Inner.qml\">") && mentions(qrc, "<file alias=\"util.js\">"),
+                       "a nested file keeps its relative path");
+              c.expect(mentions(qrc, "alias=\"data/a&amp;b.txt\">") && mentions(qrc, "a&amp;b.txt</file>"),
+                       "a name with & is escaped in the alias and the path");
+              if (r.has_line("odd=1"))
+                  c.expect(mentions(qrc, "alias=\"data/c&lt;d&gt;.txt\">") && mentions(qrc, "c&lt;d&gt;.txt</file>"),
+                           "so are < and >, where a host can name such a file");
+              c.expect(!mentions(qrc, "\\"), "no backslash");
+              c.expect(r.has_line("mcpp:rerun-if-changed=", {"qml/Probe/Main.qml"}) && r.has_line("mcpp:rerun-if-changed=", {"qml/Probe/sub/Inner.qml"})
+                       && r.has_line("mcpp:rerun-if-changed-glob=qml/Probe/**/*.qml"),
+                       "every .qml file the plan read is declared, and the glob that found it");
+          } },
+
+        { "qml: the actions of a module with C++ types, in order of their dependencies",
+          with_probe(with_qml_sdk(t::row::linux_gcc())),
+          [] { return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
+          [](const t::result& r, t::checker& c) {
+              const auto moc = action_of(r, "qt:moc:moc_thing.cpp");
+              c.expect(mentions(moc, "\"--output-json\"") && mentions(moc, "moc_thing.cpp.json"), "moc writes the type description");
+              const auto reg = action_of(r, "qml:registrar:Probe");
+              c.expect(mentions(reg, "--generate-qmltypes=") && mentions(reg, "Probe.qmltypes") && mentions(reg, "\"--import-name=Probe\"")
+                       && mentions(reg, "\"--major-version=1\"") && mentions(reg, "\"--minor-version=2\""),
+                       "the registrar is told the uri and the version");
+              c.expect(mentions(reg, "--foreign-types=") && mentions(reg, "/qt/metatypes/qt6core_metatypes.json"),
+                       "the SDK's type descriptions are foreign types");
+              c.expect(mentions(reg, "Probe_qmltyperegistrations.cpp") && mentions(reg, "moc_thing.cpp.json"), "its output and input");
+              const auto rcc = action_of(r, "qml:rcc:Probe");
+              c.expect(mentions(rcc, "qrc_Probe.cpp") && mentions(rcc, "qml/Probe/Main.qml") && mentions(rcc, "data/a&b.txt"),
+                       "rcc reads every file of the module and writes qrc_<module>.cpp");
+              const auto cg = action_of(r, "qml:cachegen:Probe:sub/Inner.qml");
+              c.expect(mentions(cg, "\"--bare\"") && mentions(cg, "\"--resource-path\",\"/qt/qml/Probe/sub/Inner.qml\"")
+                       && mentions(cg, "\"--resource\"") && mentions(cg, "Probe_sub_Inner_qml.cpp"),
+                       "a file is compiled under its resource path, into a name made from it");
+              c.expect(mentions(cg, "Probe.qmltypes") && mentions(cg, "out/qml/Probe/qmldir"),
+                       "and reads the module's type description and qmldir, which orders it after the registrar");
+              c.expect(r.has_line("mcpp:action=", {"qml:cachegen:Probe:util.js"}), "a script is compiled too");
+              const auto loader = action_of(r, "qml:cachegen:Probe:loader");
+              c.expect(mentions(loader, "Probe_qmlcache_loader.cpp\",\"@") || mentions(loader, "Probe_qmlcache_loader.cpp\""),
+                       "the loader's output ends in qmlcache_loader.cpp, the name that makes qmlcachegen write one");
+              const std::string rsp = r.file("out/qml/Probe/loader.rsp");
+              c.expect(rsp.starts_with("--resource\n") && mentions(rsp, "\n/qt/qml/Probe/Main.qml\n") && mentions(rsp, "\n/qt/qml/Probe/sub/Inner.qml\n")
+                       && !mentions(rsp, "data/"), "the loader is given the resource paths of the compiled files and no resource");
+              c.expect(r.has_line("mcpp:include-dir=", {"pkg/src"}), "the registrations can include the header");
+          } },
+
+        { "qml: aot = false, no C++ types, shaders and lint change the set of actions",
+          with_probe(with_qml_sdk(t::row::linux_gcc())).file("pkg/shaders/a.frag", "#version 440\n"),
+          [] {
+              auto o = probe_options();
+              o.modules[0].aot = false;
+              o.modules[0].shaders = {"shaders/a.frag"};
+              o.lint = true;
+              o.lint_warnings_are_errors = true;
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(!r.has_line("mcpp:action=", {"qml:cachegen:"}), "aot = false declares no cachegen action");
+              c.expect(r.has_line("mcpp:action=", {"qml:rcc:Probe"}) && r.has_line("mcpp:action=", {"qml:registrar:Probe"}),
+                       "the sources are still embedded and the types registered");
+              const auto qsb = action_of(r, "qml:qsb:Probe:a.frag");
+              c.expect(mentions(qsb, "\"--qt6\"") && mentions(qsb, "a.frag.qsb") && mentions(qsb, "LD_LIBRARY_PATH"),
+                       "qsb is given its arguments, writes <file>.qsb and gets the SDK's library directory");
+              c.expect(mentions(r.file("out/qml/Probe/Probe.qrc"), "alias=\"shaders/a.frag.qsb\""), "the shader is a resource of the module");
+              c.expect(mentions(action_of(r, "qml:rcc:Probe"), "a.frag.qsb"), "rcc waits for the shader");
+              const auto lint = action_of(r, "qml:lint:Probe:Main.qml");
+              c.expect(mentions(lint, "\"role\":\"check\"") && mentions(lint, "\"--max-warnings\",\"0\""),
+                       "lint is a check, one per file, that fails on a warning when asked");
+              c.expect(!r.has_line("mcpp:action=", {"qml:lint:Probe:util.js"}), "a script is not linted");
+          } },
+
+        { "qml: shaders without qsb are a warning, and the resources do not name a file nobody builds",
+          with_probe(with_qml_sdk(t::row::linux_gcc(), false)).file("pkg/shaders/a.frag", "#version 440\n"),
+          [] {
+              auto o = probe_options();
+              o.modules[0].shaders = {"shaders/a.frag"};
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.has_line("mcpp:warning=", {"`qsb` not found", "xim:qt-addons"}), "the warning says which payload carries qsb");
+              c.expect(!r.has_line("mcpp:action=", {"qml:qsb:"}), "no qsb action is declared");
+              c.expect(!mentions(r.file("out/qml/Probe/Probe.qrc"), ".qsb") && !mentions(action_of(r, "qml:rcc:Probe"), ".qsb"),
+                       "neither the qrc nor rcc's inputs name a shader that is not built");
+          } },
+
+        { "qml: a module with no C++ type runs no registrar and its qmldir names no typeinfo",
+          with_qml_sdk(t::row::linux_gcc()).file("pkg/q/Chip.qml", "import QtQuick\nItem { }\n"),
+          [] {
+              mcpp::rules::qml::options o;
+              o.qt.root = "../qt";
+              o.qt.modules = {"Core"};
+              o.qt.deploy_plugins = {};
+              mcpp::rules::qml::qml_module m;
+              m.uri = "Plain";
+              m.sources = {"q/*.qml"};
+              o.modules = {m};
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(!r.has_line("mcpp:action=", {"qml:registrar:"}), "no registrar");
+              c.expect(r.file("out/qml/Plain/qmldir") == "module Plain\nprefer :/qt/qml/Plain/\nChip 1.0 Chip.qml\n",
+                       "no typeinfo line; the root is the directory the sources share; got:\n" + r.file("out/qml/Plain/qmldir"));
+              c.expect(r.has_line("mcpp:action=", {"qml:cachegen:Plain:Chip.qml"}), "the file is compiled");
+          } },
+
+
+        { "qml: what is stated wrongly is refused, naming it, before any action is declared",
+          with_probe(with_qml_sdk(t::row::linux_gcc())).file("pkg/qml/Probe/Extra.qml", "Item {}\n"),
+          [] {
+              using namespace mcpp::rules::qml;
+              int refused = 0;
+              auto base = [] { return probe_options(); };
+              { auto o = base(); o.modules[0].uri = "a..b";        refused += !compile(o); }
+              { auto o = base(); o.modules[0].uri = "../x";        refused += !compile(o); }
+              { auto o = base(); o.modules[0].uri = "9lives";      refused += !compile(o); }
+              { auto o = base(); o.modules[0].version = "1";       refused += !compile(o); }
+              { auto o = base(); o.modules[0].version = "1.x";     refused += !compile(o); }
+              { auto o = base(); o.modules[0].prefix = "qt/qml";   refused += !compile(o); }
+              { auto o = base(); o.modules.push_back(o.modules[0]); refused += !compile(o); }
+              { auto o = base(); o.modules[0].uri = "QtQuick";     refused += !compile(o); }
+              { auto o = base(); o.modules.push_back(o.modules[0]); o.modules[1].uri = "Probe_2";
+                o.modules[0].uri = "a.b"; o.modules[1].uri = "a_b"; refused += !compile(o); }
+              std::printf("refused=%d\n", refused);
+              return 0;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.has_line("refused=9"), "all nine are refused");
+              c.expect(mentions(r.errors, "`a..b` is not a module uri") && mentions(r.errors, "`../x` is not a module uri")
+                       && mentions(r.errors, "`9lives` is not a module uri"), "an invalid uri is named");
+              c.expect(mentions(r.errors, "the version `1` of Probe") && mentions(r.errors, "the version `1.x` of Probe"), "an invalid version is named");
+              c.expect(mentions(r.errors, "the prefix `qt/qml`"), "an invalid prefix is named");
+              c.expect(mentions(r.errors, "is stated twice"), "a module stated twice, or two that name one file, is refused");
+              c.expect(mentions(r.errors, "module of the Qt SDK"), "a uri the SDK already has is refused");
+          } },
+
+        { "qml: headers belong to one module each, and a header nobody lists is not guessed when there are several",
+          with_qml_sdk(t::row::linux_gcc())
+              .file("pkg/a/A.qml", "Item {}\n").file("pkg/b/B.qml", "Item {}\n")
+              .file("pkg/src/one.h", "class One { Q_OBJECT QML_ELEMENT };\n")
+              .file("pkg/src/two.h", "class Two { Q_OBJECT QML_ELEMENT };\n")
+              .file("pkg/src/plain.h", "class Plain { Q_OBJECT };\n"),
+          [] {
+              using namespace mcpp::rules::qml;
+              auto make = [] {
+                  options o;
+                  o.qt.root = "../qt";
+                  o.qt.modules = {"Core"};
+                  o.qt.deploy_plugins = {};
+                  qml_module a, b;
+                  a.uri = "m.a"; a.sources = {"a/*.qml"};
+                  b.uri = "m.b"; b.sources = {"b/*.qml"};
+                  o.modules = {a, b};
+                  return o;
+              };
+              int refused = 0;
+              { auto o = make(); refused += !compile(o); }                                   // two QML headers, none assigned
+              { auto o = make(); o.modules[0].headers = {"src/one.h"}; refused += !compile(o); }   // `two.h` still belongs to nobody
+              { auto o = make(); o.modules[0].headers = {"src/one.h", "src/two.h"}; o.modules[1].headers = {"src/two.h"}; refused += !compile(o); }
+              std::printf("refused=%d\n", refused);
+              auto o = make();
+              o.modules[0].headers = {"src/one.h"};
+              o.modules[1].headers = {"src/two.h"};
+              return compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "with each header listed the member succeeds");
+              c.expect(r.has_line("refused=3"), "an unassigned header, a header left over, a header listed twice are each refused");
+              c.expect(mentions(r.errors, "registers QML types and belongs to no module") && mentions(r.errors, "is listed for both m.a and m.b"),
+                       "the refusals name the header and the modules");
+              const auto a = action_of(r, "qml:registrar:m.a");
+              c.expect(mentions(a, "moc_one.cpp.json") && mentions(a, "moc_two.cpp.json") && a.find("--foreign-types=") != std::string::npos,
+                       "m.a's registrar reads its own description and is given m.b's as foreign types");
+              c.expect(r.count("mcpp:action={\"id\":\"qml:registrar:") == 2, "a header with no QML macro registers nothing");
+              c.expect(mentions(a, "--foreign-types=") && mentions(a, "moc_plain.cpp.json"),
+                       "it is known to the registrar all the same, as a base class a type may derive from");
+          } },
+
+        { "qml: a target that is not linux, windows or macos is one warning and no action",
+          with_probe(with_qml_sdk(t::row::linux_gcc())).set("MCPP_TARGET_OS", "android"),
+          [] { return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.count("mcpp:action=") == 0 && r.count("mcpp:deploy=") == 0, "nothing is declared");
+              c.expect(r.has_line("mcpp:warning=", {"QML is built for linux, windows and macos", "android"}), "the warning names the target");
+          } },
+
+        { "qml: a missing tool or Quick library is a warning, and the plan succeeds",
+          t::row::linux_gcc().file("qt/lib/libQt6Core.so").file("qt/libexec/moc")
+              .file("pkg/qml/Probe/Main.qml", "Item {}\n"),
+          [] {
+              auto o = probe_options();
+              o.modules[0].sources = {"qml/Probe/*.qml"};
+              o.modules[0].resources = {};
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.has_line("mcpp:warning=", {"`rcc` not found", "xim:qt", "QtQml library only"}), "the warning says which payload carries Quick");
+              c.expect(r.count("mcpp:action=") == 0, "no QML action is declared for a module that cannot be built");
+          } },
+
+        { "qml: no SDK is the warning rules-qt gives, and the member succeeds",
+          t::row::linux_gcc(),
+          [] {
+              mcpp::rules::qml::options o;
+              mcpp::rules::qml::qml_module m;
+              m.uri = "Probe";
+              o.modules = {m};
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0 && r.count("mcpp:action=") == 0, "nothing is declared, nothing fails");
+              c.expect(r.has_line("mcpp:warning=", {"no Qt SDK"}), "the SDK's absence is said once");
+          } },
+
+        { "qml: Qt's own modules the program imports are placed under qml/, by the imports of the SDK's own files",
+          with_probe(with_qml_sdk(t::row::linux_gcc())),
+          [] { return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
+          [](const t::result& r, t::checker& c) {
+              const auto d = deployed(r);
+              auto has = [&](const std::string& f) { return d.contains(f); };
+              c.expect(has("qml/QtQuick/Controls/qmldir") && has("qml/QtQuick/Controls/Button.qml"), "the module the project imports");
+              c.expect(has("qml/QtQuick/qmldir") && has("qml/QtQuick/libqtquick2plugin.so"), "QtQuick, which a .qml file of Controls imports, with its plugin");
+              c.expect(has("qml/QtQml/qmldir") && has("qml/QtQml/Models/qmldir"), "an `import` and a `depends` line of a qmldir are followed");
+              c.expect(has("qml/QtQuick/Controls/Basic/qmldir"), "a `default import` is followed");
+              c.expect(has("qml/QtQuick/Controls/Material/qmldir") && has("qml/QtQuick/Controls/Fusion/qmldir"),
+                       "an `optional import` is followed: any style can be chosen at run time");
+              c.expect(has("qml/QtQuick/Controls/Material/impl/qmldir") && has("qml/QtQuick/Controls/Material/impl/Ripple.qml"),
+                       "a nested module is found through an import in a .qml file and placed on its own, with a `;` after the import");
+              c.expect(has("qml/QtQuick/Templates/qmldir"), "an `import` line of a qmldir");
+              c.expect(!has("qml/QtQuick/plugins.qmltypes") && !has("qml/QtQuick/designer/Hidden.qml"), "type descriptions and designer files are not run time");
+              std::size_t files = 0, qmldirs = 0;
+              for (auto const& f : d) {
+                  if (!f.starts_with("qml/")) continue;
+                  ++files;
+                  if (f.ends_with("/qmldir")) ++qmldirs;
+              }
+              c.expect(files == 13, "exactly the 13 files of those modules, and no qt.conf or plugin among them; got " + std::to_string(files));
+              c.expect(qmldirs == 9, "nine modules; got " + std::to_string(qmldirs));
+              c.expect(!mentions(r.errors, "NotAModule") && !r.has_line("mcpp:warning=", {"NotAModule"}),
+                       "an import in a comment is not an import");
+          } },
+
+        { "qml: styles limits the optional imports, imports and import_paths add modules, an unknown Qt module is a warning",
+          with_probe(with_qml_sdk(t::row::linux_gcc()))
+              .file("pkg/extra/Acme/Gadget/qmldir", "module Acme.Gadget\nimport QtQuick\n")
+              .file("pkg/extra/Acme/Gadget/Gadget.qml", "Item {}\n")
+              .file("pkg/qml/Probe/User.qml", "import Acme.Gadget\nimport Probe\nimport QtQuick.Nothing\nimport Dynamic.Thing\nItem {}\n"),
+          [] {
+              auto o = probe_options();
+              o.styles = {"Basic"};
+              o.imports = {"QtQml.Models"};
+              o.import_paths = {"extra"};
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              const auto d = deployed(r);
+              c.expect(d.contains("qml/QtQuick/Controls/Basic/qmldir") && !d.contains("qml/QtQuick/Controls/Material/qmldir")
+                       && !d.contains("qml/QtQuick/Controls/Fusion/qmldir"), "only the listed style is followed");
+              c.expect(!d.contains("qml/QtQuick/Controls/Material/impl/qmldir"), "and what only the other styles import is not placed");
+              c.expect(d.contains("qml/Acme/Gadget/qmldir") && d.contains("qml/Acme/Gadget/Gadget.qml"), "a module of import_paths is placed under qml/ by its uri");
+              c.expect(!d.contains("qml/Probe/qmldir"), "the project's own module is not a Qt module");
+              c.expect(r.has_line("mcpp:warning=", {"QtQuick.Nothing", "xim:qt"}), "a Qt module the SDK lacks is a warning that names the payload");
+              c.expect(!r.has_line("mcpp:warning=", {"Dynamic.Thing"}) && mentions(r.errors, "Dynamic.Thing"),
+                       "a module in no SDK is a note, not a warning: a program registers types at run time");
+          } },
+
+        { "qml: qt.conf is written, follows the translations directory, and yields to the project's own",
+          with_probe(with_qml_sdk(t::row::linux_gcc())),
+          [] {
+              auto o = probe_options();
+              if (!mcpp::rules::qml::compile(o)) return 1;
+              o.qt.i18n.deploy_to = "i18n";
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.file("out/qml/qt.conf") == "[Paths]\nPrefix = .\nQml2Imports = qml\nTranslations = i18n\n",
+                       "the second run's file names the translations directory; got:\n" + r.file("out/qml/qt.conf"));
+              std::size_t placed = 0;
+              for (auto const& l : r.lines) if (l.starts_with("mcpp:deploy=") && l.find("/out/qml/qt.conf\t.") != std::string::npos) ++placed;
+              c.expect(placed == 2, "it is placed beside the program");
+          } },
+
+        { "qml: a project's own qt.conf is kept; write_qt_conf = false writes none",
+          with_probe(with_qml_sdk(t::row::linux_gcc())).file("pkg/res/qt.conf", "[Paths]\nPrefix = x\n"),
+          [] { return mcpp::rules::qml::compile(probe_options()) ? 0 : 1; },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.exit_code == 0, "the member succeeds");
+              c.expect(r.file("out/qml/qt.conf").empty() && r.count("mcpp:deploy=") > 0, "none is written");
+              c.expect(!r.has_line("mcpp:deploy=", {"out/qml/qt.conf"}), "none is placed");
+              c.expect(r.has_line("mcpp:warning=", {"has its own qt.conf", "Qml2Imports"}), "the warning says what the project's file must set");
+          } },
+
+        { "qml: write_qt_conf = false, and quick_plugins adds only the directories the SDK has",
+          with_probe(with_qml_sdk(t::row::linux_gcc())),
+          [] {
+              auto o = probe_options();
+              o.write_qt_conf = false;
+              o.quick_plugins = {"imageformats", "xcbglintegrations"};
+              return mcpp::rules::qml::compile(o) ? 0 : 1;
+          },
+          [](const t::result& r, t::checker& c) {
+              c.expect(r.file("out/qml/qt.conf").empty() && !r.has_line("mcpp:deploy=", {"qt.conf"}), "no qt.conf");
+              const auto d = deployed(r);
+              c.expect(d.contains("imageformats/libqpng.so") && d.contains("platforms/libqoffscreen.so"), "the directory the SDK has is placed beside platforms/");
+              c.expect(!r.has_line("mcpp:warning=", {"xcbglintegrations"}), "a directory the SDK lacks is not a warning");
           } },
 
         // ── compatibility ───────────────────────────────────────────────────

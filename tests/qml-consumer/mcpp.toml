@@ -1,0 +1,49 @@
+# Fixture: a QML application built through rules-qml, with the SDK from `xim:qt`
+# (qtbase, qtdeclarative with Qt Quick and Quick Controls, qttools).
+#
+# One QML module, `Probe`, in qml/Probe/:
+#
+#   Main.qml          the component the program loads with `loadFromModule`
+#   Style.qml         `pragma Singleton`, listed in the qmldir as a singleton
+#   Util.js           a JavaScript library the module imports
+#   sub/Inner.qml     a file in a nested directory
+#   data/hello.txt    a resource, read through `:/qt/qml/Probe/data/hello.txt`
+#   src/backend.h     a C++ type with `QML_ELEMENT`, `src/theme.h` one with `QML_SINGLETON`
+#
+# The program runs headless: the platform plugin `offscreen` and Qt Quick's
+# software renderer, so the same program is built and RUN on every host in the
+# matrix and prints what each part of the module produced.
+[package]
+name        = "qml-consumer"
+version     = "0.1.0"
+description = "Fixture: a QML application built through rules-qml"
+license     = "Apache-2.0"
+authors     = ["mcpp-community"]
+
+[language]
+standard   = "c++23"
+modules    = true
+import_std = false
+
+[build-dependencies.mcpp]
+plugins = { path = "../..", features = ["rules-qml"], host-module = true }
+
+# QML needs the Quick libraries, which `xim:qt-base` does not carry.
+[target.'cfg(any(windows, linux, macos))'.xlings.workspace]
+"xim:qt" = "6.11.1"
+
+[build]
+sources = ["src/*.cpp", "*.ts"]
+
+[targets.qml-consumer]
+kind = "bin"
+main = "src/main.cpp"
+
+# As tests/qt-consumer: Qt's Linux libraries load the shared libstdc++, so on
+# Linux the program uses the toolchain's shared C++ runtime (mcpp's docs/20).
+# Windows and macOS keep the engine's default toolchain.
+[target.x86_64-linux-gnu]
+cxx_runtime = "toolchain-coupled"
+
+[target.aarch64-linux-gnu]
+cxx_runtime = "toolchain-coupled"

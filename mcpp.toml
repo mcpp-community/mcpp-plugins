@@ -1,7 +1,7 @@
 [package]
 name        = "plugins"
 namespace   = "mcpp"
-version     = "0.26.1"
+version     = "0.27.0"
 # The first mcpp release that speaks protocol 17 (SPEC-013, mcpp#847): the
 # platform's directives `mcpp.plugins.platform` states (`link_driver`,
 # `link_input`, `artifact_name`, `seal`, `run_host`), the `platform` phase, and
@@ -193,6 +193,16 @@ rule_module       = "mcpp.rules.spirv"
 device_extensions = [".comp", ".vert", ".frag", ".geom", ".tesc", ".tese",
                      ".mesh", ".task", ".rgen", ".rint", ".rahit", ".rchit",
                      ".rmiss", ".rcall", ".glsl", ".hlsl"]
+
+# `mcpp.rules.qml` -- QML applications on top of `rules-qt` (0.27.0): the
+# chain `qt_add_qml_module` runs, Qt's own QML modules placed beside the program,
+# `qt.conf`. It claims no file extension and names no `rule_module`: a `.qml` file
+# needs a module URI and a version that `[build] sources` cannot state, so a
+# project writes `host-module = true` and states its modules in `build.mcpp`.
+# The implied `rules-qt` keeps its own `rule_module` for `.ui`, `.qrc` and `.ts`.
+[features.rules-qml]
+sources = ["rules/qml.cppm"]
+implies = ["rules-qt", "plugins-core"]
 
 [features.rules-sycl]
 sources           = ["rules/sycl.cppm"]

@@ -96,6 +96,7 @@ Each rule therefore selects the extensions it claims and leaves the rest:
 | `rules-hip` | `.hip` |
 | `rules-metal` | `.metal` |
 | `rules-qt` | `.ui`, `.qrc`, `.ts`; a header is found by what it declares, since `.h` is already C++ |
+| `rules-qml` | nothing: a `.qml` file needs a module uri and a version that `[build] sources` cannot state, so the project states its modules in `build.mcpp` and writes `host-module = true`; the `rules-qt` it implies keeps its claims |
 | `rules-slang` | `.slang` |
 | `rules-swift` | `.swift` |
 | `rules-sycl` | `.sycl` |

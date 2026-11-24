@@ -9,7 +9,7 @@ module name the member declares, and configures it there.
 
 ```toml
 [build-dependencies.mcpp]
-plugins = { version = "0.26.1", features = ["rules-spirv"], host-module = true }
+plugins = { version = "0.27.0", features = ["rules-spirv"], host-module = true }
 ```
 
 ```cpp
@@ -69,6 +69,7 @@ mcpp 2026.11.7.1 or later; cross configuration requires CMake 3.19 or later.
 | `rules-hip` | `mcpp.rules.hip` | 2026.10.1.3 | Compiles HIP (`*.hip`) with the project's clang on the NVIDIA platform. | [rules](docs/rules.md#rules-hip) |
 | `rules-metal` | `mcpp.rules.metal` | 2026.9.8.1 | Compiles `.metal` shaders into Metal libraries with the host's Xcode and deploys them beside the program. | [rules](docs/rules.md#rules-metal) |
 | `rules-qt` | `mcpp.rules.qt` | 2026.10.1.3 | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [rules-qt](docs/rules-qt.md) |
+| `rules-qml` | `mcpp.rules.qml` | 2026.10.1.3; a pack that carries the QML plugins' libraries 2026.11.23.1 | Builds a QML application: each module's `moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc` and `qsb` chain as actions, Qt's QML modules the program imports placed beside it, and a `qt.conf`. Implies `rules-qt`. | [rules-qml](docs/rules-qml.md) |
 | `rules-slang` | `mcpp.rules.slang` | 2026.10.1.3 | Compiles Slang (`*.slang`) and embeds or places the result. | [rules](docs/rules.md#rules-slang) |
 | `rules-spirv` | `mcpp.rules.spirv` | 2026.10.1.3 | Compiles GLSL and HLSL shader stages to SPIR-V and embeds or places the result. | [rules](docs/rules.md#rules-spirv) |
 | `rules-swift` | `mcpp.rules.swift` | 2026.9.8.1 | Compiles a package's `.swift` sources into one module the C and C++ sources call. | [rules](docs/rules.md#rules-swift) |

@@ -1,0 +1,19 @@
+import std;
+import mcpp;
+import mcpp.rules.qml;
+
+int main() {
+    namespace qml = mcpp::rules::qml;
+    qml::options o;
+    o.qt.modules        = { "Core", "Gui", "Qml", "Quick" };
+    o.qt.deploy_plugins = { "platforms" };
+    o.imports      = { "QtQuick.Shapes" };
+    o.import_paths = { "extra" };
+
+    qml::qml_module app;
+    app.uri     = "App";
+    app.root    = "qml/App";
+    app.sources = { "qml/App/*.qml" };
+    o.modules = { app };
+    return qml::compile(o) ? 0 : 1;
+}

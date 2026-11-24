@@ -71,6 +71,11 @@ struct translations {
     std::vector<std::string> tr_function_alias;
     // The files `lupdate` reads. Empty takes the package's C++ files.
     std::vector<std::string> sources;
+    // The file extensions `lupdate` reads, without the dot (`-extensions`), and
+    // the ones the package walk collects when `sources` is empty. A project
+    // whose QML and JavaScript hold `qsTr` adds `qml` and `js` (0.27.0;
+    // `mcpp.rules.qml` does it for `update_sources`).
+    std::vector<std::string> extensions = { "cpp", "h", "hpp", "ixx", "cppm" };
     // Where the `.qm` files are placed, relative to the program.
     std::string deploy_to = "translations";
     // Where `lrelease` writes them. Empty is `<out dir>/qt/translations`; a
@@ -90,6 +95,17 @@ struct options {
     std::vector<std::string> private_modules;
     moc_scan moc = moc_scan::project_headers;
     std::vector<std::string> moc_headers;
+    // `moc --output-json`: the type description `qmltyperegistrar` reads
+    // (0.27.0, for `mcpp.rules.qml`). `moc` then also writes `<out>.json`.
+    bool moc_json = false;
+    // Give `moc` the SDK's include directories (`-I<sdk>/include`, one
+    // `-I<sdk>/include/Qt<Module>` per linked module; `-F<sdk>/lib` and `-I<sdk>/include`
+    // on macOS, where the include directory holds the header-only modules, and where
+    // the compiler is given it as well).
+    // Without them `moc` drops `QML_ELEMENT` and its relatives for want of the
+    // header that defines them, so a type is described without its QML name.
+    // Off by default: a project's moc output does not change (0.27.0).
+    bool moc_includes = false;
     // `.ui` and `.qrc` files, beside those named in `[build] sources`.
     std::vector<std::string> forms;
     std::vector<std::string> resources;
@@ -223,6 +239,19 @@ inline std::vector<std::filesystem::path> project_files(std::initializer_list<st
         for (auto e : exts) if (ext == e) { out.push_back(it->path()); break; }
     }
     std::ranges::sort(out);
+    return out;
+}
+
+inline std::vector<std::filesystem::path> project_files(const std::vector<std::string>& exts) {
+    std::vector<std::string> dotted;
+    for (std::size_t i = 0; i < exts.size(); ++i) dotted.push_back("." + exts[i]);
+    std::vector<std::filesystem::path> out;
+    for (auto const& e : dotted) {
+        auto part = project_files({ std::string_view(e) });
+        out.insert(out.end(), part.begin(), part.end());
+    }
+    std::ranges::sort(out);
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 
@@ -392,13 +421,36 @@ inline void runtime_directories(std::span<const std::filesystem::path> roots) {
 
 // ─── The rule ──────────────────────────────────────────────────────────────
 
-inline bool compile(options opt = {}) {
+// One `moc` output, for a rule built on this one (`mcpp.rules.qml`).
+struct moc_unit {
+    std::string header;   // the header, or the source that includes its `.moc`
+    std::string cpp;      // the generated file
+    std::string json;     // `<cpp>.json` when `options::moc_json`, else empty
+};
+
+// What `compile_ex` decided, for the rule that builds on it. This is the
+// collaboration of two modules of one package at one version, not a contract
+// for third parties (docs/plugin-development.md rule 5): `mcpp.rules.qml` uses
+// it, and a project calls `compile`.
+struct outcome {
+    bool ok = false;
+    sdk_source source;                       // empty `roots` when there is no SDK
+    std::string gen;                         // `<out dir>/qt`
+    std::vector<std::string> linked;         // the modules found and linked, as `Core`
+    std::vector<moc_unit> mocs;              // headers only, in `moc_<stem>.cpp` order
+};
+
+inline bool compile(options opt = {});
+
+inline outcome compile_ex(options opt = {}) {
     namespace fs = std::filesystem;
     using detail::generic;
     constexpr std::string_view who = "mcpp.rules.qt";
     mcpp::fact("mcpp.plugins", std::string(mcpp::plugins::version).c_str());
 
+    outcome res;
     const sdk_source source = locate(opt);
+    res.source = source;
     const auto& sdks = source.roots;
     if (sdks.empty()) {
         // Reached by a build program that asked for Qt: since mcpp 2026.9.27.1
@@ -412,7 +464,8 @@ inline bool compile(options opt = {}) {
             "    \"xim:qt-base\" = \"6.11.1\"",
             who, source.level.empty() ? std::string()
                                       : " at the directory " + source.level + " names"));
-        return true;
+        res.ok = true;
+        return res;
     }
     mcpp::fact("rules-qt.sdk", std::format("{}: {}", source.level, generic(sdks.front())).c_str());
     // Qt's official Linux binaries are built with GCC against libstdc++, and
@@ -425,6 +478,7 @@ inline bool compile(options opt = {}) {
             "(`--toolchain gcc@<version>`), or name a Qt built with libc++.", who));
     const fs::path main = sdks.front();
     const fs::path gen  = fs::path(opt.out_dir) / "qt";
+    res.gen = generic(gen);
     std::error_code ec;
     fs::create_directories(gen, ec);
 
@@ -435,12 +489,21 @@ inline bool compile(options opt = {}) {
         if (std::ranges::find(modules, name) == modules.end()) modules.push_back(name);
     }
     std::vector<std::string> missing;
+    std::vector<std::string> mocInclude;   // `moc`'s -I/-F arguments, when `moc_includes` asks
     for (auto const& r : sdks) {
         if (detail::is_macos()) {
             const std::string f = "-F" + generic(r / "lib");
             mcpp::cxxflag(f.c_str());
+            mocInclude.push_back(f);
+            // A module that is only headers (QtQmlIntegration, which QtQml's own header
+            // includes) is not a framework: its headers are in `include/`.
+            if (opt.moc_includes && fs::is_directory(r / "include", ec)) {
+                mcpp::include_dir(generic(r / "include").c_str());
+                mocInclude.push_back("-I" + generic(r / "include"));
+            }
         } else {
             mcpp::include_dir(generic(r / "include").c_str());
+            mocInclude.push_back("-I" + generic(r / "include"));
         }
     }
     for (auto const& m : modules) {
@@ -462,6 +525,8 @@ inline bool compile(options opt = {}) {
             mcpp::link_flag(generic(lib).c_str());
             const std::string def = "QT_" + detail::upper(m) + "_LIB";
             mcpp::define(def.c_str());
+            if (!detail::is_macos()) mocInclude.push_back("-I" + generic(headers));
+            res.linked.push_back(m);
             found = true;
             break;
         }
@@ -550,25 +615,35 @@ inline bool compile(options opt = {}) {
     };
     auto mocOne = [&](const fs::path& in, const std::string& outName) -> bool {
         if (!claim(outName, in)) return false;
-        const std::string out = generic(gen / outName);
-        const std::string dep = out + ".d";
+        const std::string outPath = generic(gen / outName);
+        const std::string dep = outPath + ".d";
         const std::string src = generic(in);
         const std::string id  = "qt:moc:" + outName;
         const std::string desc = "MOC " + in.filename().string();
+        const std::string json = outPath + ".json";
         mcpp::action a;
         a.id = id.c_str();
         a.role = mcpp::roles::source;
         a.description = desc.c_str();
         a.depfile = dep.c_str();
-        a.arg(moc.c_str()).arg(src.c_str()).arg("-o").arg(out.c_str())
-         .arg("--output-dep-file").arg("--dep-file-path").arg(dep.c_str())
-         .input(src.c_str()).output(out.c_str()).submit();
+        a.arg(moc.c_str()).arg(src.c_str()).arg("-o").arg(outPath.c_str())
+         .arg("--output-dep-file").arg("--dep-file-path").arg(dep.c_str());
+        if (opt.moc_json) a.arg("--output-json");
+        if (opt.moc_includes)
+            for (auto const& i : mocInclude) a.arg(i.c_str());
+        a.input(src.c_str()).output(outPath.c_str());
+        if (opt.moc_json) a.output(json.c_str());
+        a.submit();
         return true;
     };
-    for (auto const& h : headers)
-        if (!mocOne(h, "moc_" + h.stem().string() + ".cpp")) return false;
+    for (auto const& h : headers) {
+        const std::string name = "moc_" + h.stem().string() + ".cpp";
+        if (!mocOne(h, name)) return res;
+        res.mocs.push_back({ generic(h), generic(gen / name),
+                             opt.moc_json ? generic(gen / name) + ".json" : std::string() });
+    }
     for (auto const& c : inlineMoc)
-        if (!mocOne(c, c.stem().string() + ".moc")) return false;
+        if (!mocOne(c, c.stem().string() + ".moc")) return res;
 
     // ── uic ──
     std::vector<std::string> forms = detail::device(".ui");
@@ -580,7 +655,7 @@ inline bool compile(options opt = {}) {
             forms.clear();
         }
         for (auto const& f : forms) {
-            if (!claim("ui_" + fs::path(f).stem().string() + ".h", detail::absolute_from_root(f))) return false;
+            if (!claim("ui_" + fs::path(f).stem().string() + ".h", detail::absolute_from_root(f))) return res;
             const std::string in  = generic(detail::absolute_from_root(f));
             const std::string out = generic(gen / ("ui_" + fs::path(f).stem().string() + ".h"));
             const std::string id  = "qt:uic:" + fs::path(f).stem().string();
@@ -607,7 +682,7 @@ inline bool compile(options opt = {}) {
         for (auto const& r : resources) {
             const fs::path qrc = detail::absolute_from_root(r);
             const std::string stem = qrc.stem().string();
-            if (!claim("qrc_" + stem + ".cpp", qrc)) return false;
+            if (!claim("qrc_" + stem + ".cpp", qrc)) return res;
             const std::string in  = generic(qrc);
             const std::string out = generic(gen / ("qrc_" + stem + ".cpp"));
             const std::string id  = "qt:rcc:" + stem;
@@ -636,21 +711,25 @@ inline bool compile(options opt = {}) {
                                      who, lrelease.empty() ? "lrelease" : "lupdate", generic(main)));
             ts.clear();
         }
+        std::string extensions;
+        for (auto const& e : opt.i18n.extensions) extensions += (extensions.empty() ? "" : ",") + e;
         std::vector<std::string> sources;
         if (opt.i18n.update_sources) {
             if (!opt.i18n.sources.empty()) {
                 for (auto const& s : opt.i18n.sources) sources.push_back(generic(detail::absolute_from_root(s)));
             } else {
-                for (auto const* g : { "**/*.cpp", "**/*.h", "**/*.hpp", "**/*.ixx", "**/*.cppm" })
-                    mcpp::rerun_if_changed_glob(g);
-                for (auto const& f : detail::project_files({ ".cpp", ".h", ".hpp", ".ixx", ".cppm" }))
+                for (auto const& e : opt.i18n.extensions) {
+                    const std::string g = "**/*." + e;
+                    mcpp::rerun_if_changed_glob(g.c_str());
+                }
+                for (auto const& f : detail::project_files(opt.i18n.extensions))
                     sources.push_back(generic(f));
             }
         }
         for (auto const& t : ts) {
             const fs::path file = detail::absolute_from_root(t);
             const std::string stem = file.stem().string();
-            if (!claim(stem + ".qm", file)) return false;
+            if (!claim(stem + ".qm", file)) return res;
             const std::string in = generic(file);
             const fs::path qmDir = opt.i18n.out_dir.empty() ? gen / "translations"
                                                             : detail::absolute_from_root(opt.i18n.out_dir);
@@ -666,7 +745,7 @@ inline bool compile(options opt = {}) {
                 // as its input, which orders the two.
                 u.role = mcpp::roles::source;
                 u.description = desc.c_str();
-                u.arg(lupdate.c_str()).arg("-silent").arg("-extensions").arg("cpp,h,hpp,ixx,cppm");
+                u.arg(lupdate.c_str()).arg("-silent").arg("-extensions").arg(extensions.c_str());
                 for (auto const& a : opt.i18n.tr_function_alias) u.arg("-tr-function-alias").arg(a.c_str());
                 for (auto const& s : sources) u.arg(s.c_str()).input(s.c_str());
                 u.arg("-ts").arg(in.c_str()).output(in.c_str()).submit();
@@ -711,7 +790,7 @@ inline bool compile(options opt = {}) {
                     continue;
                 }
                 const std::string name = "qt_" + lang + ".qm";
-                if (!claim(name, fs::path(inputs.front()))) return false;
+                if (!claim(name, fs::path(inputs.front()))) return res;
                 const std::string out  = generic(qmDir / name);
                 const std::string id   = "qt:lconvert:" + lang;
                 const std::string desc = "LCONVERT " + name;
@@ -767,7 +846,12 @@ inline bool compile(options opt = {}) {
                     break;
                 }
     }
-    return true;
+    res.ok = true;
+    return res;
+}
+
+inline bool compile(options opt) {
+    return compile_ex(std::move(opt)).ok;
 }
 
 } // namespace mcpp::rules::qt
