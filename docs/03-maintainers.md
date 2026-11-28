@@ -14,14 +14,11 @@ maintain one or more plugins**
 
 ## Which plugins this repository takes
 
-This repository carries plugins that are general — a mechanism many projects
-reuse — or that drive a widely used, well-known project. A build plugin
-specific to one project is better kept beside that project: the plugin lives
-in the project's repository, and the project publishes it to mcpp-index like
-any library — a build plugin is an ordinary package.
-[slint-m](https://github.com/mcpplibs/slint-m) is the example: the build rule
-`mcpplibs.mplugin.slint` ships in Slint's own wrapper repository and is
-published to the index, not here.
+General plugins, or plugins for widely used projects. A plugin specific to
+one project ships beside that project and is published to mcpp-index on its
+own — [slint-m](https://github.com/mcpplibs/slint-m) is the example. The
+[plugin issue](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)
+states the full criterion.
 
 ## What a maintainer does
 

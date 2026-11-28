@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/mcpp-community/mcpp-plugins)](https://github.com/mcpp-community/mcpp-plugins/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
-[English](README.md) | 简体中文 · [文档索引](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [mcpp-index](https://mcpp.index.xlings.org) · [发布](https://github.com/mcpp-community/mcpp-plugins/releases)
+[English](README.md) | 简体中文 · [文档索引](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [mcpp-index](https://mcpp.index.xlings.org/packages/mcpp.plugins/) · [发布](https://github.com/mcpp-community/mcpp-plugins/releases)
 
 mcpp 是一个带有构建插件框架的通用引擎;插件来自本包(`mcpp:plugins`)、来自
 第三方,或来自项目自身,而 `build.mcpp` 是项目使用它们的地方:它按成员声明
