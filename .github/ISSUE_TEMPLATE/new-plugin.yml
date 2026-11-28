@@ -10,11 +10,12 @@ body:
         The conventions and the checklist a plugin follows:
         [docs/01 — Plugin Development, §5](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/01-plugin-development.md#5-a-new-plugin).
 
-        What this repository takes: plugins that are general, or that drive a
-        widely used project — see
-        [docs/03](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/03-maintainers.md#which-plugins-this-repository-takes).
-        A build plugin specific to one project ships beside that project and
-        is published to mcpp-index on its own
+        What this repository takes: plugins that are general — a mechanism
+        many projects reuse — or plugins for a widely used, well-known
+        project. A build plugin specific to one project is better kept beside
+        that project: it ships in the project's repository and the project
+        publishes it to mcpp-index like any library — a build plugin is an
+        ordinary package
         ([slint-m](https://github.com/mcpplibs/slint-m) is the example). The
         path this issue takes depends on the stage below.
 
