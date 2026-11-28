@@ -81,7 +81,7 @@ The first digit is the part, so a number says where a page belongs:
 - [00 — How the Plugins Meet the Engine](00-engine-and-rules.md) — the families and their names, each rule's environment and claimed extensions, the engine floor, what a consumer names
 - [01 — Plugin Development](01-plugin-development.md) — the conventions every plugin follows, the C++ a plugin is written in, a new plugin's checklist
 - [02 — Where a Tool Comes From](02-tool-sources.md) — the one order every plugin resolves a tool in, and every way a project names its own
-- [03 — Maintainers](03-maintainers.md) — which plugins the repository takes, the participation path, what a maintainer does and knows, how to apply
+- [03 — Maintainers](03-maintainers.md) — the participation path, what a maintainer does and knows, how to apply
 
 ### 1x — Rules
 

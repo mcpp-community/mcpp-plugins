@@ -12,14 +12,6 @@ go:
 **use it → introduce and teach it → report issues → fix bugs → improve it →
 maintain one or more plugins**
 
-## Which plugins this repository takes
-
-General plugins, or plugins for widely used projects. A plugin specific to
-one project ships beside that project and is published to mcpp-index on its
-own — [slint-m](https://github.com/mcpplibs/slint-m) is the example. The
-[plugin issue](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)
-states the full criterion.
-
 ## What a maintainer does
 
 Two core responsibilities, and both count:
@@ -40,7 +32,7 @@ plugin's page in the [index](README.md) states what it does; the
 
 ## Applying
 
-Submissions follow the criterion above. Applications go through the
+Submissions go through the
 [issue template](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml),
 one plugin per application. An application states contributions to the plugin
 in both categories — technical development, and ecosystem building and
