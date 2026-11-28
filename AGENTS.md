@@ -1,9 +1,11 @@
 # AGENTS.md
 
 `mcpp-plugins` is the package of official build plugins for mcpp
-(`mcpp:plugins`). One member is one module file, one feature in `mcpp.toml`,
-one consumer under `tests/`, one page under `docs/`. This file states the rules
-that hold across the repository in their shortest form; each links to the
+(`mcpp:plugins`). One member is one module — a single `.cppm`, or a directory
+`<family>/<x>/` whose `<x>.cppm` keeps the module a consumer imports while
+`internal/` holds the machinery — one feature in `mcpp.toml`, one consumer
+under `tests/`, one page under `docs/`. This file states the rules that hold
+across the repository in their shortest form; each links to the
 document that states it in full. Where this file and a linked document differ,
 the linked document holds.
 

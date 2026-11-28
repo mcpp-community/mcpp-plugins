@@ -119,6 +119,8 @@ rules/<x>.cppm       export module mcpp.rules.<x>;
 tools/<x>.cppm       export module mcpp.tools.<x>;
 dist/<x>.cppm        export module mcpp.dist.<x>;
 deps/<x>.cppm        export module mcpp.deps.<x>;  deps/deps.cppm 是共享单元
+<family>/<x>/        一个文件装不下的成员:<x>.cppm 保留消费者导入的模块名,
+                     internal/ 承载机制;模块名不变
 tests/<consumer>/    每个成员一个项目,CI 用固定的 mcpp 构建
 docs/                每个成员或成员组一页([索引](docs/README.md))
 ```

@@ -206,10 +206,24 @@ Known differences, each one met in this package:
 - **A function that reaches mcpplibs.os is not `inline`.** A rule's helper that runs a program (`mcpp::plugins::tool::capture`) or opens a library is defined without `inline`, so it is compiled once in its module and an importer sees its declaration only. Under GCC 16 an importer that reads such a body from an inline function fails: "failed to read compiled module cluster: Bad file data", or an unresolved `std::optional<std::vector<grant>>` at the link (`tests/metal-consumer`, 0.21.0).
 - **A module does not instantiate `std::filesystem::path`'s iterator.** Under MSVC 14.52 every importer that then touches `std::filesystem` fails inside the STL; `mcpp::plugins::names::components` splits a path as a string instead.
 
+**The private region of a unit.** A member's file, and each unit of a directory
+member, reads in three parts: the `export module` line with its imports, the
+interface its importers see, and, last, the unit's own private region. In a
+unit that is its module's only unit the private region is a private module
+fragment — `module :private;` — and the declarations and definitions after it
+are the unit's own, never visible to an importer. A unit that shares its module
+with other units cannot carry a fragment: its private region is a
+`namespace detail` block, and the names a sibling unit imports stay outside it.
+
 ## 5. A new plugin
 
 A plugin in this package consists of:
-- a module file under `rules/`, `tools/`, `dist/` or `deps/`;
+- a module under `rules/`, `tools/`, `dist/` or `deps/` — one file
+  `<family>/<x>.cppm`, or a directory when the member outgrows one file:
+  `<family>/<x>/<x>.cppm` is the interface a consumer imports, and the units
+  under `<family>/<x>/internal/` carry the machinery as modules named
+  `mcpp.<family>.<x>.internal.<topic>`. The module name a consumer imports
+  does not change, and the internals are not part of the contract (§2.5);
 - a feature in `mcpp.toml`;
 - a fixture under `tests/` that CI builds and asserts on;
 - a row in the README's member table with its mcpp floor;

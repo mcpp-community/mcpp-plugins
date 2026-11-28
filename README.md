@@ -125,6 +125,9 @@ rules/<x>.cppm       export module mcpp.rules.<x>;
 tools/<x>.cppm       export module mcpp.tools.<x>;
 dist/<x>.cppm        export module mcpp.dist.<x>;
 deps/<x>.cppm        export module mcpp.deps.<x>;  deps/deps.cppm is shared
+<family>/<x>/        a member that outgrew one file: <x>.cppm keeps the module
+                     a consumer imports, internal/ holds the machinery; the
+                     module name does not change
 tests/<consumer>/    one project per member, built by CI with the pinned mcpp
 docs/                one page per member or group of members ([index](docs/README.md))
 ```
