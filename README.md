@@ -95,24 +95,16 @@ runs comes from is in [docs/02](docs/02-tool-sources.md).
 
 ## Contributing and maintenance
 
-The repository and, today, every member are maintained by
-[@Sunrisepeak](https://github.com/Sunrisepeak) — and more developers are
-welcome: to contribute, to maintain, and to carry a member's tutorials and
-outreach. Start from the simple and from what interests you, learn the member
-as you go, and grow along the path:
+The project is maintained mainly by
+[@Sunrisepeak](https://github.com/Sunrisepeak) — its upkeep and growth need
+more contributors and maintainers. Start from the simple and from what
+interests you: use it, introduce and teach it, report issues, fix bugs,
+improve it, maintain one or more members.
 
-**use it → introduce and teach it → report issues → fix bugs → improve it →
-maintain one or more members**
+If you are interested in contributing to and maintaining some members:
 
-A member's maintainer knows the member deeply and its application domain, and
-leads its popularization and ecosystem building — technical articles, videos,
-tutorials. Development plus outreach is the core of the role. Submitting a
-plugin follows the [new-member
-checklist](docs/01-plugin-development.md#5-a-new-plugin), and its original
-author becomes the member's maintainer. Ready to take a member's
-maintainership — or to start with bug fixes and improvements? Open it as an
-issue; applications go through the [maintainer-application
-template](.github/ISSUE_TEMPLATE/maintainer-application.yml).
+- [add a new member](docs/01-plugin-development.md#5-a-new-plugin)
+- [become a member's maintainer](docs/03-maintainers.md)
 
 ## Maintainers
 

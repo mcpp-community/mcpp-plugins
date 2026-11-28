@@ -1,23 +1,23 @@
 name: Member maintainer application
-description: Apply to maintain one or more members of mcpp-plugins
+description: Apply to become the maintainer of one member of mcpp-plugins
 labels: ["maintainer-application"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for wanting to take a member's maintainership.
+        Thanks for wanting to take a member's maintainership. One application
+        covers one member.
 
         A maintainer knows the member deeply and its application domain, and
         leads its popularization and ecosystem building — technical articles,
-        videos, tutorials. Development plus outreach is the core of the role.
-
-        Starting simple is fine: the expected path is use it, introduce and
-        teach it, report issues, fix bugs, improve it — and then take one.
+        videos, tutorials. Development plus outreach is the core of the role,
+        and the application states contributions in both categories.
   - type: input
-    id: members
+    id: member
     attributes:
-      label: Member or members you apply for
-      placeholder: "rules-cuda, rules-sycl"
+      label: The member you apply for
+      description: One member per application — for another, open another issue.
+      placeholder: "rules-cuda"
     validations:
       required: true
   - type: textarea
@@ -28,26 +28,28 @@ body:
     validations:
       required: true
   - type: textarea
-    id: contributions
+    id: technical-contributions
     attributes:
-      label: Contributions so far
-      description: Issues, fixes, improvements, documentation or tutorials — links welcome. A short history is fine; everyone starts there.
+      label: Technical contributions to the member
+      description: Required. Fixes, features, fixture and CI care, documentation — links to your issues and pull requests.
+    validations:
+      required: true
+  - type: textarea
+    id: outreach-contributions
+    attributes:
+      label: Technical outreach and promotion contributions
+      description: Required. The articles, videos, tutorials or examples you have written about the member or its domain — links welcome.
+    validations:
+      required: true
   - type: textarea
     id: maintenance-plan
     attributes:
       label: Maintenance plan
-      description: The daily upkeep you commit to — issue triage, fixes, fixture and CI care across the platforms the member claims.
+      description: Required, and both sides of the role — the daily technical upkeep you commit to (triage, fixes, fixture and CI care), and the ongoing popularization you plan to keep doing.
     validations:
       required: true
   - type: textarea
-    id: outreach-plan
+    id: referrer
     attributes:
-      label: Popularization and outreach plan
-      description: The articles, videos, tutorials or examples you plan to write, and where you will publish them.
-    validations:
-      required: true
-  - type: textarea
-    id: where-to-find-you
-    attributes:
-      label: Where to find you
-      description: GitHub, blog, channel — anywhere your work and teaching live.
+      label: Referrer
+      description: An existing maintainer of a related member who supports this application, if one knows your work.

@@ -1,6 +1,6 @@
 # mcpp-plugins
 
-> mcpp 的官方构建插件——一个成员,一个 feature,一个模块。
+> mcpp 的官方构建插件——一个插件成员,一个 feature,一个模块。
 
 [![ci](https://github.com/mcpp-community/mcpp-plugins/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mcpp-community/mcpp-plugins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mcpp-community/mcpp-plugins)](https://github.com/mcpp-community/mcpp-plugins/releases)
@@ -41,7 +41,7 @@ int main() {
 | tools | `mcpp.tools.<x>` | 构建程序自己要做什么(见 [`tools/README.md`](tools/README.md)) |
 | dist | `mcpp.dist.<x>` | 链接产出什么,以及用户以什么形式安装它 |
 | deps | `mcpp.deps.<x>` | 一个库从哪里来 |
-| identity | `mcpp.plugins` | 库根,先于每个成员编译;它声明这个集合的版本 |
+| identity | `mcpp.plugins` | 库根,先于每个插件成员编译;它声明这个集合的版本 |
 
 第三方插件把模块命名为 `mcpp.<它的 namespace>.*`;`core`、`plugins`、`deps`、
 `rules`、`dist`、`tools` 属于本包与引擎。家族的完整论述,以及引擎如何把文件
@@ -60,7 +60,7 @@ int main() {
 | `dist-apk` | 把原生闭包打成已签名的 APK 或 App Bundle,带 Java、Kotlin 与 Maven 库。 | [docs](docs/32-dist-apk.md) |
 
 <details>
-<summary><b>全部 23 个成员</b>——feature、行为、文档;模块与引擎下限见<a href="docs/README.md#the-members">文档索引</a></summary>
+<summary><b>全部 23 个插件成员</b>——feature、行为、文档;模块与引擎下限见<a href="docs/README.md#the-members">文档索引</a></summary>
 
 | feature | 行为 | 文档 |
 |---|---|---|
@@ -92,23 +92,17 @@ int main() {
 
 ## 贡献与维护
 
-仓库整体以及今天的每一个成员都由
-[Sunrisepeak](https://github.com/Sunrisepeak) 维护——期待更多开发者参与:
-贡献、维护,以及成员的使用教学与推广。从简单的、自己感兴趣的方向开始,在
-过程中逐渐了解和熟悉,沿这条路径成长:
+项目目前主要由 [Sunrisepeak](https://github.com/Sunrisepeak) 维护——项目的
+维护和发展需要更多贡献者与维护者。从简单的、自己感兴趣的方向开始:使用它、
+介绍与教学、反馈问题、修复 bug、优化改进、维护一个或多个插件。
 
-**使用它 → 介绍与教学 → 反馈问题 → 修复 bug → 优化改进 → 维护一个或多个
-成员**
+如果你对某些插件感兴趣,并期望参与贡献和维护:
 
-一个成员的维护者:对该成员模块及其应用领域有深入的了解,并能带领它的普及
-与生态建设——技术文章、视频、教程。**技术开发 + 该插件的普及与技术传播**,
-是维护者职责的核心。提交插件遵循[新成员
-清单](docs/01-plugin-development.md#5-a-new-plugin),其原作者即成为该成员的
-维护者。想接手某个成员的维护,或先从 bug 修复与优化做起?开 issue 说明;
-维护者申请走[申请模板](.github/ISSUE_TEMPLATE/maintainer-application.yml)。
+- [添加一个新的插件](docs/01-plugin-development.md#5-a-new-plugin)
+- [申请成为维护者](docs/03-maintainers.md)
 
 ## 维护者
 
-| 维护者 | 主要负责的成员 |
+| 维护者 | 主要负责的插件成员 |
 |---|---|
-| [Sunrisepeak](https://github.com/Sunrisepeak) | 仓库整体,以及今天的每一个成员 |
+| [Sunrisepeak](https://github.com/Sunrisepeak) | 仓库整体,以及今天的每一个插件成员 |

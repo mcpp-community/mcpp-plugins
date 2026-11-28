@@ -12,6 +12,7 @@ records under [`../.agents/docs/`](../.agents/docs/) — a page cites no record.
 |---|---|
 | use a member | its page below, and the [quick start](../README.md#quick-start) in the README |
 | write a plugin of your own | [01 — Plugin Development](01-plugin-development.md) |
+| maintain or take a member | [03 — Maintainers](03-maintainers.md) |
 | know why a name, a floor or a claim is what it is | [00 — How the Members Meet the Engine](00-engine-and-rules.md) |
 | name a tool a member runs | [02 — Where a Tool Comes From](02-tool-sources.md) |
 
@@ -80,6 +81,7 @@ The first digit is the part, so a number says where a page belongs:
 - [00 — How the Members Meet the Engine](00-engine-and-rules.md) — the families and their names, each rule's environment and claimed extensions, the engine floor, what a consumer names
 - [01 — Plugin Development](01-plugin-development.md) — the conventions every plugin follows, the C++ a plugin is written in, a new member's checklist
 - [02 — Where a Tool Comes From](02-tool-sources.md) — the one order every member resolves a tool in, and every way a project names its own
+- [03 — Maintainers](03-maintainers.md) — the participation path, what a maintainer does and knows, how to apply
 
 ### 1x — Rules
 
