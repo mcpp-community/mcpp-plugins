@@ -31,14 +31,16 @@ body:
     id: technical-contributions
     attributes:
       label: Technical contributions to the member
-      description: Required. Fixes, features, fixture and CI care, documentation — links to your issues and pull requests.
+      description: Required. Pull requests or commits — fixes, features, fixture and CI care, documentation. Link them.
+      placeholder: "PR #12 — the manifest-merge fix; PR #18 — the min-sdk fixture"
     validations:
       required: true
   - type: textarea
     id: outreach-contributions
     attributes:
       label: Technical outreach and promotion contributions
-      description: Required. The articles, videos, tutorials or examples you have written about the member or its domain — links welcome.
+      description: Required. Technical articles, videos, blogs, tutorials or examples about the member or its domain, preferably published on a public platform. Link them.
+      placeholder: "a manifest-merger walkthrough on a blog; a getting-started video for the member"
     validations:
       required: true
   - type: textarea
