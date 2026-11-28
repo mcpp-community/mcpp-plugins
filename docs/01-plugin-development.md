@@ -103,7 +103,7 @@ build reports.
 A choice alone does not prevent a download: an eagerly declared payload is
 provisioned before any build program runs. The pair that makes "named here, not
 downloaded" true, the scenarios on both sides of it, and how each official member
-declares its tools are in [tool-sources.md](tool-sources.md).
+declares its tools are in [02-tool-sources.md](02-tool-sources.md).
 
 **Stating the build toolchain.** `mcpp.plugins.toolchain` (feature
 `plugins-toolchain`) builds the statement a root build program makes in its

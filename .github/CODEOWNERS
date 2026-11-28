@@ -1,0 +1,14 @@
+# Default owner: every path needs the package owner's review.
+*                               @Sunrisepeak
+
+# Per-area rows: review is routed by family, and a new maintainer
+# takes a family by editing one line.
+/mcpp.toml                      @Sunrisepeak
+/src/                           @Sunrisepeak
+/rules/                         @Sunrisepeak
+/tools/                         @Sunrisepeak
+/dist/                          @Sunrisepeak
+/deps/                          @Sunrisepeak
+/tests/                         @Sunrisepeak
+/docs/                          @Sunrisepeak
+/.github/                       @Sunrisepeak

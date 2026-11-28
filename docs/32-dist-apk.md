@@ -87,7 +87,7 @@ Anything beyond that belongs in the project's `manifest_template`.
 Kotlin compiler, coursier), and from 0.25.0 each step of more than one command
 (javac or kotlinc with its stamp, d8 over the classes it finds, the archive
 gaining its libraries, assets and dex, an App Bundle's base module) is a step
-program ([`tools-steps`](tools-steps.md)), so no step needs a shell and a Windows
+program ([`tools-steps`](22-tools-steps.md)), so no step needs a shell and a Windows
 host packs what a Linux host does. CI packs level 0 and level 1 on Linux, macOS and Windows hosts;
 the Kotlin, library, bundle and Maven criteria run on Linux. On Windows the NDK's
 libc++ module sources come from `xim:android-ndk-libcxx-modules`, which

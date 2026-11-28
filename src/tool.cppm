@@ -359,7 +359,7 @@ inline std::string describe_missing(const spec& s, const found& f) {
 // mcpplibs.os's types from another module's inline body: it cannot read the
 // module back ("failed to read compiled module cluster: Bad file data") or
 // leaves `std::optional<std::vector<grant>>` unresolved at the link
-// (`tests/metal-consumer`; docs/plugin-development.md §4).
+// (`tests/metal-consumer`; docs/01-plugin-development.md §4).
 struct printed {
     int         status = -1;
     std::string out;

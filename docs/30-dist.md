@@ -1,6 +1,6 @@
 # `dist-appimage`, `dist-deb`, `dist-rpm`, `dist-wix` and `dist-web`
 
-Three `dist-*` members that turn the tree `mcpp pack` stages into an installable form: an AppImage on Linux, an MSI or a Burn bundle on Windows, and a web directory for `wasm32-emscripten`. `dist-apple` and `dist-apk` have pages of their own ([dist-apple.md](dist-apple.md), [dist-apk.md](dist-apk.md)).
+Three `dist-*` members that turn the tree `mcpp pack` stages into an installable form: an AppImage on Linux, an MSI or a Burn bundle on Windows, and a web directory for `wasm32-emscripten`. `dist-apple` and `dist-apk` have pages of their own ([31-dist-apple.md](31-dist-apple.md), [32-dist-apk.md](32-dist-apk.md)).
 
 ## `dist-appimage`
 

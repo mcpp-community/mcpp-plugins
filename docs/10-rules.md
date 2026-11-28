@@ -1,6 +1,6 @@
 # Device and language rules
 
-The rules that compile one kind of translation unit with a compiler mcpp does not drive: GPU and accelerator languages (`rules-ascendc`, `rules-cuda`, `rules-hip`, `rules-sycl`), shader languages (`rules-spirv`, `rules-slang`, `rules-metal`) and Swift (`rules-swift`). Each section states the module, the engine floor, what the rule needs and how it compiles. The environment each rule brings and the extensions it claims are in [engine-and-rules.md](engine-and-rules.md).
+The rules that compile one kind of translation unit with a compiler mcpp does not drive: GPU and accelerator languages (`rules-ascendc`, `rules-cuda`, `rules-hip`, `rules-sycl`), shader languages (`rules-spirv`, `rules-slang`, `rules-metal`) and Swift (`rules-swift`). Each section states the module, the engine floor, what the rule needs and how it compiles. The environment each rule brings and the extensions it claims are in [00-engine-and-rules.md](00-engine-and-rules.md).
 
 ## `rules-ascendc`
 

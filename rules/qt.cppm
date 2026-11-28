@@ -430,7 +430,7 @@ struct moc_unit {
 
 // What `compile_ex` decided, for the rule that builds on it. This is the
 // collaboration of two modules of one package at one version, not a contract
-// for third parties (docs/plugin-development.md rule 5): `mcpp.rules.qml` uses
+// for third parties (docs/01-plugin-development.md rule 5): `mcpp.rules.qml` uses
 // it, and a project calls `compile`.
 struct outcome {
     bool ok = false;

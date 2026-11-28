@@ -12,7 +12,7 @@
 # built with GCC -- and no build ever compiled that combination, so a
 # `std::pair<std::string, value>` inside `value` (0.19.1) failed only there:
 # every build passed and every build program in an editor showed a module that
-# was "not found". docs/plugin-development.md §4 states the rule this enforces.
+# was "not found". docs/01-plugin-development.md §4 states the rule this enforces.
 #
 # Environment: MCPP (llvm); MCPP_EDITOR and MCPPLS (editor).
 set -euo pipefail

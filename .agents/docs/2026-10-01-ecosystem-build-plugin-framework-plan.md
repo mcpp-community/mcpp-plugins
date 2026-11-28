@@ -216,8 +216,8 @@ sha256 `40b9fa16be5628a5d277824f961faa33dadbf84d9520cff9fe2aeb9b0b217ebf`(下载
 
 ## 4.1 面向两类读者的参考文档（2026-10-02 追加）
 
-`docs/tool-sources.md`(372 行,README 与 plugin-development.md 各有入口)。写它的理由是:
-机制此前在三处分别被记下——引擎的键在 mcpp docs/23、模块的接口在 plugin-development.md、
+`docs/02-tool-sources.md`(372 行,README 与 01-plugin-development.md 各有入口)。写它的理由是:
+机制此前在三处分别被记下——引擎的键在 mcpp docs/23、模块的接口在 01-plugin-development.md、
 每个成员的选项在各自页面——而**没有一处说出必须同时成立的那两半**:
 `build.mcpp` 里的 `tool::choice` 只有在插件把该载荷声明为 `provision = "on-request"` 时才等于
 「不下载」,因为 eager 的载荷在任何构建程序运行之前就已供给。这正是 mcpp#755 的原始症状,
@@ -291,7 +291,7 @@ framework-lab 的 8 个用例在 ubuntu-24.04、macos-15、windows-2022 上全�
 | 用户体验 | 每个显式来源一行,带类与 `file:line`;每条拒绝都列出命名它的四种方式;`considered` 记下每一层问过什么、答了什么 |
 | 兼容性 | **未迁移的第三方插件无需改动即受益**(覆盖发生在引擎层,`xpkg_dir` 直接回答);成员的历史环境变量保留;地板不满足时的拒绝现在会点名地板与升级方式(第 7 处发现) |
 | 跨平台 | Linux / macOS / Windows 全绿。跨平台本身贡献了 5 处发现:响应文件的两种 tokenize 语法、Darwin 的 `environ`、宿主自己补的 `.exe` 后缀、Apple 链接形状拿不到 `--ld-path`、gcc 16 的 `always_inline` 拒绝 |
-| 一致性 | 优先级只写两份(核心、L2);中英文档结构一一对应;`docs/tool-sources.md` 补上了此前三处分散记述都没说出的那一对条件 |
+| 一致性 | 优先级只写两份(核心、L2);中英文档结构一一对应;`docs/02-tool-sources.md` 补上了此前三处分散记述都没说出的那一对条件 |
 | 无感升级 | 不写任何新键的工程行为与输出不变,由既有 e2e 与 framework-lab 的 `default` 用例断言;插件 0.19.0 的成员在默认路径上下载与输出不变 |
 | 测试覆盖 | 单测 144(新增 21);e2e 873-877 加 875 里 gcc 拒绝的反例;`plugin-logic` 29 例;framework-lab 10 例 × 3 平台;toolchain-lab 8 例 × 3 平台;CI 判据读 `resolution.json`,所以在已装载荷的 runner 上也能断言「这次没要求它」 |
 

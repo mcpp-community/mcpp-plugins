@@ -98,7 +98,7 @@ sources = ["src/declare.cppm", "src/toolset.cppm", "src/fs.cppm", "src/tool.cppm
 # The operating system of every member: the programs a member asks for a fact
 # (`mcpp.plugins.tool::capture`), the libraries it opens and the platform it
 # builds on, through mcpplibs.os. No unit includes a system header (0.21.0,
-# docs/plugin-development.md §4). 0.4.5 (0.26.1) accepts openkal 0.24 to 0.26,
+# docs/01-plugin-development.md §4). 0.4.5 (0.26.1) accepts openkal 0.24 to 0.26,
 # so a graph whose openkal is 0.26 (openkal-platform 0.31's version group) holds
 # the plugins, and its start is bounded by the environment alone (mcpp#958);
 # 0.4.4 (0.22.1) accepted 0.24 and 0.25, and 0.4.0 named openkal 0.24.0 alone.
@@ -225,8 +225,8 @@ device_extensions = [".ui", ".qrc", ".ts"]
 # WHERE QT COMES FROM IS THE PROJECT'S CHOICE, not a feature: `rules-qt` finds
 # the SDK from `options::root`, `QT_ROOT_DIR`, or a Qt payload the project
 # declares in its own `[xlings]` table at the version it chooses
-# (docs/rules-qt.md). A feature states a mechanism and the tools that mechanism
-# runs, never a library the program links (docs/plugin-development.md). 0.15.0
+# (docs/11-rules-qt.md). A feature states a mechanism and the tools that mechanism
+# runs, never a library the program links (docs/01-plugin-development.md). 0.15.0
 # removed `rules-qt-xim`, `rules-qt-xim-base` and `rules-qt-xim-addons`.
 
 # NOT device rules: these embed or declare things a project already has, so they

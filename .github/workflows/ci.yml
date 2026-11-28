@@ -89,7 +89,7 @@ env:
   # when the action runs, which a subproject that links an executable or a
   # shared library needs. The package floor stays 2026.10.30.1: every other
   # member, and a cross subproject that only builds archives, works on the
-  # older engine, and docs/deps.md states the requirement where cross builds
+  # older engine, and docs/40-deps.md states the requirement where cross builds
   # are described. So here, as for 0.20.0's SYCL lane, `MCPP_VERSION` is the
   # newest engine a lane needs and the floor the oldest the collection loads on.
   #
@@ -236,7 +236,7 @@ jobs:
           fi
           echo "ok: one version, two files agreeing"
 
-      # NO HEADER AND NO PREPROCESSOR BRANCH (0.21.0, docs/plugin-development.md
+      # NO HEADER AND NO PREPROCESSOR BRANCH (0.21.0, docs/01-plugin-development.md
       # §4): the operating system is mcpplibs.os's, the C library std's, and a
       # platform difference of the building machine is `if constexpr`.
       - name: no unit includes a header or branches in the preprocessor
@@ -1926,7 +1926,7 @@ jobs:
   # `std::pair<std::string, value>` that only the last one rejects, so every
   # build passed while every build program showed a missing module in the
   # editor. `.github/scripts/check-toolchain-lanes.sh` states what each lane
-  # runs; docs/plugin-development.md §4 states the rule.
+  # runs; docs/01-plugin-development.md §4 states the rule.
   toolchain-llvm:
     name: llvm (linux x86_64, clang + libc++)
     runs-on: ubuntu-24.04
