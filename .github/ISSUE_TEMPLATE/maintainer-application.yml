@@ -1,0 +1,53 @@
+name: Member maintainer application
+description: Apply to maintain one or more members of mcpp-plugins
+labels: ["maintainer-application"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for wanting to take a member's maintainership.
+
+        A maintainer knows the member deeply and its application domain, and
+        leads its popularization and ecosystem building — technical articles,
+        videos, tutorials. Development plus outreach is the core of the role.
+
+        Starting simple is fine: the expected path is use it, introduce and
+        teach it, report issues, fix bugs, improve it — and then take one.
+  - type: input
+    id: members
+    attributes:
+      label: Member or members you apply for
+      placeholder: "rules-cuda, rules-sycl"
+    validations:
+      required: true
+  - type: textarea
+    id: familiarity
+    attributes:
+      label: Your familiarity with the member and its domain
+      description: What you build with it, the related field you work in, how long you have used it.
+    validations:
+      required: true
+  - type: textarea
+    id: contributions
+    attributes:
+      label: Contributions so far
+      description: Issues, fixes, improvements, documentation or tutorials — links welcome. A short history is fine; everyone starts there.
+  - type: textarea
+    id: maintenance-plan
+    attributes:
+      label: Maintenance plan
+      description: The daily upkeep you commit to — issue triage, fixes, fixture and CI care across the platforms the member claims.
+    validations:
+      required: true
+  - type: textarea
+    id: outreach-plan
+    attributes:
+      label: Popularization and outreach plan
+      description: The articles, videos, tutorials or examples you plan to write, and where you will publish them.
+    validations:
+      required: true
+  - type: textarea
+    id: where-to-find-you
+    attributes:
+      label: Where to find you
+      description: GitHub, blog, channel — anywhere your work and teaching live.

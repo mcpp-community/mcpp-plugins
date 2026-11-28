@@ -53,59 +53,69 @@ runs comes from is in [docs/02](docs/02-tool-sources.md).
 
 ## Plugins
 
-| feature | what it does | doc | maintainer |
-|---|---|---|---|
-| `rules-cuda` | Compiles CUDA (`*.cu`) through clang with an LLVM toolchain or nvcc with a GCC one. | [docs](docs/10-rules.md#rules-cuda) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-sycl` | Compiles SYCL (`*.sycl`) with DPC++. | [docs](docs/10-rules.md#rules-sycl) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-spirv` | Compiles GLSL and HLSL shader stages to SPIR-V and embeds or places the result. | [docs](docs/10-rules.md#rules-spirv) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-qt` | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [docs](docs/11-rules-qt.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `deps-vcpkg` | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [docs](docs/40-deps.md#deps-vcpkg) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-apk` | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [docs](docs/32-dist-apk.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
+| feature | what it does | doc |
+|---|---|---|
+| `rules-cuda` | Compiles CUDA (`*.cu`) through clang with an LLVM toolchain or nvcc with a GCC one. | [docs](docs/10-rules.md#rules-cuda) |
+| `rules-sycl` | Compiles SYCL (`*.sycl`) with DPC++. | [docs](docs/10-rules.md#rules-sycl) |
+| `rules-spirv` | Compiles GLSL and HLSL shader stages to SPIR-V and embeds or places the result. | [docs](docs/10-rules.md#rules-spirv) |
+| `rules-qt` | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [docs](docs/11-rules-qt.md) |
+| `deps-vcpkg` | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [docs](docs/40-deps.md#deps-vcpkg) |
+| `dist-apk` | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [docs](docs/32-dist-apk.md) |
 
 <details>
-<summary><b>All 23 members</b> — feature, behaviour, doc, maintainer; the modules and engine floors are in the <a href="docs/README.md#the-members">documentation index</a></summary>
+<summary><b>All 23 members</b> — feature, behaviour, doc; the modules and engine floors are in the <a href="docs/README.md#the-members">documentation index</a></summary>
 
-| feature | what it does | doc | maintainer |
-|---|---|---|---|
-| `rules-ascendc` | Compiles Ascend C (`*.asc`) with BiSheng in mixed mode, so the object joins the ordinary link. | [docs](docs/10-rules.md#rules-ascendc) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-cuda` | Compiles CUDA (`*.cu`) through clang with an LLVM toolchain or nvcc with a GCC one. | [docs](docs/10-rules.md#rules-cuda) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-hip` | Compiles HIP (`*.hip`) with the project's clang on the NVIDIA platform. | [docs](docs/10-rules.md#rules-hip) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-metal` | Compiles `.metal` shaders into Metal libraries with the host's Xcode and deploys them beside the program. | [docs](docs/10-rules.md#rules-metal) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-qt` | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [docs](docs/11-rules-qt.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-qml` | Builds a QML application: each module's `moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc` and `qsb` chain as actions, Qt's QML modules the program imports placed beside it, and a `qt.conf`. Implies `rules-qt`. | [docs](docs/12-rules-qml.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-slang` | Compiles Slang (`*.slang`) and embeds or places the result. | [docs](docs/10-rules.md#rules-slang) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-spirv` | Compiles GLSL and HLSL shader stages to SPIR-V and embeds or places the result. | [docs](docs/10-rules.md#rules-spirv) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-swift` | Compiles a package's `.swift` sources into one module the C and C++ sources call. | [docs](docs/10-rules.md#rules-swift) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `rules-sycl` | Compiles SYCL (`*.sycl`) with DPC++. | [docs](docs/10-rules.md#rules-sycl) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `tools-embed` | Writes a data file into a header the program compiles in. | [docs](docs/20-tools-embed.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `tools-island` | Generates the `extern "C"` boundary and the C++ module of a code island. | [docs](docs/21-tools-island.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `tools-steps` | Describes an action whose work is more than one command as portable operations a backend runs; implied by `dist-apk` and `dist-apple`. | [docs](docs/22-tools-steps.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-appimage` | Turns the tree `mcpp pack` stages into an AppImage (Linux). | [docs](docs/30-dist.md#dist-appimage) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-deb` | Installs the staged tree under `/opt/<name>` with a launcher, a desktop entry and an icon, as a Debian package (Linux targets). | [docs](docs/30-dist.md#dist-deb-and-dist-rpm) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-rpm` | The same installation as an RPM package (Linux targets). | [docs](docs/30-dist.md#dist-deb-and-dist-rpm) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-wix` | Builds an MSI of the staged tree, and a Burn bundle chaining it (Windows). | [docs](docs/30-dist.md#dist-wix) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-apple` | Lays out a macOS or iOS application bundle, signs it and writes a disk image. | [docs](docs/31-dist-apple.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-web` | Copies a `wasm32-emscripten` program and its files into a web directory with an `index.html`. | [docs](docs/30-dist.md#dist-web) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `dist-apk` | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [docs](docs/32-dist-apk.md) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `deps-vcpkg` | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [docs](docs/40-deps.md#deps-vcpkg) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `deps-cmake` | Builds and installs a CMake subproject as an action with Ninja and the toolset mcpp resolved, and maps the prefix into the build. | [docs](docs/40-deps.md#deps-cmake) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
-| `deps-archive` | Extracts a zip archive the project keeps and places its tree beside the program. | [docs](docs/40-deps.md#deps-archive) | [@Sunrisepeak](https://github.com/Sunrisepeak) |
+| feature | what it does | doc |
+|---|---|---|
+| `rules-ascendc` | Compiles Ascend C (`*.asc`) with BiSheng in mixed mode, so the object joins the ordinary link. | [docs](docs/10-rules.md#rules-ascendc) |
+| `rules-cuda` | Compiles CUDA (`*.cu`) through clang with an LLVM toolchain or nvcc with a GCC one. | [docs](docs/10-rules.md#rules-cuda) |
+| `rules-hip` | Compiles HIP (`*.hip`) with the project's clang on the NVIDIA platform. | [docs](docs/10-rules.md#rules-hip) |
+| `rules-metal` | Compiles `.metal` shaders into Metal libraries with the host's Xcode and deploys them beside the program. | [docs](docs/10-rules.md#rules-metal) |
+| `rules-qt` | Runs `moc`, `uic`, `rcc` and Qt's Linguist tools as actions, links the Qt modules and places their runtime. | [docs](docs/11-rules-qt.md) | 
+| `rules-qml` | Builds a QML application: each module's `moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc` and `qsb` chain as actions, Qt's QML modules the program imports placed beside it, and a `qt.conf`. Implies `rules-qt`. | [docs](docs/12-rules-qml.md) |
+| `rules-slang` | Compiles Slang (`*.slang`) and embeds or places the result. | [docs](docs/10-rules.md#rules-slang) |
+| `rules-spirv` | Compiles GLSL and HLSL shader stages to SPIR-V and embeds or places the result. | [docs](docs/10-rules.md#rules-spirv) |
+| `rules-swift` | Compiles a package's `.swift` sources into one module the C and C++ sources call. | [docs](docs/10-rules.md#rules-swift) |
+| `rules-sycl` | Compiles SYCL (`*.sycl`) with DPC++. | [docs](docs/10-rules.md#rules-sycl) |
+| `tools-embed` | Writes a data file into a header the program compiles in. | [docs](docs/20-tools-embed.md) |
+| `tools-island` | Generates the `extern "C"` boundary and the C++ module of a code island. | [docs](docs/21-tools-island.md) |
+| `tools-steps` | Describes an action whose work is more than one command as portable operations a backend runs; implied by `dist-apk` and `dist-apple`. | [docs](docs/22-tools-steps.md) |
+| `dist-appimage` | Turns the tree `mcpp pack` stages into an AppImage (Linux). | [docs](docs/30-dist.md#dist-appimage) |
+| `dist-deb` | Installs the staged tree under `/opt/<name>` with a launcher, a desktop entry and an icon, as a Debian package (Linux targets). | [docs](docs/30-dist.md#dist-deb-and-dist-rpm) |
+| `dist-rpm` | The same installation as an RPM package (Linux targets). | [docs](docs/30-dist.md#dist-deb-and-dist-rpm) |
+| `dist-wix` | Builds an MSI of the staged tree, and a Burn bundle chaining it (Windows). | [docs](docs/30-dist.md#dist-wix) |
+| `dist-apple` | Lays out a macOS or iOS application bundle, signs it and writes a disk image. | [docs](docs/31-dist-apple.md) |
+| `dist-web` | Copies a `wasm32-emscripten` program and its files into a web directory with an `index.html`. | [docs](docs/30-dist.md#dist-web) |
+| `dist-apk` | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [docs](docs/32-dist-apk.md) |
+| `deps-vcpkg` | Installs a `vcpkg.json` manifest as an action with the toolset mcpp resolved, and maps the prefix into the build. | [docs](docs/40-deps.md#deps-vcpkg) |
+| `deps-cmake` | Builds and installs a CMake subproject as an action with Ninja and the toolset mcpp resolved, and maps the prefix into the build. | [docs](docs/40-deps.md#deps-cmake) |
+| `deps-archive` | Extracts a zip archive the project keeps and places its tree beside the program. | [docs](docs/40-deps.md#deps-archive) |
 
 </details>
 
 ## Contributing and maintenance
 
-1. **Submit a plugin** — a plugin ships in its own package
-   (`mcpp.<namespace>.*`); one accepted into this repository follows the
-   [new-member checklist](docs/01-plugin-development.md#5-a-new-plugin) and
-   the conventions in [docs/01](docs/01-plugin-development.md), and its
-   original author becomes the member's maintainer.
-2. **Maintain and improve** — bug fixes and improvement suggestions go
-   through pull requests; every documented behaviour has a CI criterion
-   ([docs/01 §2](docs/01-plugin-development.md#2-rules)).
-3. **Become a member's maintainer** — the ladder is submit, then maintain,
-   then take one: a maintainer carries a member's daily upkeep and its
-   teaching ([docs/](docs/README.md)), and should know the member's domain.
-   [@Sunrisepeak](https://github.com/Sunrisepeak) maintains the repository as
-   a whole, and some standalone members are looking for theirs — say so in an
-   issue.
+The repository and, today, every member are maintained by
+[@Sunrisepeak](https://github.com/Sunrisepeak) — and more developers are
+welcome: to contribute, to maintain, and to carry a member's tutorials and
+outreach. Start from the simple and from what interests you, learn the member
+as you go, and grow along the path:
+
+**use it → introduce and teach it → report issues → fix bugs → improve it →
+maintain one or more members**
+
+A member's maintainer knows the member deeply and its application domain, and
+leads its popularization and ecosystem building — technical articles, videos,
+tutorials. Development plus outreach is the core of the role. Submitting a
+plugin follows the [new-member
+checklist](docs/01-plugin-development.md#5-a-new-plugin), and its original
+author becomes the member's maintainer. Ready to take a member's
+maintainership — or to start with bug fixes and improvements? Open it as an
+issue; applications go through the [maintainer-application
+template](.github/ISSUE_TEMPLATE/maintainer-application.yml).
+
+## Maintainers
+
+| maintainer | members primarily maintained |
+|---|---|
+| [@Sunrisepeak](https://github.com/Sunrisepeak) | the repository, and today every member |
