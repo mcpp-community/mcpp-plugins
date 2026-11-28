@@ -9,7 +9,14 @@ body:
         declared inputs and outputs, or a prefix or SDK mapped into the build.
         The conventions and the checklist a plugin follows:
         [docs/01 — Plugin Development, §5](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/01-plugin-development.md#5-a-new-plugin).
-        The path this issue takes depends on the stage below.
+
+        What this repository takes: plugins that are general, or that drive a
+        widely used project — see
+        [docs/03](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/03-maintainers.md#which-plugins-this-repository-takes).
+        A build plugin specific to one project ships beside that project and
+        is published to mcpp-index on its own
+        ([slint-m](https://github.com/mcpplibs/slint-m) is the example). The
+        path this issue takes depends on the stage below.
 
         The original author of a plugin accepted into this repository becomes
         the plugin's maintainer
