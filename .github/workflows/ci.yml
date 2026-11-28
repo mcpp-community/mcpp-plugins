@@ -228,10 +228,10 @@ jobs:
       - name: the collection states its own version
         run: |
           declared=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' mcpp.toml | head -1)
-          insource=$(sed -n 's/.*version *= *"\(.*\)";.*/\1/p' src/plugins.cppm | head -1)
-          echo "mcpp.toml=$declared  src/plugins.cppm=$insource"
+          insource=$(sed -n 's/.*version *= *"\(.*\)";.*/\1/p' src/plugins/plugins.cppm | head -1)
+          echo "mcpp.toml=$declared  src/plugins/plugins.cppm=$insource"
           if [ "$declared" != "$insource" ]; then
-            echo "FAIL: mcpp.toml says '$declared' and src/plugins.cppm says '$insource'"
+            echo "FAIL: mcpp.toml says '$declared' and src/plugins/plugins.cppm says '$insource'"
             exit 1
           fi
           echo "ok: one version, two files agreeing"
@@ -266,8 +266,8 @@ jobs:
             echo "FAIL: a rule or tool defines its own copy of the derivation"
             grep -n '^inline std::vector<std::string> namespace_of\|^inline std::string common_base_dir' rules/*.cppm tools/*.cppm
             exit 1; }
-          grep -q '^inline std::vector<std::string> namespace_of' src/plugins.cppm
-          grep -q '^inline std::string common_base_dir' src/plugins.cppm
+          grep -q '^inline std::vector<std::string> namespace_of' src/plugins/names.cppm
+          grep -q '^inline std::string common_base_dir' src/plugins/names.cppm
           echo "ok: one definition, in the lib root, for both lanes"
 
       - name: rules-spirv through a consumer
@@ -2547,7 +2547,7 @@ jobs:
 
           # FLAT, NOT Contents/-SHAPED -- the one difference from the macOS
           # bundle above, and the whole reason iOS needed its own branch in
-          # `dist/apple.cppm`.
+          # `dist/apple/apple.cppm`.
           if [ -d "$app/Contents" ]; then
             echo "FAIL: the simulator bundle carries Contents/ -- not a flat iOS layout"
             exit 1

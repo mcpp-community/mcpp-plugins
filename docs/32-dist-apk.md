@@ -52,7 +52,7 @@ Commit the lock. Nothing is shrunk or obfuscated, and an archive's ProGuard
 rules are ignored.
 
 **The manifest merge is a stated subset of the Android Gradle plugin's
-merger** (`merge_manifests` in `dist/apk.cppm`):
+merger** (`merge_manifests` in `dist/apk/internal/manifest.cppm`):
 
 - An element is added when the application has none of the same kind and
   `android:name`. This covers the children of `<manifest>`

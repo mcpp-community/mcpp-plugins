@@ -105,9 +105,8 @@ mcpp 2026.11.7.1 或更高,交叉配置需要 CMake 3.19 或更高。
 
 ```
 mcpp.toml            这个包:每个成员一个 feature
-src/plugins.cppm     export module mcpp.plugins;  版本、mcpp::plugins::surface
-                     (消费者点名的声明)、mcpp::plugins::xml 与
-                     mcpp::plugins::package(暂存包的元数据)
+src/plugins/         库根:export module mcpp.plugins(版本、mcpp::plugins::surface、
+                     mcpp::plugins::xml、mcpp::plugins::package),分区单元在其旁
 src/declare.cppm,    构建程序的通用库(`plugins-core`):
 src/toolset.cppm,    mcpp.plugins.declare、mcpp.plugins.toolset、mcpp.plugins.fs
 src/fs.cppm

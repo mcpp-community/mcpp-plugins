@@ -111,9 +111,9 @@ are in [docs/01 §3](docs/01-plugin-development.md#3-layers-names-and-the-engine
 
 ```
 mcpp.toml            the package: one feature per member
-src/plugins.cppm     export module mcpp.plugins;  the version, mcpp::plugins::surface
-                     (the declarations a consumer names), mcpp::plugins::xml and
-                     mcpp::plugins::package (a staged package's metadata)
+src/plugins/         the lib root: export module mcpp.plugins (the version,
+                     mcpp::plugins::surface, mcpp::plugins::xml,
+                     mcpp::plugins::package), its partitions beside it
 src/declare.cppm,    the general library for build programs (`plugins-core`):
 src/toolset.cppm,    mcpp.plugins.declare, mcpp.plugins.toolset, mcpp.plugins.fs
 src/fs.cppm
