@@ -110,4 +110,4 @@ them, maintain one or more of them:
 | maintainer | plugins primarily maintained |
 |---|---|
 | [@Sunrisepeak](https://github.com/Sunrisepeak) | primary maintainer of the project |
-| apply to become a maintainer | [docs/03 — Maintainers](docs/03-maintainers.md) — which plugins the repository takes, what the role is, how to apply |
+| [apply to become a maintainer](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml) | [which plugins the repository takes, what the role is, and how to apply](docs/03-maintainers.md) |

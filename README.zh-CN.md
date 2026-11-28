@@ -105,4 +105,4 @@ bug、优化改进、维护一个或多个插件:
 | 维护者 | 主要负责的插件成员 |
 |---|---|
 | [Sunrisepeak](https://github.com/Sunrisepeak) | 项目主要负责人 |
-| 申请成为维护者 | [docs/03 — 维护者](docs/03-maintainers.md)——收录标准、职责与申请方式 |
+| [申请成为维护者](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml) | [收录标准、职责与申请方式](docs/03-maintainers.md) |
