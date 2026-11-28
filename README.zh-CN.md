@@ -98,8 +98,8 @@ int main() {
 
 如果你对某些插件感兴趣,并期望参与贡献和维护:
 
-- [提出或提交一个新插件](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)——[新插件成员清单](docs/01-plugin-development.md#5-a-new-plugin)
-- [申请维护一个插件成员](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml)——[维护者做什么](docs/03-maintainers.md)
+- [提出或提交一个新插件](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)
+- [申请维护一个插件成员](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml)
 
 ## 维护者
 

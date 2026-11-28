@@ -6,13 +6,14 @@ body:
     attributes:
       value: |
         A plugin is a mechanism: one kind of input turned into actions with
-        declared inputs and outputs, or a prefix or SDK mapped into the build
-        ([docs/01](../../docs/01-plugin-development.md)). The path this issue
-        takes depends on the stage below.
+        declared inputs and outputs, or a prefix or SDK mapped into the build.
+        The conventions and the checklist a plugin follows:
+        [docs/01 — Plugin Development, §5](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/01-plugin-development.md#5-a-new-plugin).
+        The path this issue takes depends on the stage below.
 
         The original author of a plugin accepted into this repository becomes
         the plugin's maintainer
-        ([what a maintainer does](../../docs/03-maintainers.md)).
+        ([what a maintainer does](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/03-maintainers.md)).
   - type: dropdown
     id: stage
     attributes:
@@ -34,7 +35,7 @@ body:
     id: mechanism
     attributes:
       label: Mechanism, tools and floor
-      description: What one kind of input it turns into what; the tools it drives; the engine floor it needs ([docs/02](../../docs/02-tool-sources.md) states how a plugin resolves a tool).
+      description: What one kind of input it turns into what; the tools it drives; the engine floor it needs ([docs/02 — Where a Tool Comes From](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/02-tool-sources.md) states how a plugin resolves a tool).
     validations:
       required: true
   - type: textarea

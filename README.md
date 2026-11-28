@@ -103,8 +103,8 @@ improve it, maintain one or more plugins.
 
 If you are interested in contributing to and maintaining some plugins:
 
-- [propose or submit a new plugin](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml) — [the checklist a plugin follows](docs/01-plugin-development.md#5-a-new-plugin)
-- [apply to maintain one](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml) — [what a maintainer does](docs/03-maintainers.md)
+- [propose or submit a new plugin](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)
+- [apply to maintain one](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml)
 
 ## Maintainers
 
