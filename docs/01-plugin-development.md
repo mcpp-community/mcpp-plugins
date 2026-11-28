@@ -65,19 +65,19 @@ speaks protocol 17 (the platform's directives and the `platform` phase, mcpp
 SPEC-013) and writes `mcpp-package.json` beside every staged tree (SPEC-014);
 it carries protocol 15, which states where each tool and payload comes from.
 
-**Where a member's tool comes from.** A member that runs a program resolves it
-through `mcpp.plugins.tool`, which answers in one order for every member:
+**Where a plugin's tool comes from.** A plugin that runs a program resolves it
+through `mcpp.plugins.tool`, which answers in one order for every plugin:
 
 1. the build program's own choice — `o.cmake = "/usr/bin/cmake"`, or
    `tool::root(dir)`, `tool::on_path()`;
-2. the variable that member has always read (`MCPP_SLANGC`), kept for the
+2. the variable that plugin has always read (`MCPP_SLANGC`), kept for the
    projects that write it;
 3. the engine's override (`[xlings.overrides]`, `MCPP_XLINGS_OVERRIDE_*`,
    `config.toml`) — the payload is then not installed at all;
 4. the declared payload, asked for here when it is declared
    `provision = "on-request"`.
 
-A member writes one `tool::spec` per tool (the package, the program names, the
+A plugin writes one `tool::spec` per tool (the package, the program names, the
 directories under a root, the option's name, a legacy variable) and calls
 `resolve`:
 
@@ -102,7 +102,7 @@ build reports.
 
 A choice alone does not prevent a download: an eagerly declared payload is
 provisioned before any build program runs. The pair that makes "named here, not
-downloaded" true, the scenarios on both sides of it, and how each official member
+downloaded" true, the scenarios on both sides of it, and how each official plugin
 declares its tools are in [02-tool-sources.md](02-tool-sources.md).
 
 **Stating the build toolchain.** `mcpp.plugins.toolchain` (feature
@@ -195,19 +195,19 @@ A plugin is C++23 that three combinations of compiler and standard library accep
 | clang (LLVM 22) with libc++ | `mcpp build --toolchain llvm@22.1.8` on Linux, and every build on macOS | `toolchain-llvm`, `rules-cross-platform` |
 | clang with libstdc++'s `std` module | an editor's clangd (mcppls) reading a project built with GCC | `toolchain-editor` |
 
-MSVC is a fourth for the members that claim Windows, checked by `rules-cross-platform` and `deps-managed-msvc`. The third combination is never used by a build, so only the editor lane sees what it rejects; it runs `mcppls diagnostics build.mcpp` on every fixture and fails on any error.
+MSVC is a fourth for the plugins that claim Windows, checked by `rules-cross-platform` and `deps-managed-msvc`. The third combination is never used by a build, so only the editor lane sees what it rejects; it runs `mcppls diagnostics build.mcpp` on every fixture and fails on any error.
 
 Known differences, each one met in this package:
 
 - **A type that holds a container of itself does not use `std::pair` or `std::tuple` for the element.** Under clang with libstdc++'s `std` module, `std::vector<std::pair<std::string, value>>` inside `value` instantiates the pair while `value` is incomplete and fails with "incomplete type used in type trait expression"; GCC and clang with libc++ accept it. The element is a plain struct, and a member function that walks the container is defined after both types are complete (`mcpp::plugins::json::member`, 0.19.1).
 - **No compiler's leniency is relied on.** An extension, a missing `typename`, or a template accepted only because one compiler instantiates it later is a failure in another lane.
 - **A build program does not use `std::println`.** On macOS 14 the build program links the system libc++, which lacks a symbol it needs; `std::format` into a string and `std::cout` work everywhere.
-- **No unit includes a header or branches on the platform in the preprocessor.** The C library comes from `std`, which exports the functions and types of ISO C (`std::isalnum`, `std::getenv`, `std::FILE`) but no macro; a macro of ISO C (`stdout`, `errno`, `SEEK_SET`) comes from `mcpplibs.mwrap.libc` under its own name (`mcpplibs::mwrap::libc::macros::stdout()`). The operating system comes from `mcpplibs.os`: a program a member asks for a fact runs through `mcpp::plugins::tool::capture` (its arguments as a vector, no shell, so nothing is quoted and no null device is named), a library opens through `mcpplibs::os::library::open`, and a child's environment is stated in its spawn options rather than written into this process's. A build program runs on the machine that builds, so a platform difference is a compile-time question of that machine: `if constexpr (mcpplibs::os::is_windows)`. CI refuses an `#include`, `#if` or `#ifdef` in a unit (0.21.0).
+- **No unit includes a header or branches on the platform in the preprocessor.** The C library comes from `std`, which exports the functions and types of ISO C (`std::isalnum`, `std::getenv`, `std::FILE`) but no macro; a macro of ISO C (`stdout`, `errno`, `SEEK_SET`) comes from `mcpplibs.mwrap.libc` under its own name (`mcpplibs::mwrap::libc::macros::stdout()`). The operating system comes from `mcpplibs.os`: a program a plugin asks for a fact runs through `mcpp::plugins::tool::capture` (its arguments as a vector, no shell, so nothing is quoted and no null device is named), a library opens through `mcpplibs::os::library::open`, and a child's environment is stated in its spawn options rather than written into this process's. A build program runs on the machine that builds, so a platform difference is a compile-time question of that machine: `if constexpr (mcpplibs::os::is_windows)`. CI refuses an `#include`, `#if` or `#ifdef` in a unit (0.21.0).
 - **A function that reaches mcpplibs.os is not `inline`.** A rule's helper that runs a program (`mcpp::plugins::tool::capture`) or opens a library is defined without `inline`, so it is compiled once in its module and an importer sees its declaration only. Under GCC 16 an importer that reads such a body from an inline function fails: "failed to read compiled module cluster: Bad file data", or an unresolved `std::optional<std::vector<grant>>` at the link (`tests/metal-consumer`, 0.21.0).
 - **A module does not instantiate `std::filesystem::path`'s iterator.** Under MSVC 14.52 every importer that then touches `std::filesystem` fails inside the STL; `mcpp::plugins::names::components` splits a path as a string instead.
 
-**The private region of a unit.** A member's file, and each unit of a directory
-member, reads in three parts: the `export module` line with its imports, the
+**The private region of a unit.** A plugin's file, and each unit of a directory
+plugin, reads in three parts: the `export module` line with its imports, the
 interface its importers see, and, last, the unit's own private region. In a
 unit that is its module's only unit the private region is a private module
 fragment — `module :private;` — and the declarations and definitions after it
@@ -215,22 +215,22 @@ are the unit's own, never visible to an importer. A unit that shares its module
 with other units cannot carry a fragment: its private region is a
 `namespace detail` block, and the names a sibling unit imports stay outside it.
 
-The members this package ships today were written before the rule and are not
-migrated: a member adopts the fragment as it is touched — noted here as a
+The plugins this package ships today were written before the rule and are not
+migrated: a plugin adopts the fragment as it is touched — noted here as a
 TODO, not carried out wholesale.
 
 ## 5. A new plugin
 
 A plugin in this package consists of:
 - a module under `rules/`, `tools/`, `dist/` or `deps/` — one file
-  `<family>/<x>.cppm`, or a directory when the member outgrows one file:
+  `<family>/<x>.cppm`, or a directory when the plugin outgrows one file:
   `<family>/<x>/<x>.cppm` is the interface a consumer imports, and the units
   under `<family>/<x>/internal/` carry the machinery as modules named
   `mcpp.<family>.<x>.internal.<topic>`. The module name a consumer imports
   does not change, and the internals are not part of the contract (§2.5);
 - a feature in `mcpp.toml`;
 - a fixture under `tests/` that CI builds and asserts on;
-- a row in the README's member table with its mcpp floor;
+- a row in the README's plugin table with its mcpp floor;
 - a page under `docs/`;
 - a version bump.
 

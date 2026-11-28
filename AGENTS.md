@@ -1,7 +1,7 @@
 # AGENTS.md
 
 `mcpp-plugins` is the package of official build plugins for mcpp
-(`mcpp:plugins`). One member is one module — a single `.cppm`, or a directory
+(`mcpp:plugins`). One plugin is one module — a single `.cppm`, or a directory
 `<family>/<x>/` whose `<x>.cppm` keeps the module a consumer imports while
 `internal/` holds the machinery — one feature in `mcpp.toml`, one consumer
 under `tests/`, one page under `docs/`. This file states the rules that hold
@@ -13,14 +13,14 @@ the linked document holds.
 
 | Tree | States |
 |---|---|
-| [`docs/`](docs/README.md) | one page per member or family, and the plugin conventions ([01](docs/01-plugin-development.md)) |
+| [`docs/`](docs/README.md) | one page per plugin or family, and the plugin conventions ([01](docs/01-plugin-development.md)) |
 | [`README.zh-CN.md`](README.zh-CN.md) | the README in Chinese; English is the source of truth, and a lagging section is stated in its header |
-| [`mcpp.toml`](mcpp.toml) | the package: one feature per member, the declared payloads, the engine floor `[package] mcpp` |
-| [`tests/<member>/`](tests/) | one consumer project per member; CI builds each and asserts on its output |
+| [`mcpp.toml`](mcpp.toml) | the package: one feature per plugin, the declared payloads, the engine floor `[package] mcpp` |
+| [`tests/<plugin>/`](tests/) | one consumer project per plugin; CI builds each and asserts on its output |
 | [`tools/README.md`](tools/README.md) | the tools family's own account |
 | [`.agents/docs/`](.agents/docs/) | design records: the reasoning, the measurements, what was refuted |
 
-A change of behaviour updates the member's page and its consumer in the same
+A change of behaviour updates the plugin's page and its consumer in the same
 pull request.
 
 ## 2. Architecture
@@ -33,18 +33,18 @@ pull request.
   does itself; `dist-*` what comes out of the link, and in what form a user
   installs it; `deps-*` where a library comes from. The prefix is load-bearing
   ([00](docs/00-engine-and-rules.md)).
-- **Names are three segments.** `mcpp.<family>.<member>`; the second segments
+- **Names are three segments.** `mcpp.<family>.<plugin>`; the second segments
   `core`, `plugins`, `deps`, `rules`, `dist`, `tools` belong to the namespace,
   and a third-party plugin names its modules `mcpp.<its namespace>.*`
   ([01 §3](docs/01-plugin-development.md#3-layers-names-and-the-engine-floor)).
 - **Three layers, one way down.** The engine's `mcpp` (L1), the general library
-  `mcpp.plugins.*` (L2, feature `plugins-core`; every member implies it), the
-  members (L3). A layer imports only lower layers.
-- **Every member states an engine floor.** The collection's floor is
+  `mcpp.plugins.*` (L2, feature `plugins-core`; every plugin implies it), the
+  plugins (L3). A layer imports only lower layers.
+- **Every plugin states an engine floor.** The collection's floor is
   `[package] mcpp`; the index descriptor states the highest floor among the
-  members, so a project on an older engine is refused at resolution.
-- **A tool resolves in one order, for every member:** the build program's
-  choice, the member's legacy variable, the engine's override, the declared
+  plugins, so a project on an older engine is refused at resolution.
+- **A tool resolves in one order, for every plugin:** the build program's
+  choice, the plugin's legacy variable, the engine's override, the declared
   payload. A choice never asks for the payload — a build program that names its
   own tool must not trigger a download
   ([02](docs/02-tool-sources.md)).
@@ -55,7 +55,7 @@ pull request.
   includes a header or branches on the platform in the preprocessor.
 - The code compiles under the four lanes CI runs: GCC with libstdc++, clang
   with libc++, clang with libstdc++'s `std` module (an editor's clangd), and
-  MSVC where a member claims Windows. No compiler's leniency is relied on; the
+  MSVC where a plugin claims Windows. No compiler's leniency is relied on; the
   known differences and their workarounds are stated in
   [01 §4](docs/01-plugin-development.md#4-the-c-a-plugin-is-written-in).
 - A behaviour kept past the release that replaced it lives in `compat/`, one
@@ -68,8 +68,8 @@ pull request.
   pinned mcpp on the GCC lane (`consumers`), and adds `toolchain-llvm`,
   `toolchain-editor`, `rules-cross-platform` and `deps-managed-msvc`.
 - Every documented behaviour has a criterion: a CI check, on every platform the
-  member claims ([01 §2](docs/01-plugin-development.md#2-rules), rule 9).
-- A change to a member builds its fixture, not only the package.
+  plugin claims ([01 §2](docs/01-plugin-development.md#2-rules), rule 9).
+- A change to a plugin builds its fixture, not only the package.
 
 ## 5. Change workflow
 
@@ -80,7 +80,7 @@ pull request.
 - Review follows [`.github/CODEOWNERS`](.github/CODEOWNERS): the family rows
   route it; a change to the feature set or the engine floor in `mcpp.toml`
   needs the package owner.
-- Adding a member is the checklist in
+- Adding a plugin is the checklist in
   [01 §5](docs/01-plugin-development.md#5-a-new-plugin): a module file, a
   feature, a consumer, a table row with its floor, a page, a version bump.
 - A release changes the version in `mcpp.toml` and tags `v<version>`; the tag

@@ -1,6 +1,6 @@
 # Where a tool comes from
 
-A member that runs a program — cmake, vcpkg, glslangValidator, nvcc, appimagetool
+A plugin that runs a program — cmake, vcpkg, glslangValidator, nvcc, appimagetool
 — answers one question before it can plan anything: which program. This page is
 the account of that question for the three people it concerns: whoever writes a
 plugin, whoever designs one, and whoever uses one. It is written as scenarios,
@@ -16,7 +16,7 @@ own account is mcpp `docs/23-the-project-environment.md`; the design record is
 1. the build program's choice    o.cmake = "/usr/bin/cmake"
                                  o.cmake = tool::root("/opt/cmake")
                                  o.cmake = tool::on_path()
-2. the member's legacy variable  MCPP_SLANGC, MCPP_GLSLC (kept, never extended)
+2. the plugin's legacy variable  MCPP_SLANGC, MCPP_GLSLC (kept, never extended)
 3. the engine's override         [xlings.overrides] in the root or workspace manifest
                                  MCPP_XLINGS_OVERRIDE_<NS>_<NAME>
                                  ~/.mcpp/config.toml
@@ -38,7 +38,7 @@ machine. Every level names itself in the output, so an environment variable
 quietly displacing a project's decision is not possible.
 
 An override is read from the root manifest only — or the workspace manifest, when
-a member is built. A dependency that writes the table is refused and named:
+a plugin is built. A dependency that writes the table is refused and named:
 **which payloads a package needs is its own statement; where they come from is the
 project's.**
 
@@ -69,7 +69,7 @@ plugin declares, stated in the build program and nowhere else -- no
 
 ### 3.1 Four ways, each a whole build program
 
-Every example here is a complete `build.mcpp` that compiles. A member reads one
+Every example here is a complete `build.mcpp` that compiles. A plugin reads one
 option (section 3.6 is the index); what differs is what the project states.
 
 **A program this machine already has.** The plainest form: a string assigns to the
@@ -89,8 +89,8 @@ int main() {
 }
 ```
 
-**A tree, with the member looking inside it.** `tool::root` states a directory and
-lets the member apply its own layout: `deps-cmake` looks for `cmake` in `bin` and
+**A tree, with the plugin looking inside it.** `tool::root` states a directory and
+lets the plugin apply its own layout: `deps-cmake` looks for `cmake` in `bin` and
 in `CMake.app/Contents/bin`, `deps-vcpkg` directly under the root.
 
 ```cpp
@@ -109,7 +109,7 @@ int main() {
 }
 ```
 
-**Whatever is on PATH, as a stated choice.** A member never falls back to PATH on
+**Whatever is on PATH, as a stated choice.** A plugin never falls back to PATH on
 its own; `tool::on_path()` is how a project asks for that, so the log records that
 the build depends on the machine.
 
@@ -220,7 +220,7 @@ same two lines as the `getenv` pair, for a project that already enables
 
 ### 3.4 A stated choice that fails is not replaced
 
-The member
+The plugin
 refuses and names what it consulted, rather than falling back to the payload:
 
 ```
@@ -238,7 +238,7 @@ to answer from the output.
 
 `deps-vcpkg` declares its payload
 `provision = "on-request"`, so the choice is read before anything is provisioned.
-For a member whose payload is eager -- `rules-cuda`'s toolkit, which the plan
+For a plugin whose payload is eager -- `rules-cuda`'s toolkit, which the plan
 reads a version out of -- naming the tool in `build.mcpp` does not prevent the
 download, and `[xlings.overrides]` is the way out. Section 5.2 is the table.
 
@@ -264,10 +264,10 @@ a warm payload cache does not save this twice.
 
 ### 3.6 Which option, and what it looks for
 
-Each member names its tool through one option, and states where it looks under a
+Each plugin names its tool through one option, and states where it looks under a
 root. A path assigned as a string is taken as the program itself in every case.
 
-| member | option | program names | under a root it looks in | variable it still reads |
+| plugin | option | program names | under a root it looks in | variable it still reads |
 |---|---|---|---|---|
 | `deps-vcpkg` | `options::vcpkg` (and `options::vcpkg_root`) | `vcpkg` | the root itself | -- |
 | `deps-cmake`, `deps-archive` | `options::cmake` | `cmake` | `bin`, `CMake.app/Contents/bin` | -- |
@@ -282,7 +282,7 @@ root. A path assigned as a string is taken as the program itself in every case.
 | `dist-wix` | `options::tool` | `wix` | `tool/tools/net6.0/any` | -- |
 | `dist-apk` | `options::build_tools`, `options::platform`, `options::jdk`, `options::bundletool_dir`, `options::kotlin`, `options::coursier` | roots, no program | -- | -- |
 
-A member whose option names a **root rather than a program** -- `rules-qt`,
+A plugin whose option names a **root rather than a program** -- `rules-qt`,
 `rules-ascendc`, `dist-apk` -- takes `tool::root(...)` or a plain directory path,
 because what it needs is the tree, not one executable.
 
@@ -313,13 +313,13 @@ succeeded either way.
 plugins = { version = "0.19.0", features = ["deps-cmake"], host-module = true }
 ```
 
-The member resolves nothing stated, reaches the fourth level, finds `xim:cmake`
+The plugin resolves nothing stated, reaches the fourth level, finds `xim:cmake`
 declared on request and not installed, asks for it, and the engine installs it and
 runs the program again. The output is byte-for-byte what it was before this
 mechanism existed.
 
 One difference from 0.18.1: **a payload declared and not used is not installed.**
-A build that never reaches the member — because it compiles only its own modules,
+A build that never reaches the plugin — because it compiles only its own modules,
 or because `--format` took another branch — downloads nothing for it.
 
 ### 4.2 State it in the manifest instead of the build program
@@ -331,7 +331,7 @@ or because `--format` took another branch — downloads nothing for it.
 "xim:slang" = { program = "slangc", version = "2026.14.1" }     # checked against every requirement
 ```
 
-This path needs no support from the member: the engine removes the payload from
+This path needs no support from the plugin: the engine removes the payload from
 the provisioning set, `mcpp::xpkg_dir` answers the root the override implies, and
 `mcpp::xpkg_source` answers `override`. **A plugin that has not migrated to
 `mcpp.plugins.tool` benefits from it unchanged**, as long as it reads its
@@ -397,7 +397,7 @@ bootstrap = "llvm@22.1.8"                       # the one that compiles build pr
 
 ## 5. For whoever writes a plugin
 
-### 5.1 A member that runs a program
+### 5.1 A plugin that runs a program
 
 Three pieces, written once per tool:
 
@@ -407,7 +407,7 @@ struct options {
     mcpp::plugins::tool::choice cmake;
 };
 
-// 2. the spec: this member's own knowledge, and nothing else
+// 2. the spec: this plugin's own knowledge, and nothing else
 inline mcpp::plugins::tool::spec cmake_spec(std::string who) {
     return { .who = std::move(who), .package = "cmake", .programs = {"cmake"},
              .bin_dirs = {"bin", "CMake.app/Contents/bin"}, .option = "options::cmake" };
@@ -421,13 +421,13 @@ if (!t) { warn(mcpp::plugins::tool::describe_missing(cmake_spec("mcpp.deps.cmake
 run(t.program);
 ```
 
-`choice` is constructible from a string, so a member migrating from
+`choice` is constructible from a string, so a plugin migrating from
 `std::string` costs its users nothing: `o.cmake = "/usr/bin/cmake"` still
 compiles, and the line that wrote it reaches the build's output and
 `mcpp why tool cmake`.
 
 `describe_missing` is the one refusal text, and it lists every way to name the
-tool. A member does not write its own.
+tool. A plugin does not write its own.
 
 ### 5.2 The pair that makes "named here, not downloaded" true
 
@@ -446,7 +446,7 @@ The manifest half:
 
 So the author's decision is one question:
 
-| when the member needs the tool | how to declare it | after a user names their own |
+| when the plugin needs the tool | how to declare it | after a user names their own |
 |---|---|---|
 | while **planning** (it runs cmake, vcpkg, appimagetool, bundletool) | `provision = "on-request"` | nothing is downloaded |
 | **to plan at all** (it reads a version out of the toolkit's headers, an SDK file, an API level from a platform directory) | plainly, which is eager | still downloaded; the user skips it with `[xlings.overrides]` |
@@ -464,7 +464,7 @@ the build program would make them fail to plan.
 "xim:bundletool" = { version = "1.18.3", provision = "on-request" }
 ```
 
-The member requests it while planning a bundle, so an ordinary `--format apk`
+The plugin requests it while planning a bundle, so an ordinary `--format apk`
 build installs nothing for it. The engine installs every request of one
 invocation together and runs only the programs that asked; the asking run is
 discarded before its directives are applied, so there is no half-applied state.
@@ -484,7 +484,7 @@ in `rules-sycl` while it took the payload directory and appended
 the SYCL consumer failed with `ld.lld: error: unable to find library -lsycl`. The
 whole collection was audited for that swap.
 
-### 5.5 Keep the variable a member already read
+### 5.5 Keep the variable a plugin already read
 
 ```cpp
 .legacy_env = "MCPP_SLANGC"
@@ -494,16 +494,16 @@ It answers at the second level, before the engine's override. `rules-slang` also
 keeps its historical silent PATH fallback, with a warning that names the correct
 spelling (`options::compiler = tool::on_path()`) and the date it is removed.
 
-### 5.6 A member that only looks
+### 5.6 A plugin that only looks
 
-A member that reports what a machine has, rather than running it, passes
+A plugin that reports what a machine has, rather than running it, passes
 `.request = false`, so looking never pulls a payload down. `rules-qt` does this
 when it resolves an SDK root: it reports which of the three levels named one,
 and a report is not a reason to download anything.
 
 ### 5.7 Prove it, without installing anything
 
-`mcpp.plugins.testing` runs a member against a stated context and compares the
+`mcpp.plugins.testing` runs a plugin against a stated context and compares the
 directives it emitted:
 
 ```cpp
@@ -543,7 +543,7 @@ refused in a dependency.
 **One answer, recorded once.** An explicit source produces exactly one `Using`
 line, one entry in the `Finished` summary, one record in `resolution.json`, and
 one section of `mcpp why`. All four read the same `SourceDecision`, so three
-cannot agree while the fourth lags. A member contributes to it by calling
+cannot agree while the fourth lags. A plugin contributes to it by calling
 `resolve`, which states `mcpp:decision=`; it does not print its own.
 
 **The default stays the default.** The ecosystem's path is the one a project
@@ -566,9 +566,9 @@ tree that states it is refused where the declaration is read, because gcc select
 a linker by the name `ld` inside a `-B` directory and a stated tool that takes no
 part in the build is what this mechanism exists to prevent.
 
-## 7. Every official member that drives a tool, and how it declares it
+## 7. Every official plugin that drives a tool, and how it declares it
 
-| member | tool | declaration | reason |
+| plugin | tool | declaration | reason |
 |---|---|---|---|
 | `deps-vcpkg` | `xim:vcpkg` | on request | it runs vcpkg while planning |
 | `deps-cmake`, `deps-archive` | `xim:cmake` | on request | it runs cmake while planning |

@@ -1,12 +1,12 @@
 # `tools-steps`
 
-`mcpp.tools.steps` is how a member runs an action whose work is more than one command: the member describes the step as portable operations, and a backend runs it on every host, with no shell.
+`mcpp.tools.steps` is how a plugin runs an action whose work is more than one command: the plugin describes the step as portable operations, and a backend runs it on every host, with no shell.
 
 ## `tools-steps`
 
 Module `mcpp.tools.steps`; engine floor: 2026.10.1.3; implied by `dist-apk` and `dist-apple`.
 
-**Needs and behaviour.** A runner, resolved by the member with `runner_spec(<module>)` through `mcpp.plugins.tool`. Until mcpp runs step programs itself (mcpp-community/mcpp#955) the runner is `cmake` 3.31 or newer, which each member that runs steps declares on its own table as `"xim:cmake" = { version = ">=3.31", provision = "on-request" }`, so a plan that runs no step installs nothing. The operations run in order and the first that fails fails the step. `command` writes the program beside the path it is given only when its text changes, and returns the action's argument vector and the inputs it declares, the runner and the program, so a changed program or runner runs the action again and an unchanged one does not.
+**Needs and behaviour.** A runner, resolved by the plugin with `runner_spec(<module>)` through `mcpp.plugins.tool`. Until mcpp runs step programs itself (mcpp-community/mcpp#955) the runner is `cmake` 3.31 or newer, which each plugin that runs steps declares on its own table as `"xim:cmake" = { version = ">=3.31", provision = "on-request" }`, so a plan that runs no step installs nothing. The operations run in order and the first that fails fails the step. `command` writes the program beside the path it is given only when its text changes, and returns the action's argument vector and the inputs it declares, the runner and the program, so a changed program or runner runs the action again and an unchanged one does not.
 
 | operation of `program` | what it does when the step runs |
 |---|---|
@@ -19,4 +19,4 @@ Module `mcpp.tools.steps`; engine floor: 2026.10.1.3; implied by `dist-apk` and 
 
 Every value is taken verbatim, so a path keeps its spaces, semicolons and backslashes. A list is named by letters, digits and `_`, and starts empty. A pattern's wildcards (`*`, `?`, `[...]`) apply to its last component, and `recursive` matches it in every subdirectory.
 
-The backend is internal. Today it renders the program as a CMake script and the action runs `cmake -P` over it; when the engine runs step programs, `runner_spec` and `command` change and no member does. `cmake_backend::render` is exported so a test can read what a program becomes.
+The backend is internal. Today it renders the program as a CMake script and the action runs `cmake -P` over it; when the engine runs step programs, `runner_spec` and `command` change and no plugin does. `cmake_backend::render` is exported so a test can read what a program becomes.

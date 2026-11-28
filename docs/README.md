@@ -1,7 +1,7 @@
 # mcpp-plugins Documentation
 
-This tree is the manual for the members of `mcpp:plugins` and for the
-conventions a build plugin follows. Each page states what a member does, how a
+This tree is the manual for the plugins of `mcpp:plugins` and for the
+conventions a build plugin follows. Each page states what a plugin does, how a
 consumer writes it, and what its current limits are. The reasoning behind a
 design, and what was measured and refuted on the way, lives in the dated
 records under [`../.agents/docs/`](../.agents/docs/) — a page cites no record.
@@ -10,13 +10,13 @@ records under [`../.agents/docs/`](../.agents/docs/) — a page cites no record.
 
 | To | Read |
 |---|---|
-| use a member | its page below, and the [quick start](../README.md#quick-start) in the README |
+| use a plugin | its page below, and the [quick start](../README.md#quick-start) in the README |
 | write a plugin of your own | [01 — Plugin Development](01-plugin-development.md) |
-| maintain or take a member | [03 — Maintainers](03-maintainers.md) |
-| know why a name, a floor or a claim is what it is | [00 — How the Members Meet the Engine](00-engine-and-rules.md) |
-| name a tool a member runs | [02 — Where a Tool Comes From](02-tool-sources.md) |
+| maintain or take a plugin | [03 — Maintainers](03-maintainers.md) |
+| know why a name, a floor or a claim is what it is | [00 — How the Plugins Meet the Engine](00-engine-and-rules.md) |
+| name a tool a plugin runs | [02 — Where a Tool Comes From](02-tool-sources.md) |
 
-## The members
+## The plugins
 
 The README's tables carry feature, behaviour, doc and maintainer; this is the
 same list with the module each feature compiles and the mcpp release its
@@ -52,11 +52,11 @@ requires CMake 3.19 or later.
 | `deps-archive` | `mcpp.deps.archive` | 2026.10.1.3 | Extracts a zip archive the project keeps and places its tree beside the program. | [deps](40-deps.md#deps-archive) |
 
 Some features add a sub-capability: `dist-apk-kotlin` and `dist-apk-maven`
-(Kotlin sources, a Maven graph), and `deps`, which the deps members imply.
+(Kotlin sources, a Maven graph), and `deps`, which the deps plugins imply.
 
 **The general library.** `plugins-core` — `mcpp.plugins.declare`,
 `mcpp.plugins.toolset`, `mcpp.plugins.fs`, `mcpp.plugins.tool` — is the
-general library every member implies, and the modules a third-party plugin
+general library every plugin implies, and the modules a third-party plugin
 built on it names on its dependency edge; `plugins-testing`,
 `plugins-toolchain`, `plugins-platform` and `plugins-progress` add their own.
 The layers, names and the engine floor are in
@@ -78,9 +78,9 @@ The first digit is the part, so a number says where a page belongs:
 
 ### 0x — The framework
 
-- [00 — How the Members Meet the Engine](00-engine-and-rules.md) — the families and their names, each rule's environment and claimed extensions, the engine floor, what a consumer names
-- [01 — Plugin Development](01-plugin-development.md) — the conventions every plugin follows, the C++ a plugin is written in, a new member's checklist
-- [02 — Where a Tool Comes From](02-tool-sources.md) — the one order every member resolves a tool in, and every way a project names its own
+- [00 — How the Plugins Meet the Engine](00-engine-and-rules.md) — the families and their names, each rule's environment and claimed extensions, the engine floor, what a consumer names
+- [01 — Plugin Development](01-plugin-development.md) — the conventions every plugin follows, the C++ a plugin is written in, a new plugin's checklist
+- [02 — Where a Tool Comes From](02-tool-sources.md) — the one order every plugin resolves a tool in, and every way a project names its own
 - [03 — Maintainers](03-maintainers.md) — the participation path, what a maintainer does and knows, how to apply
 
 ### 1x — Rules

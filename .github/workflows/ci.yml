@@ -13,11 +13,11 @@ on:
 
 env:
   # The mcpp release the consumers build with. Raising it is what admits a
-  # member that relies on a newer engine; the README states each member's floor.
+  # plugin that relies on a newer engine; the README states each plugin's floor.
   # 2026.9.11.1 is what `dist-*` needs at the API level:
   # `mcpp::provides_pack_format`, `mcpp::pack_format`, `${mcpp.stage_dir}` and
   # `mcpp::package_version` all arrived in it. Raising this is what admits a
-  # member relying on a newer engine; the README states each member's floor,
+  # plugin relying on a newer engine; the README states each plugin's floor,
   # and the index descriptor's own `min_mcpp` is a different question -- it
   # bounds the DESCRIPTOR's syntax, and raising it would brick every older
   # client's whole index.
@@ -46,7 +46,7 @@ env:
   # `dist-apk` refuses its tree naming this release.
   #
   # 2026.9.26.2 IS THE RELEASE THAT LANDS mcpp-community/mcpp#702, which the
-  # `deps-*` members and `rules-qt` (0.13.0) are written against (mcpp's
+  # `deps-*` plugins and `rules-qt` (0.13.0) are written against (mcpp's
   # SPEC-007): `mcpp::runtime_search_dir` for a prefix's shared-library
   # directory, the `prepare` role with `output_dir` for an installation, a
   # stamp moved past the inputs that changed, and on Windows the imported DLLs
@@ -88,7 +88,7 @@ env:
   # completes a cross subproject's contract (its compilers, archiver and target)
   # when the action runs, which a subproject that links an executable or a
   # shared library needs. The package floor stays 2026.10.30.1: every other
-  # member, and a cross subproject that only builds archives, works on the
+  # plugin, and a cross subproject that only builds archives, works on the
   # older engine, and docs/40-deps.md states the requirement where cross builds
   # are described. So here, as for 0.20.0's SYCL lane, `MCPP_VERSION` is the
   # newest engine a lane needs and the floor the oldest the collection loads on.
@@ -1212,10 +1212,10 @@ jobs:
       - name: dist-appimage produces an AppImage, and it runs
         working-directory: tests/appimage-consumer
         run: |
-          # A PLAIN BUILD HAS NO DISTRIBUTION EDGE. The member declares the
+          # A PLAIN BUILD HAS NO DISTRIBUTION EDGE. The plugin declares the
           # format unconditionally and submits only when asked, so this build
           # must produce no AppImage at all -- the half of the contract a
-          # member author is most likely to get wrong, and the half that still
+          # plugin author is most likely to get wrong, and the half that still
           # works for whoever wrote it.
           "$MCPP" build
           if find target -name '*.AppImage' | grep -q .; then
@@ -1366,7 +1366,7 @@ jobs:
       # `2026-09-13-four-upstream-asks-from-a-ui-framework.md`, §4), which
       # `dist-web`'s two copy steps now use in place of `cp`. `mcpp toolchain
       # install` first, because this job's `~/.mcpp` cache does not carry
-      # the emsdk payload the way the local sandbox this member was
+      # the emsdk payload the way the local sandbox this plugin was
       # developed against does.
       - name: Install the emsdk payload for dist-web
         run: '"$MCPP" toolchain install emsdk 6.0.9'
@@ -1463,7 +1463,7 @@ jobs:
       # THE CLOSURE THE ENGINE STAGED (mcpp#634, B5). A dependency linked as a
       # shared object on the Android row reaches `lib/<abi>/` beside the app's
       # own because the engine stages the closure and names it in the stage
-      # manifest (2026.9.14.2+), and the member reads that tree. Five criteria:
+      # manifest (2026.9.14.2+), and the plugin reads that tree. Five criteria:
       # two packs in a row carry the dependency's library both times; two
       # triples give one signed APK listing both ABIs; `--format aab` gives an
       # App Bundle bundletool validates and jarsigner verifies, and a universal
@@ -1585,7 +1585,7 @@ jobs:
         run: |
           set -e
           # THE FIXTURE'S OWN DENOMINATOR. It asserts "every rule compiles
-          # here", and "every" is a list it carries -- so a seventh member
+          # here", and "every" is a list it carries -- so a seventh plugin
           # added to this package would be covered by a step whose name says it
           # already is. The list is therefore compared against the package's
           # own `[features]` before the build, and the two must be equal.
@@ -1596,49 +1596,49 @@ jobs:
           # `<name> = { ... }`. Reading keys out of the table BODY matched
           # `sources` once per feature and reported the fixture as
           # incomplete while the extractor was what broke.
-          # MEMBERS, NOT EVERY FEATURE. A member is a feature named for its
+          # MEMBERS, NOT EVERY FEATURE. A plugin is a feature named for its
           # family -- `rules-*`, `tools-*`, `dist-*`, the README's naming table
           # -- and a consumer names it. `plugins-core` is not one: it carries the
-          # build-program half of the generated surface, every member implies
+          # build-program half of the generated surface, every plugin implies
           # it, and a consumer never writes it. Keeping it out keeps this check
-          # meaning "the fixture names every member a consumer can activate";
+          # meaning "the fixture names every plugin a consumer can activate";
           # padding the fixture instead would make it mean less.
           #
           # BY NAME, NOT BY "NOTHING IMPLIES IT". That was the rule until 0.11.0,
           # when `dist-apk-kotlin` and `dist-apk-maven` came to imply `dist-apk`,
           # which a consumer still names. The rule is read out of the manifest,
-          # not listed here, so a new member is still caught.
+          # not listed here, so a new plugin is still caught.
           # A TEMP FILE, NOT `<(...)`. This step also runs on windows-2022
           # through Git Bash, where process substitution is emulated and not
           # dependable -- and a check that behaves differently on one of the
           # three hosts is the exact class of difference this job exists to
           # catch, so it must not introduce one.
           # THE MEMBERS THAT CARRY SOURCES, READ OUT OF THE MANIFEST. From 0.13.0 a
-          # member family may hold features that add a payload and no source
+          # plugin family may hold features that add a payload and no source
           # (`dist-apk-kotlin`): they compile nothing this fixture
           # could miss, and naming them here would download an SDK on every host.
-          # So the requirement is one-sided -- every source-carrying member of the
+          # So the requirement is one-sided -- every source-carrying plugin of the
           # four families is named -- and the other side only checks spelling:
           # every name the fixture uses is a feature the package declares.
           awk '/^\[features\.[a-z0-9-]+\]/ { cur = $0; sub(/^\[features\./, "", cur); sub(/\]$/, "", cur); next }
                /^\[/ { cur = "" }
                /^sources[ \t]*=/ && cur ~ /^(rules|tools|dist|deps)-/ { print cur }' mcpp.toml \
-            | sort -u > /tmp/members.txt
+            | sort -u > /tmp/plugins.txt
           grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
             | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/declared.txt
-          feats=$(cat /tmp/members.txt)
+          feats=$(cat /tmp/plugins.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
-            echo "FAIL: read no source-carrying members out of mcpp.toml. The"
+            echo "FAIL: read no source-carrying plugins out of mcpp.toml. The"
             echo "      extractor above expects [features.<name>] sections with a"
             echo "      sources key and found none, so the manifest spelling changed."
             grep -n '^\[features' mcpp.toml | head
             exit 1; }
           for f in $feats; do
             echo "$used" | grep -qx "$f" || {
-              echo "FAIL: the fixture does not name the member $f"
-              echo "  members: $(echo $feats)"
+              echo "FAIL: the fixture does not name the plugin $f"
+              echo "  plugins: $(echo $feats)"
               echo "  fixture: $(echo $used)"
               exit 1; }
           done
@@ -1798,12 +1798,12 @@ jobs:
 
       # ── the general library and the test kit (0.17.0, mcpp#734) ───────────
       #
-      # The deps members' decisions -- which mechanism reaches the foreign
+      # The deps plugins' decisions -- which mechanism reaches the foreign
       # system, which triplet, which C runtime -- tested against stated build
       # contexts (a Visual Studio row, a managed MSVC row, the Linux GCC and
       # libc++ rows) with nothing installed. The verdicts are counted against
       # the cases the fixture declares.
-      - name: the deps members' decisions hold against stated build contexts (mcpp.plugins.testing)
+      - name: the deps plugins' decisions hold against stated build contexts (mcpp.plugins.testing)
         run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
 
       # A compatibility unit keeps a behaviour for six months after the release
@@ -1816,7 +1816,7 @@ jobs:
       #
       # vcpkg keeps everything it reuses in one per-user directory -- its
       # binary cache (`archives/`), its registry cache (`registries/`) and,
-      # through the member's `--downloads-root`, its downloads -- so caching that directory is what
+      # through the plugin's `--downloads-root`, its downloads -- so caching that directory is what
       # makes the second run of a manifest a restore rather than a compile.
       - name: Cache vcpkg's per-user directory
         uses: actions/cache@v4
@@ -1838,7 +1838,7 @@ jobs:
       - name: deps-archive extracts a zip the project keeps and deploys its tree beside the program
         run: bash .github/scripts/check-deps-and-qt.sh archive-consumer
 
-      - name: deps-vcpkg in two workspace members that share no dependency
+      - name: deps-vcpkg in two workspace plugins that share no dependency
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-workspace
 
       - name: deps-cmake builds a CMake subproject as an action and links it
@@ -2027,7 +2027,7 @@ jobs:
 
   # ── THE SAME RULE ON THE OTHER TWO PLATFORMS ────────────────────────────────
   #
-  # `rules-spirv` is the only member whose payload this ecosystem publishes for
+  # `rules-spirv` is the only plugin whose payload this ecosystem publishes for
   # all three, so it is the only one that can be checked on all three. What this
   # job proves is the claim the per-platform declaration makes: a project writes
   # the rule edge and nothing else, and the compiler that arrives is whichever
@@ -2168,13 +2168,13 @@ jobs:
       # and asks only whether all six modules COMPILE for this host -- which
       # is the half of a rule that a Linux-only CI never sees. Run after the
       # end-to-end step, its failure arrived as somebody else's build error:
-      # `no member named 'popen' in the global namespace`, reported against a
+      # `no plugin named 'popen' in the global namespace`, reported against a
       # consumer that had nothing to do with it.
       - name: every rule module compiles for this host
         run: |
           set -e
           # THE FIXTURE'S OWN DENOMINATOR. It asserts "every rule compiles
-          # here", and "every" is a list it carries -- so a seventh member
+          # here", and "every" is a list it carries -- so a seventh plugin
           # added to this package would be covered by a step whose name says it
           # already is. The list is therefore compared against the package's
           # own `[features]` before the build, and the two must be equal.
@@ -2187,41 +2187,41 @@ jobs:
           # incomplete while the extractor was what broke.
           # MEMBERS, NOT EVERY FEATURE: a feature named for its family
           # (`rules-*`, `tools-*`, `dist-*`), which a consumer names; `plugins-core`,
-          # which every member implies and no consumer writes, is not one. By
+          # which every plugin implies and no consumer writes, is not one. By
           # name and not by "nothing implies it" since 0.11.0, when
           # `dist-apk-kotlin` and `dist-apk-maven` came to imply `dist-apk`. The
-          # rule is read out of the manifest, so a new member is still caught.
+          # rule is read out of the manifest, so a new plugin is still caught.
           #
           # A temp file, not `<(...)`: this step also runs on windows-2022
           # through Git Bash, where process substitution is emulated and not
           # dependable -- and a check that behaves differently on one of the
           # three hosts is the class of difference this job exists to catch.
           # THE MEMBERS THAT CARRY SOURCES, READ OUT OF THE MANIFEST. From 0.13.0 a
-          # member family may hold features that add a payload and no source
+          # plugin family may hold features that add a payload and no source
           # (`dist-apk-kotlin`): they compile nothing this fixture
           # could miss, and naming them here would download an SDK on every host.
-          # So the requirement is one-sided -- every source-carrying member of the
+          # So the requirement is one-sided -- every source-carrying plugin of the
           # four families is named -- and the other side only checks spelling:
           # every name the fixture uses is a feature the package declares.
           awk '/^\[features\.[a-z0-9-]+\]/ { cur = $0; sub(/^\[features\./, "", cur); sub(/\]$/, "", cur); next }
                /^\[/ { cur = "" }
                /^sources[ \t]*=/ && cur ~ /^(rules|tools|dist|deps)-/ { print cur }' mcpp.toml \
-            | sort -u > /tmp/members.txt
+            | sort -u > /tmp/plugins.txt
           grep -oE '^\[features\.[a-z0-9-]+\]' mcpp.toml \
             | sed 's/^\[features\.//; s/\]$//' | sort > /tmp/declared.txt
-          feats=$(cat /tmp/members.txt)
+          feats=$(cat /tmp/plugins.txt)
           used=$(sed -n '/features = \[/,/\], host-module/p' tests/all-rules-compile/mcpp.toml \
                  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)
           [ -n "$feats" ] || {
-            echo "FAIL: read no source-carrying members out of mcpp.toml. The"
+            echo "FAIL: read no source-carrying plugins out of mcpp.toml. The"
             echo "      extractor above expects [features.<name>] sections with a"
             echo "      sources key and found none, so the manifest spelling changed."
             grep -n '^\[features' mcpp.toml | head
             exit 1; }
           for f in $feats; do
             echo "$used" | grep -qx "$f" || {
-              echo "FAIL: the fixture does not name the member $f"
-              echo "  members: $(echo $feats)"
+              echo "FAIL: the fixture does not name the plugin $f"
+              echo "  plugins: $(echo $feats)"
               echo "  fixture: $(echo $used)"
               exit 1; }
           done
@@ -2279,13 +2279,13 @@ jobs:
           fi
           echo "ok: the boundary is generated and namespaced on this host"
 
-      # ── dist, on the platform each member serves ────────────────────────
+      # ── dist, on the platform each plugin serves ────────────────────────
       #
       # A PLAN-LEVEL ASSERTION IS NOT A MEASUREMENT. `plan_for()` returning
       # `applies == false` on the wrong OS says the gate works; it says nothing
-      # about whether the tool accepts what the member renders. These two steps
+      # about whether the tool accepts what the plugin renders. These two steps
       # exist because that question is only answerable here, and because the
-      # members were written on a Linux host where neither tool can run.
+      # plugins were written on a Linux host where neither tool can run.
       #
       # THE FIRST THING EITHER ONE SETTLES IS A SPELLING. `dist-wix` writes
       # `$(Executable)` in its generated `.wxs`, taken from a working
@@ -2301,9 +2301,9 @@ jobs:
           # THE TOOL COMES FROM THE PAYLOAD, NOT FROM THIS STEP. `dist-wix`
           # declares `xim:wix` under `[target.windows.feature-xlings.dist-wix]`,
           # so mcpp provisions it when the fixture activates the feature on a
-          # Windows target, and the member locates it through `xpkg_dir`. An
+          # Windows target, and the plugin locates it through `xpkg_dir`. An
           # earlier revision of this step installed WiX 6 with `dotnet tool`
-          # and the member searched PATH; the criterion below on the argv is
+          # and the plugin searched PATH; the criterion below on the argv is
           # what distinguishes the two, and a run that found a host `wix.exe`
           # would fail it. WiX 7 is not an option for the payload either: it
           # refuses to run until an OSMF licence is accepted out of band
@@ -2319,7 +2319,7 @@ jobs:
           msi=$(find target -name '*.msi' | head -1)
           test -n "$msi" || { cat pack.log; echo "FAIL: no MSI"; exit 1; }
           # THE TOOL CAME FROM THE PAYLOAD BY CONSTRUCTION, and the criterion
-          # is the absence of any other: this step installs no WiX, the member
+          # is the absence of any other: this step installs no WiX, the plugin
           # has no PATH tier, and the runner image ships WiX 3 (candle/light)
           # but no `wix.exe`. An MSI therefore exists only if the payload's
           # `wix.exe` produced it. The engine prints the argv with the tool's
@@ -2331,7 +2331,7 @@ jobs:
           fi
 
           # THE CRITERION IS THE `File` TABLE, NOT THE FILE'S EXISTENCE. The
-          # measured failure this member is shaped around is a VALID, EMPTY,
+          # measured failure this plugin is shaped around is a VALID, EMPTY,
           # 52 KB installer with no diagnostic, produced when a harvested bind
           # path resolved to nothing. An assertion that stops at "an .msi
           # exists" passes on exactly that artifact.
@@ -2372,7 +2372,7 @@ jobs:
 
           # THE STAGED TREE IS INSTALLED, NOT ONLY THE PROGRAM (0.10.1). The
           # fixture deploys `share/greeting.txt` to `data/`; the engine stages
-          # it at `bin/data/greeting.txt` and the member names it in the
+          # it at `bin/data/greeting.txt` and the plugin names it in the
           # `StagedFiles` group, so the administrative image carries it at the
           # same path beside the program, byte-for-byte.
           data="$(dirname "$inside")/data/greeting.txt"
@@ -2413,7 +2413,7 @@ jobs:
           test -n "$exe" || { echo "FAIL: Info.plist names no executable"; exit 1; }
           # `CFBundleExecutable` must be a BARE NAME, never a path: Apple's
           # loader resolves it against Contents/MacOS/ and a path there is not
-          # a launchable bundle. This is the assumption the member documents.
+          # a launchable bundle. This is the assumption the plugin documents.
           case "$exe" in */*) echo "FAIL: CFBundleExecutable is a path: $exe"; exit 1 ;; esac
           test -x "$app/Contents/MacOS/$exe" \
             || { echo "FAIL: $app/Contents/MacOS/$exe is missing or not executable"
@@ -2424,13 +2424,13 @@ jobs:
           "$app/Contents/MacOS/$exe" | tee run.log
           grep -q '^app-consumer ok' run.log \
             || { echo "FAIL: the bundled program did not run"; exit 1; }
-          # `plutil -lint` is Apple's own parser: a plist this member wrote by
+          # `plutil -lint` is Apple's own parser: a plist this plugin wrote by
           # hand and got subtly wrong would otherwise fail at launch time on a
           # user's machine and nowhere here.
           plutil -lint "$app/Contents/Info.plist"
           # THE DEPLOYED FILE, AT THE RESOURCE DESTINATION AND NOT BESIDE THE
           # PROGRAM (mcpp#630, item 3a): the engine stages `bin/data/...` and
-          # this member places it under `Contents/Resources/`.
+          # this plugin places it under `Contents/Resources/`.
           test -f "$app/Contents/Resources/data/greeting.txt" \
             || { echo "FAIL: the deployed file is not under Contents/Resources"; find "$app" -type f; exit 1; }
           if [ -e "$app/Contents/MacOS/bin" ]; then
@@ -2440,10 +2440,10 @@ jobs:
           echo "ok: one bundle, a valid plist, it launches, and the resource is where NSBundle looks"
 
       # 0.11.0 (`options::info_plist`): a project's Info.plist entries join the
-      # generated plist of the real bundle, a key the member only defaults
+      # generated plist of the real bundle, a key the plugin only defaults
       # (`NSHighResolutionCapable`) takes the project's value, Apple's parser
       # accepts the result, and the bundle still launches. The refusal of a key
-      # the member derives is asserted at the plan level, in the Linux job.
+      # the plugin derives is asserted at the plan level, in the Linux job.
       - name: dist-apple carries a project's Info.plist entries, and the bundle launches
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         working-directory: tests/app-consumer
@@ -2465,7 +2465,7 @@ jobs:
           [ "$(grep -c '<key>NSHighResolutionCapable</key>' "$plist")" -eq 1 ] \
             || { echo "FAIL: NSHighResolutionCapable is stated twice"; cat "$plist"; exit 1; }
           [ "$(pb CFBundleExecutable)" = "app-consumer" ] \
-            || { echo "FAIL: CFBundleExecutable is no longer the member's"; cat "$plist"; exit 1; }
+            || { echo "FAIL: CFBundleExecutable is no longer the plugin's"; cat "$plist"; exit 1; }
           "$app/Contents/MacOS/app-consumer" | grep -q '^app-consumer ok' \
             || { echo "FAIL: the bundle does not launch with the project's entries"; exit 1; }
           echo "ok: the project's entries are in the bundle's Info.plist, plutil accepts it, and the bundle launches"
@@ -2604,7 +2604,7 @@ jobs:
 
       # 0.11.0 (`options::info_plist`) on the iOS row: the project's entries
       # join the simulator bundle's Info.plist, its `UIDeviceFamily` replaces
-      # the member's default, and the simulator installs and runs the bundle.
+      # the plugin's default, and the simulator installs and runs the bundle.
       - name: dist-apple's iOS row carries a project's Info.plist entries, and the simulator runs the bundle
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         working-directory: tests/ios-app-consumer
@@ -2628,14 +2628,14 @@ jobs:
           [ "$(pb UIDeviceFamily:0)" = "1" ] && ! pb UIDeviceFamily:1 >/dev/null 2>&1 \
             || { echo "FAIL: UIDeviceFamily is not the project's (1)"; cat "$plist"; exit 1; }
           [ "$(pb CFBundleSupportedPlatforms:0)" = "iPhoneSimulator" ] \
-            || { echo "FAIL: CFBundleSupportedPlatforms is no longer the member's"; cat "$plist"; exit 1; }
+            || { echo "FAIL: CFBundleSupportedPlatforms is no longer the plugin's"; cat "$plist"; exit 1; }
           out=$("$MCPP" run --target aarch64-ios-sim --format app 2>&1) && rc=0 || rc=$?
           printf '%s\n' "$out" | tail -20
           [ "$rc" -eq 7 ] \
             || { echo "FAIL: mcpp run exited $rc with the project's entries, and the program exits 7"; exit 1; }
           echo "ok: the simulator bundle carries the project's entries, and the simulator ran it and returned 7"
 
-      # dist-apk ON A HOST THAT IS NOT LINUX (0.24.0). Every tool the member
+      # dist-apk ON A HOST THAT IS NOT LINUX (0.24.0). Every tool the plugin
       # runs is a native program (`aapt2`, `zipalign`) or a jar on the JDK's
       # `java`, and each step of more than one command is a step program
       # (0.25.0, `tools-steps`), so no step needs a shell and a Windows host
@@ -2716,7 +2716,7 @@ jobs:
         working-directory: tests/progress-worker
         run: python3 verify.py "$MCPP"
 
-      - name: the deps members' decisions hold against stated build contexts (mcpp.plugins.testing)
+      - name: the deps plugins' decisions hold against stated build contexts (mcpp.plugins.testing)
         run: bash .github/scripts/check-deps-and-qt.sh plugin-logic
 
       # ── deps-vcpkg, deps-cmake and rules-qt (0.13.0) ──────────────────────
@@ -2739,7 +2739,7 @@ jobs:
       - name: deps-archive extracts a zip the project keeps and deploys its tree beside the program
         run: bash .github/scripts/check-deps-and-qt.sh archive-consumer
 
-      - name: deps-vcpkg in two workspace members that share no dependency
+      - name: deps-vcpkg in two workspace plugins that share no dependency
         run: bash .github/scripts/check-deps-and-qt.sh vcpkg-workspace
 
       - name: deps-cmake builds a CMake subproject as an action and links it

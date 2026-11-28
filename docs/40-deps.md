@@ -1,24 +1,24 @@
 # `deps-vcpkg`, `deps-cmake` and `deps-archive`
 
-The `deps-*` members answer where a library comes from: a vcpkg manifest, a CMake subproject, or an archive the project keeps. Each installation is an action with declared inputs and outputs, and the prefix reaches the build by name (include directory, libraries by full path, runtime search directory), so planning installs nothing.
+The `deps-*` plugins answer where a library comes from: a vcpkg manifest, a CMake subproject, or an archive the project keeps. Each installation is an action with declared inputs and outputs, and the prefix reaches the build by name (include directory, libraries by full path, runtime search directory), so planning installs nothing.
 
 ## `deps-vcpkg`
 
 Module `mcpp.deps.vcpkg`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.28.3 before).
 
-**Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis, installed when this member asks for it (`provision = "on-request"`, 0.19.0) -- a project that names its own vcpkg with `options::vcpkg` or `[xlings.overrides]` downloads none. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
+**Needs and behaviour.** `xim:vcpkg` (the tool and the scripts released with it), which this feature declares on the host axis, installed when this plugin asks for it (`provision = "on-request"`, 0.19.0) -- a project that names its own vcpkg with `options::vcpkg` or `[xlings.overrides]` downloads none. From 0.13.0. Installs a `vcpkg.json` manifest as a `prepare` action and maps `<install root>/<triplet>/<triplet>` into the build by name, its shared-library directory a runtime search directory; `mcpp emit build-database` installs nothing. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-cmake`
 
 Module `mcpp.deps.cmake`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.28.3 before).
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, installed when this member asks for it (`provision = "on-request"`, 0.19.0) -- a project that names its own cmake with `options::cmake` or `[xlings.overrides]` downloads none. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, with the Ninja generator and the toolset mcpp resolved, and maps the prefix as `deps-vcpkg` does; an installation is kept outside the package and taken by any later build with the same key (0.18.0)
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, installed when this plugin asks for it (`provision = "on-request"`, 0.19.0) -- a project that names its own cmake with `options::cmake` or `[xlings.overrides]` downloads none. From 0.13.0. Configures, builds and installs a CMake subproject as one `prepare` action whose inputs are the subproject's files, with the Ninja generator and the toolset mcpp resolved, and maps the prefix as `deps-vcpkg` does; an installation is kept outside the package and taken by any later build with the same key (0.18.0)
 
 ## `deps-archive`
 
 Module `mcpp.deps.archive`; engine floor: 2026.10.1.3 (0.19.0, mcpp#755; 2026.9.26.2 before).
 
-**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, installed when this member asks for it (`provision = "on-request"`, 0.19.0). From 0.14.0. Extracts a zip archive the project keeps and places its tree beside the program: one action names every member as an output, read from the archive's central directory while the build program runs, and each is deployed, so `mcpp run` finds the files and `mcpp pack` carries them. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
+**Needs and behaviour.** `xim:cmake`, which this feature declares on the host axis, installed when this plugin asks for it (`provision = "on-request"`, 0.19.0). From 0.14.0. Extracts a zip archive the project keeps and places its tree beside the program: one action names every plugin as an output, read from the archive's central directory while the build program runs, and each is deployed, so `mcpp run` finds the files and `mcpp pack` carries them. See [the section below](#deps-vcpkg-the-libraries-a-vcpkg-manifest-names)
 
 ## `deps-vcpkg`: the libraries a vcpkg manifest names
 
@@ -40,7 +40,7 @@ int main() {
 }
 ```
 
-`use()` finds `vcpkg.json` at or above the package root, so every member of a
+`use()` finds `vcpkg.json` at or above the package root, so every plugin of a
 workspace finds a manifest kept at the workspace root. It then:
 
 - declares `vcpkg install …` as a `mcpp::roles::prepare` action whose output
@@ -79,10 +79,10 @@ states every path it can, and the build is where the absence fails.
 | `vcpkg_root` | a vcpkg root other than the `xim:vcpkg` payload; the 0.18.1 spelling of `vcpkg = tool::root(...)`, still read |
 | `deploy` | files of the prefix the program reads at run time, each `{file, to}`: `file` relative to the prefix root, `to` the directory beside the program (`{"share/opencc/t2s.json", "BaseConfig/opencc"}`) |
 
-**Where the tool comes from (0.19.0).** Each member resolves its tool through
+**Where the tool comes from (0.19.0).** Each plugin resolves its tool through
 `mcpp.plugins.tool`, in one order: the option above, then an override
 (`[xlings.overrides]`, `MCPP_XLINGS_OVERRIDE_<NS>_<NAME>`, `config.toml`), then
-the declared payload — which is installed only when the member asks for it, so a
+the declared payload — which is installed only when the plugin asks for it, so a
 project that names its own tool downloads none. The build reports the source it
 used, and `mcpp why tool <name>` answers from the same record.
 
@@ -99,7 +99,7 @@ vcpkg's per-user directory (`%LOCALAPPDATA%\vcpkg` on Windows,
 binary cache, under a short name, because Windows tools still enforce MAX_PATH;
 an existing `VCPKG_DOWNLOADS` is kept. vcpkg locks the installation root itself
 (`<root>/vcpkg/vcpkg-running.lock`), and `--x-wait-for-lock` makes two
-workspace members installing one root run one after the other; without it the
+workspace plugins installing one root run one after the other; without it the
 second fails, "failed to take lock" (0.15.1). vcpkg fetches its
 own CMake, Ninja and 7-Zip, and on Windows a portable git; on Linux and macOS
 its documented host prerequisites (git, curl, zip, unzip, tar, a C compiler)
@@ -108,7 +108,7 @@ are the host's.
 ### The toolset: `instance`, `chain`, `detected`
 
 The ports are linked into the program, so they are built with the toolset mcpp
-builds the program with (0.17.0). The member reads the toolset from the engine
+builds the program with (0.17.0). The plugin reads the toolset from the engine
 (mcpp 2026.9.28.3, `mcpp::abi_tool`, `mcpp::tool_env`, `mcpp::toolset_identity`,
 `mcpp::msvc_instance_dir`) through `mcpp.plugins.toolset`, and the way it reaches
 vcpkg follows where the toolset came from:
@@ -126,12 +126,12 @@ vcpkg's compiler detection fails with it on a machine whose host compiler does
 not fill the gaps (measured on the plugins' CI). The clang payloads carry their
 configuration in their own `.cfg` files and are complete. On the GCC row the
 host compiler's libstdc++ is the program's C++ library, so `resolved` keeps
-vcpkg's detection there and the member states why in `mcpp.plugins.toolset`'s
+vcpkg's detection there and the plugin states why in `mcpp.plugins.toolset`'s
 `reason`.
 
 **The derived triplet.** The base triplet's text is copied into it, not
 included, because vcpkg hashes a triplet file's content and not the files it
-includes. The member appends the chain-loaded toolchain
+includes. The plugin appends the chain-loaded toolchain
 (`${CMAKE_CURRENT_LIST_DIR}/mcpp-chain-<system>.cmake`), the environment
 variables that pass through untracked (`MCPP_VCPKG_CC`, `MCPP_VCPKG_CXX`,
 `MCPP_VCPKG_RC`, `MCPP_VCPKG_MT`, `MCPP_VCPKG_ROOT`, and on the MSVC ABI
@@ -204,7 +204,7 @@ int main() {
 }
 ```
 
-One `prepare` action, `cmake -P` over a script the member writes
+One `prepare` action, `cmake -P` over a script the plugin writes
 (`<out dir>/deps-cmake/<name>.cmake`), configures, builds and installs the
 subproject into `<out dir>/deps-cmake/<name>/install`, its declared output
 directory; its inputs are the script and the subproject's files, so an edit to
@@ -361,7 +361,7 @@ int main() {
 
 `unpack()` reads the archive's central directory while the build program runs,
 so every file it holds is named before anything is extracted. One `artifact`
-action, `cmake -P` over a script the member writes, empties
+action, `cmake -P` over a script the plugin writes, empties
 `<out dir>/deps-archive/<name>` and extracts the archive there with
 `file(ARCHIVE_EXTRACT ... TOUCH)`, naming each file as an output; each file is then
 deployed under `to`, so `mcpp run` finds it beside the program and `mcpp pack`
@@ -374,5 +374,5 @@ the package's compile set.
 
 Only zip is read, because a compressed tar has no index to list without
 decompressing it while planning; a ZIP64 archive is refused by name, as is a
-member whose path would leave the extraction directory. A missing `cmake` is a
+plugin whose path would leave the extraction directory. A missing `cmake` is a
 warning, and the plan then extracts and deploys nothing.

@@ -17,8 +17,8 @@ Module `mcpp.tools.embed`; engine floor: 2026.9.5.4.
 | `group()` | N | N headers + one generated interface | the same N headers, handed to `mcpp::plugins::surface` so a consumer writes one `import` and names no generated file -- see [What a consumer names](00-engine-and-rules.md#what-a-consumer-names) |
 | `table()` | N | one header | one array of rows, each carrying its input's key beside its bytes; the consumer iterates or looks a row up by key |
 
-`table()` is for a set the consumer wants to walk rather than name member by
-member, where `files()`'s one accessor per input and `group()`'s one function
+`table()` is for a set the consumer wants to walk rather than name plugin by
+plugin, where `files()`'s one accessor per input and `group()`'s one function
 per input are both the wrong shape. The motivating case is a shader set:
 
 ```cpp

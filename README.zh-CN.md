@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/mcpp-community/mcpp-plugins)](https://github.com/mcpp-community/mcpp-plugins/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
-[English](README.md) | 简体中文 · [文档索引](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [包索引 mcpp-index](https://mcpplibs.github.io/mcpp-index/) · [发布](https://github.com/mcpp-community/mcpp-plugins/releases)
+[English](README.md) | 简体中文 · [文档索引](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [mcpp.plugins 索引页](https://mcpp.index.xlings.org/packages/mcpp.plugins) · [发布](https://github.com/mcpp-community/mcpp-plugins/releases)
 
 mcpp 是一个带有构建插件框架的通用引擎;插件来自本包(`mcpp:plugins`)、来自
 第三方,或来自项目自身,而 `build.mcpp` 是项目使用它们的地方:它按成员声明
@@ -60,7 +60,7 @@ int main() {
 | `dist-apk` | 把原生闭包打成已签名的 APK 或 App Bundle,带 Java、Kotlin 与 Maven 库。 | [docs](docs/32-dist-apk.md) |
 
 <details>
-<summary><b>全部 23 个插件成员</b>——feature、行为、文档;模块与引擎下限见<a href="docs/README.md#the-members">文档索引</a></summary>
+<summary><b>全部 23 个插件成员</b>——feature、行为、文档;模块与引擎下限见<a href="docs/README.md#the-plugins">文档索引</a></summary>
 
 | feature | 行为 | 文档 |
 |---|---|---|
@@ -98,11 +98,11 @@ int main() {
 
 如果你对某些插件感兴趣,并期望参与贡献和维护:
 
-- [添加一个新的插件](docs/01-plugin-development.md#5-a-new-plugin)
-- [申请成为维护者](docs/03-maintainers.md)
+- [提出或提交一个新插件](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)——[新插件成员清单](docs/01-plugin-development.md#5-a-new-plugin)
+- [申请维护一个插件成员](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml)——[维护者做什么](docs/03-maintainers.md)
 
 ## 维护者
 
 | 维护者 | 主要负责的插件成员 |
 |---|---|
-| [Sunrisepeak](https://github.com/Sunrisepeak) | 仓库整体,以及今天的每一个插件成员 |
+| [Sunrisepeak](https://github.com/Sunrisepeak) | 项目主要负责人 |

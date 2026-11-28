@@ -1,0 +1,56 @@
+name: New plugin
+description: Propose a new plugin — an RFC for one not yet built, or one already built joining the official repository
+labels: ["new-plugin"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A plugin is a mechanism: one kind of input turned into actions with
+        declared inputs and outputs, or a prefix or SDK mapped into the build
+        ([docs/01](../../docs/01-plugin-development.md)). The path this issue
+        takes depends on the stage below.
+
+        The original author of a plugin accepted into this repository becomes
+        the plugin's maintainer
+        ([what a maintainer does](../../docs/03-maintainers.md)).
+  - type: dropdown
+    id: stage
+    attributes:
+      label: This plugin is
+      options:
+        - Not yet implemented — an RFC to discuss first
+        - Already implemented — applying to join the official repository
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: The plugin's name
+      description: A third-party plugin names its modules `mcpp.<namespace>.*` — state the namespace and the module family.
+      placeholder: "mcpp.acme.protobuf"
+    validations:
+      required: true
+  - type: textarea
+    id: mechanism
+    attributes:
+      label: Mechanism, tools and floor
+      description: What one kind of input it turns into what; the tools it drives; the engine floor it needs ([docs/02](../../docs/02-tool-sources.md) states how a plugin resolves a tool).
+    validations:
+      required: true
+  - type: textarea
+    id: rfc
+    attributes:
+      label: For an RFC — the design questions
+      description: The options, the actions it submits, what the engine already gives it, what you are unsure about.
+  - type: textarea
+    id: submission
+    attributes:
+      label: For a submission — where it lives today
+      description: Repository, documentation, a consumer fixture under tests/ that CI can build, and the platforms it claims.
+  - type: textarea
+    id: maintenance
+    attributes:
+      label: Who maintains it
+      description: The author, and both sides of the role they commit to — technical upkeep, and popularization and outreach (articles, videos, tutorials, use in real projects).
+    validations:
+      required: true

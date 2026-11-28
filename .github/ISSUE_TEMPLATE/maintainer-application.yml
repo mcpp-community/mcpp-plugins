@@ -1,36 +1,38 @@
-name: Member maintainer application
-description: Apply to become the maintainer of one member of mcpp-plugins
+name: Plugin maintainer application
+description: Apply to become the maintainer of one plugin of mcpp-plugins
 labels: ["maintainer-application"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for wanting to take a member's maintainership. One application
-        covers one member.
+        Thanks for wanting to take a plugin's maintainership. One application
+        covers one plugin.
 
-        A maintainer knows the member deeply and its application domain, and
+        A maintainer knows the plugin deeply and its application domain, and
         leads its popularization and ecosystem building — technical articles,
         videos, tutorials. Development plus outreach is the core of the role,
-        and the application states contributions in both categories.
+        and the application states contributions in both categories. What a
+        maintainer does and knows:
+        [docs/03 — Maintainers](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/03-maintainers.md).
   - type: input
-    id: member
+    id: plugin
     attributes:
-      label: The member you apply for
-      description: One member per application — for another, open another issue.
+      label: The plugin you apply for
+      description: One plugin per application — for another, open another issue.
       placeholder: "rules-cuda"
     validations:
       required: true
   - type: textarea
     id: familiarity
     attributes:
-      label: Your familiarity with the member and its domain
+      label: Your familiarity with the plugin and its domain
       description: What you build with it, the related field you work in, how long you have used it.
     validations:
       required: true
   - type: textarea
     id: technical-contributions
     attributes:
-      label: Technical contributions to the member
+      label: Technical contributions to the plugin
       description: Required. Pull requests or commits — fixes, features, fixture and CI care, documentation. Link them.
       placeholder: "PR #12 — the manifest-merge fix; PR #18 — the min-sdk fixture"
     validations:
@@ -38,9 +40,9 @@ body:
   - type: textarea
     id: outreach-contributions
     attributes:
-      label: Technical outreach and promotion contributions
-      description: Required. Technical articles, videos, blogs, tutorials or examples about the member or its domain, preferably published on a public platform. Link them.
-      placeholder: "a manifest-merger walkthrough on a blog; a getting-started video for the member"
+      label: Ecosystem-building and technical outreach contributions
+      description: Required. Technical articles, videos, blogs, tutorials — and indirect ecosystem growth through real projects built on the plugin. Preferably public, and linked.
+      placeholder: "a manifest-merger walkthrough on a blog; a getting-started video for the plugin"
     validations:
       required: true
   - type: textarea
@@ -53,5 +55,5 @@ body:
   - type: textarea
     id: referrer
     attributes:
-      label: Referrer
-      description: An existing maintainer of a related member who supports this application, if one knows your work.
+      label: Referrer (optional)
+      description: An existing maintainer of a related plugin who supports this application, if one knows your work.

@@ -1,17 +1,17 @@
 # mcpp-plugins
 
-> The official build plugins for mcpp — one member, one feature, one module.
+> The official build plugins for mcpp — one plugin, one feature, one module.
 
 [![ci](https://github.com/mcpp-community/mcpp-plugins/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mcpp-community/mcpp-plugins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mcpp-community/mcpp-plugins)](https://github.com/mcpp-community/mcpp-plugins/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
-**English** | [简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [Package index](https://mcpplibs.github.io/mcpp-index/) · [Releases](https://github.com/mcpp-community/mcpp-plugins/releases)
+**English** | [简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [mcpp.plugins in the index](https://mcpp.index.xlings.org/packages/mcpp.plugins) · [Releases](https://github.com/mcpp-community/mcpp-plugins/releases)
 
 mcpp is a general engine with a framework for build plugins; plugins come from
 this package (`mcpp:plugins`), from third parties, or from the project itself,
-and `build.mcpp` is where a project uses them: it imports the member's module
-under the name the member declares, configures it, and calls it. The edge is a
+and `build.mcpp` is where a project uses them: it imports the plugin's module
+under the name the plugin declares, configures it, and calls it. The edge is a
 `[build-dependencies]` entry — the library serves the build program, and the
 package never reaches the target.
 
@@ -43,12 +43,12 @@ int main() {
 | tools | `mcpp.tools.<x>` | what the build program does itself (see [`tools/README.md`](tools/README.md)) |
 | dist | `mcpp.dist.<x>` | what comes out of the link, and in what form a user installs it |
 | deps | `mcpp.deps.<x>` | where a library comes from |
-| identity | `mcpp.plugins` | the lib root, compiled before every member; it states the collection's version |
+| identity | `mcpp.plugins` | the lib root, compiled before every plugin; it states the collection's version |
 
 A third-party plugin names its modules `mcpp.<its namespace>.*`; `core`,
 `plugins`, `deps`, `rules`, `dist`, `tools` belong to this package and the
 engine. The full account of the families, and of how the engine routes a file
-to a rule, is in [docs/00](docs/00-engine-and-rules.md); where a tool a member
+to a rule, is in [docs/00](docs/00-engine-and-rules.md); where a tool a plugin
 runs comes from is in [docs/02](docs/02-tool-sources.md).
 
 ## Plugins
@@ -63,7 +63,7 @@ runs comes from is in [docs/02](docs/02-tool-sources.md).
 | `dist-apk` | Packs the native closure into a signed APK or App Bundle, with Java, Kotlin and Maven libraries. | [docs](docs/32-dist-apk.md) |
 
 <details>
-<summary><b>All 23 members</b> — feature, behaviour, doc; the modules and engine floors are in the <a href="docs/README.md#the-members">documentation index</a></summary>
+<summary><b>All 23 plugins</b> — feature, behaviour, doc; the modules and engine floors are in the <a href="docs/README.md#the-plugins">documentation index</a></summary>
 
 | feature | what it does | doc |
 |---|---|---|
@@ -99,15 +99,15 @@ The project is maintained mainly by
 [@Sunrisepeak](https://github.com/Sunrisepeak) — its upkeep and growth need
 more contributors and maintainers. Start from the simple and from what
 interests you: use it, introduce and teach it, report issues, fix bugs,
-improve it, maintain one or more members.
+improve it, maintain one or more plugins.
 
-If you are interested in contributing to and maintaining some members:
+If you are interested in contributing to and maintaining some plugins:
 
-- [add a new member](docs/01-plugin-development.md#5-a-new-plugin)
-- [become a member's maintainer](docs/03-maintainers.md)
+- [propose or submit a new plugin](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml) — [the checklist a plugin follows](docs/01-plugin-development.md#5-a-new-plugin)
+- [apply to maintain one](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml) — [what a maintainer does](docs/03-maintainers.md)
 
 ## Maintainers
 
-| maintainer | members primarily maintained |
+| maintainer | plugins primarily maintained |
 |---|---|
-| [@Sunrisepeak](https://github.com/Sunrisepeak) | the repository, and today every member |
+| [@Sunrisepeak](https://github.com/Sunrisepeak) | primary maintainer of the project |

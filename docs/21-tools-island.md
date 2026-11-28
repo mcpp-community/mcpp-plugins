@@ -13,7 +13,7 @@ Module `mcpp.tools.island`; engine floor: 2026.9.7.1.
 `mcpp::plugins::surface` generates the whole interface for a **data** payload,
 because an address and a size are all there is to decide.
 `mcpp.tools.island` generates what is mechanical about a **code** island -- and
-only that. It is a member like `tools-embed` rather than part of the lib root:
+only that. It is a plugin like `tools-embed` rather than part of the lib root:
 nothing in this collection uses it, a project does.
 
 The entry points are marked where they are defined, and the signature exists

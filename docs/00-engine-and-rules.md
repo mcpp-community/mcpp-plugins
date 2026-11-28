@@ -1,11 +1,11 @@
-# How the members meet the engine
+# How the plugins meet the engine
 
-How a rule reaches the engine: each rule declares its own environment and the file extensions it claims, a consumer names a member through features and the declarations a payload generates, and the engine compiles each member as a host module. The section on what a rule may drive states the one constraint every member shares: it drives only a compiler the ecosystem resolved.
+How a rule reaches the engine: each rule declares its own environment and the file extensions it claims, a consumer names a plugin through features and the declarations a payload generates, and the engine compiles each plugin as a host module. The section on what a rule may drive states the one constraint every plugin shares: it drives only a compiler the ecosystem resolved.
 
 ## Naming, in full
 
 The four families answer four different questions, and the prefix is which
-one a member answers:
+one a plugin answers:
 
 ```
 rules-*   how is this translation unit compiled
@@ -14,19 +14,19 @@ dist-*    what comes out of the link, and in what form a user installs it
 deps-*    where does a library come from
 ```
 
-A `dist-*` member fits neither of the first two definitions: it does not
+A `dist-*` plugin fits neither of the first two definitions: it does not
 compile a translation unit and it does not do its work while the build program
 runs. It consumes **link outputs** through a `role = "artifact"` action, reached
 with `mcpp pack --format <name>` (mcpp 2026.9.11.1+). The prefix matters because
 the taxonomy is load-bearing -- a consumer reading `rules-wix` would expect a
 compiler it does not drive and a translation unit, and there is neither.
 
-A `deps-*` member compiles none of the project's translation units and does not
+A `deps-*` plugin compiles none of the project's translation units and does not
 do its work while the build program runs: the installation is a `prepare`
 action (mcpp's SPEC-007, docs/specs/build-plugins.md), which fills a declared
 output directory and which the package's compile and link edges wait for, and
 whose command is the installer itself -- `vcpkg`, or `cmake -P` over a script
-the member writes -- so the package builds no program for it. The build
+the plugin writes -- so the package builds no program for it. The build
 program refers to the prefix by name -- include directory, libraries by full
 path, runtime search directory -- and never by what is in it, so a plan made
 before the installation is the plan made after it.
@@ -110,11 +110,11 @@ A device source that NO rule claims is not silently dropped: mcpp refuses a
 device source that reached no action, naming the file. That is the engine's
 half of this rule and it needs 2026.9.6.5.
 
-The floor is the mcpp release whose engine carries what the member relies on.
+The floor is the mcpp release whose engine carries what the plugin relies on.
 From 0.4.0 every rule shares one: **2026.9.8.1**, the release in which a
 package's host modules are ordered by their IMPORT GRAPH rather than by their
-paths. This package needs that: `src/declare.cppm` is imported by every member,
-and `rules/` sorts before `src/`, so before that release the members were
+paths. This package needs that: `src/declare.cppm` is imported by every plugin,
+and `rules/` sorts before `src/`, so before that release the plugins were
 compiled first and failed with "failed to read compiled module".
 
 **The floor could have been avoided, and was not.** `src/declare.cppm` sorts
@@ -133,9 +133,9 @@ change to what this package generates, not to what it asks the engine for.
 under MSVC 14.52 (36629 and 36725, measured on xrgui's CI) a module that has
 instantiated `std::filesystem::path`'s iterator poisons every importer that
 touches `path` again -- `filesystem(1572): error C2801: '_Path_iterator<...>::operator =='
-must be a non-static member`. Nothing in this package instantiates that
+must be a non-static plugin`. Nothing in this package instantiates that
 iterator now: the lib root reads paths apart as strings
-(`mcpp::plugins::names::components`), and the members' relative-path
+(`mcpp::plugins::names::components`), and the plugins' relative-path
 arithmetic is `mcpp::plugins::names::relative_to`.
 
 The previous shared floor was 2026.9.7.1, the release that reads
@@ -150,20 +150,20 @@ The previous shared floor was 2026.9.6.6, the release in which a payload a
 DEPENDENCY declared is both installed and answerable. Before it a rule could
 declare `>=8.5.0`, have it installed, and still be told by `xpkg_dir` that
 nothing was there -- which is why each rule's list used to be repeated in every
-project that used it. The earlier per-member floors are still the floors of the
+project that used it. The earlier per-plugin floors are still the floors of the
 rules themselves (`rules-spirv` needs the shader extensions in the device-source
 table, 2026.9.5.3; `tools-embed` needs the fast path to compare a declared file
 input, 2026.9.5.4; `rules-sycl` needs `.sycl` in that table, 2026.9.6.1), and
 they are all below the shared one.
 
-`rules-slang` is the member that does NOT appear in that list, and its absence
+`rules-slang` is the plugin that does NOT appear in that list, and its absence
 is the point: `.slang` is in no engine table at any version. The feature
 declares the extension and the module that compiles it, so the release it needs
 is the one that reads those two keys rather than the one that would have carried
 its extension.
 
 0.10.0 moves the collection's floor to **2026.9.14.2**, and the reason is two
-members rather than the rules: `dist-apk` and `dist-apple` read the native
+plugins rather than the rules: `dist-apk` and `dist-apple` read the native
 closure the engine stages and names in the stage manifest's `needs` lines,
 `dist-apple`'s framework rpath needs the engine to leave an `@executable_path`
 rpath as written, and `mcpp run --format app` reaches the runner named after the
@@ -171,13 +171,13 @@ format only from that release. `rules-metal` itself needs nothing past
 2026.9.8.1. An older engine is not left to fail silently: `dist-apk` refuses a
 stage without `needs` lines, naming the release.
 
-The index descriptor states the highest floor among the members, so it is the
+The index descriptor states the highest floor among the plugins, so it is the
 floor of the collection rather than of any one feature; a project on an older
 mcpp is refused at resolution rather than at the first shader.
 
 ## What a consumer names
 
-A member that embeds a payload -- `rules-spirv`, `rules-slang`, `tools-embed` --
+A plugin that embeds a payload -- `rules-spirv`, `rules-slang`, `tools-embed` --
 does not leave the consumer to include a generated header. All three hand their
 payloads to one generator, `mcpp::plugins::surface`, so what a consumer writes
 is the same whichever produced them:
@@ -233,7 +233,7 @@ worse than it looks: measured with GCC 16.1 on a 1 MB payload, an interface
 returning `std::span` produced a 1 313 968-byte BMI against 1 808 bytes for the
 std-free equivalent, and that cost is fixed rather than proportional to the
 payload -- it is `<span>`'s templates, present whether the payload is 16 KB or
-16 MB. A consumer that wants a `std::span` constructs one from the two members.
+16 MB. A consumer that wants a `std::span` constructs one from the two plugins.
 
 **Where the bytes live is a second, independent choice.** The surface decides how
 a consumer names a payload; `storage` decides where it sits. The declarations are
@@ -313,7 +313,7 @@ the setting as `MCPP_LANGUAGE_MODULES`; an engine that does not report it leaves
 the header surface in place, so an older engine keeps the behaviour every
 consumer of this package had before the surface existed.
 
-**The generator is not shader-specific, and three members already share it.**
+**The generator is not shader-specific, and three plugins already share it.**
 `mcpp::plugins::surface` knows about a run of bytes, a name, where it lives and
 how it is reached; it does not know what SPIR-V is. `rules-spirv`, `rules-slang`
 and `tools-embed` all call it, which is what keeps their generated declarations
@@ -335,17 +335,17 @@ now, and every consumer reaches the same array through the accessor.
 
 mcpp compiles every module interface unit among a host-module package's
 resolved sources as a host module of its own, the lib root first (2026.9.5.3+).
-`[features.<f>] sources` is what puts a member into that set, so the module set
-a consumer can import is exactly its feature set. A member is compiled alone,
+`[features.<f>] sources` is what puts a plugin into that set, so the module set
+a consumer can import is exactly its feature set. A plugin is compiled alone,
 in the same command as the consumer's `build.mcpp`, and may import `std`,
 `mcpp` and `mcpp.plugins`.
 
 ## What a rule may drive, and what it may not
 
-A member drives a compiler the ecosystem resolved and no other. `xim:dpcpp` is
+A plugin drives a compiler the ecosystem resolved and no other. `xim:dpcpp` is
 `mcpp.rules.sycl`'s compiler; `xim:gcc` is the C++ standard library it compiles
 against; `xim:cuda-nvcc` is the back end it emits for. None of the three is a
-default: each is read from `mcpp::xpkg_dir`, and a member that cannot find one
+default: each is read from `mcpp::xpkg_dir`, and a plugin that cannot find one
 refuses and prints the `[xlings.workspace]` line that would add it.
 
 Two of those three were added because a build that already worked was found to
@@ -354,17 +354,17 @@ be reading the host. Without `--gcc-install-dir` the SYCL unit compiled against
 installation. Neither said anything: both are visible only in the compiler's
 own include search list, and only on a machine that has those directories.
 
-## Adding a member: what the engine owns and what the member owns
+## Adding a plugin: what the engine owns and what the plugin owns
 
 1. One file, `rules/<x>.cppm`, `tools/<x>.cppm`, `dist/<x>.cppm` or `deps/<x>.cppm`, declaring
    its module name.
    The engine owns the graph — the accelerator axis, the constrained globs,
-   the action edges, the fingerprint — and the member owns the spelling: which
-   tool, which flags, what is generated. A member does not read `/usr`; a tool
+   the action edges, the fingerprint — and the plugin owns the spelling: which
+   tool, which flags, what is generated. A plugin does not read `/usr`; a tool
    comes from `mcpp::toolchain_dir()`, `mcpp::xpkg_dir()` or an explicit option,
    and a missing one is refused naming the `[xlings.workspace]` entry to add.
 2. A feature in `mcpp.toml` adding that one source.
 3. A consumer under `tests/` that builds through it and asserts on the
-   artefact, and a row in the README's members table with the mcpp floor.
+   artefact, and a row in the README's plugins table with the mcpp floor.
 4. A version bump: mcpp identifies an installed package by `(name, version)`,
    so a changed payload under an unchanged version is not reinstalled.
