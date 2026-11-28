@@ -215,6 +215,10 @@ are the unit's own, never visible to an importer. A unit that shares its module
 with other units cannot carry a fragment: its private region is a
 `namespace detail` block, and the names a sibling unit imports stay outside it.
 
+The members this package ships today were written before the rule and are not
+migrated: a member adopts the fragment as it is touched — noted here as a
+TODO, not carried out wholesale.
+
 ## 5. A new plugin
 
 A plugin in this package consists of:
