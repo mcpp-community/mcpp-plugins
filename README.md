@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/mcpp-community/mcpp-plugins)](https://github.com/mcpp-community/mcpp-plugins/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
-**English** | [简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [mcpp.plugins in the index](https://mcpp.index.xlings.org/packages/mcpp.plugins) · [Releases](https://github.com/mcpp-community/mcpp-plugins/releases)
+**English** | [简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [mcpp](https://github.com/mcpp-community/mcpp) · [mcpp-index](https://mcpp.index.xlings.org) · [Releases](https://github.com/mcpp-community/mcpp-plugins/releases)
 
 mcpp is a general engine with a framework for build plugins; plugins come from
 this package (`mcpp:plugins`), from third parties, or from the project itself,
