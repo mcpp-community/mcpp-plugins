@@ -97,11 +97,10 @@ runs comes from is in [docs/02](docs/02-tool-sources.md).
 
 The project is maintained mainly by
 [@Sunrisepeak](https://github.com/Sunrisepeak) — its upkeep and growth need
-more contributors and maintainers. Start from the simple and from what
-interests you: use it, introduce and teach it, report issues, fix bugs,
-improve it, maintain one or more plugins.
-
-If you are interested in contributing to and maintaining some plugins:
+more contributors and maintainers. If some plugins interest you and you want
+to contribute and maintain, start from the simple and from what interests
+you: use them, introduce and teach them, report issues, fix bugs, improve
+them, maintain one or more of them:
 
 - [propose or submit a new plugin](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)
 - [apply to maintain one](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml)

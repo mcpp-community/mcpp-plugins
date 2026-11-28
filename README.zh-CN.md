@@ -93,10 +93,9 @@ int main() {
 ## 贡献与维护
 
 项目目前主要由 [Sunrisepeak](https://github.com/Sunrisepeak) 维护——项目的
-维护和发展需要更多贡献者与维护者。从简单的、自己感兴趣的方向开始:使用它、
-介绍与教学、反馈问题、修复 bug、优化改进、维护一个或多个插件。
-
-如果你对某些插件感兴趣,并期望参与贡献和维护:
+维护和发展需要更多贡献者与维护者。如果你对某些插件感兴趣并期望参与贡献和
+维护,从简单的、自己感兴趣的方向开始:使用它、介绍与教学、反馈问题、修复
+bug、优化改进、维护一个或多个插件:
 
 - [提出或提交一个新插件](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=new-plugin.yml)
 - [申请维护一个插件成员](https://github.com/mcpp-community/mcpp-plugins/issues/new?template=maintainer-application.yml)
