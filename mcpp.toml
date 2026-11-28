@@ -29,7 +29,7 @@ import_std = true
 #
 # The units divide by what they may import:
 #
-#   src/plugins/       `mcpp.plugins`, importing only `std`, so the same code
+#   src/plugins.cppm   `mcpp.plugins`, importing only `std`, so the same code
 #                      compiles into `mcpp-embed` -- an ordinary program, which
 #                      is what lets the generation be an ACTION and a payload
 #                      be that action's declared input
@@ -52,9 +52,7 @@ import_std = true
 # were ordered by PATH, so `rules/spirv.cppm` was compiled before
 # `src/declare.cppm` and importing it failed with "failed to read compiled
 # module". They are ordered by their import graph now.
-sources = ["src/plugins/plugins.cppm", "src/plugins/stage.cppm", "src/plugins/xml.cppm",
-           "src/plugins/json.cppm", "src/plugins/graph.cppm", "src/plugins/package.cppm",
-           "src/plugins/names.cppm", "src/plugins/surface.cppm", "src/plugins/tree.cppm"]
+sources = ["src/plugins.cppm"]
 
 # EACH RULE STATES WHAT IT COMPILES AND HOW TO REACH IT (mcpp 2026.9.7.1+).
 #
@@ -277,7 +275,7 @@ sources = ["dist/wix.cppm"]
 implies = ["plugins-core"]
 
 [features.dist-apple]
-sources = ["dist/apple/apple.cppm", "dist/apple/internal/layout.cppm", "dist/apple/internal/plist.cppm", "dist/apple/internal/signing.cppm"]
+sources = ["dist/apple.cppm"]
 implies = ["plugins-core", "tools-steps"]
 
 [features.dist-web]
@@ -285,7 +283,7 @@ sources = ["dist/web.cppm"]
 implies = ["plugins-core"]
 
 [features.dist-apk]
-sources = ["dist/apk/apk.cppm", "dist/apk/internal/util.cppm", "dist/apk/internal/manifest.cppm", "dist/apk/internal/libraries.cppm"]
+sources = ["dist/apk.cppm"]
 implies = ["plugins-core", "tools-steps"]
 
 # `dist-deb` AND `dist-rpm` (0.23.0) SHARE ONE UNIT AND ONE TOOL. Both install

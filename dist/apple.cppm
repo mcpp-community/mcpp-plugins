@@ -195,18 +195,12 @@ import mcpp.plugins;
 import mcpp.plugins.tool;
 import mcpp.tools.steps;
 
-import mcpp.dist.apple.internal.layout;
-import mcpp.dist.apple.internal.plist;
-import mcpp.dist.apple.internal.signing;
-
-
 // Nothing here uses `std::println`, and that is not a style choice: both of
 // its overloads reach into the libc++ dylib for symbols macOS 14 does not
 // ship, so a member that printed with it compiled and then failed to link.
 // `std::format` is header-only. The full measurement is in `rules/spirv.cppm`.
 
 export namespace mcpp::dist::apple {
-    using namespace detail;
 
 // ─── Options ───────────────────────────────────────────────────────────────
 
@@ -389,6 +383,30 @@ struct plan {
 
 // ─── Internals ─────────────────────────────────────────────────────────────
 
+inline bool is_file(const std::string& p) {
+    std::error_code ec;
+    return !p.empty() && std::filesystem::is_regular_file(p, ec);
+}
+
+// Written only when the bytes differ, for the reason `dist/appimage.cppm`
+// gives: rewriting identical bytes moves the mtime, and a moved mtime on a
+// declared input is indistinguishable from a changed one -- so a second pack
+// of an unchanged project would re-copy the bundle and re-sign it.
+inline bool write_if_different(const std::filesystem::path& path,
+                               std::string_view bytes) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (std::ifstream in(path, std::ios::binary); in) {
+        std::string old((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+        if (old == bytes) return true;
+    }
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    return static_cast<bool>(out);
+}
+
 // Records a refusal on stderr and as a `mcpp::warning`. A member that refuses
 // submits no action and its build program exits 0, and the engine discards the
 // output of a build program that succeeded; its own error, "no action claimed
@@ -445,6 +463,53 @@ inline std::string app_name_for(const options& opt) {
     return (n && *n) ? std::string(n) : std::string("app");
 }
 
+// The program a bundle executes, found in the staged tree: `bin/<target>`
+// first, then the tree's top-level entry, then `run.sh`.
+//
+// THE PROGRAM, NOT THE TREE'S ENTRY SCRIPT. From the release that reads a
+// Mach-O program's closure (mcpp 2026.9.14.2), the engine also writes
+// `<tree>/<target>`, a shell script that executes `bin/<target>` from the
+// tree's root. The search used to take that root entry first, which is the
+// order `dist/appimage.cppm` needs, and a bundle then executed the script,
+// which executed `Contents/MacOS/bin/<target>` -- a file no bundle carries:
+// "cannot execute: No such file or directory", exit 126 (macos-15, run
+// 34821164486). The script has no work to do inside a bundle, where
+// `CFBundleExecutable` names the program directly, and the framework rpath
+// `@executable_path/../Frameworks` resolves against the program's own
+// directory, which has to be `Contents/MacOS/`. The root entry and `run.sh`
+// remain for a tree that carries no `bin/<target>`.
+inline std::string launcher_in(const std::string& stage, const std::string& target) {
+    for (auto candidate : {stage + "/bin/" + target,
+                           stage + "/" + target,
+                           stage + "/run.sh"})
+        if (is_file(candidate)) return candidate;
+    return {};
+}
+
+// CFBundleExecutable MUST BE A BARE FILENAME, NOT A PATH.
+//
+// Apple's own bundle documentation describes it as the executable's name
+// within `Contents/MacOS/`, and real-world bundle tooling has hit this
+// directly enough to be a filed CMake defect: "CFBundleExecutable path in a
+// bundle should not be a relative path into bundle." So this member takes
+// only the basename of whatever `launcher_in` finds, and the layout step
+// copies that file to the top of the executable directory under that name, so
+// the name and the file agree wherever in the staged tree it was found.
+inline std::string bundle_executable_name(const std::string& launcher_path) {
+    return std::filesystem::path(launcher_path).filename().string();
+}
+
+inline std::string sanitize_bundle_id_component(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+               || (c >= '0' && c <= '9') || c == '-' || c == '.';
+        out += ok ? c : '-';
+    }
+    return out;
+}
+
 // A reversed-DNS-SHAPED identifier, not a literal reversal of a domain --
 // mcpp packages carry `(namespace, name)`, not a domain to reverse. Sanitised
 // to the character set Apple documents for `CFBundleIdentifier`
@@ -460,6 +525,312 @@ inline std::string bundle_id_for(const options& opt) {
     if (!nm.empty()) return nm;
     if (!ns.empty()) return ns;
     return "app";
+}
+
+inline std::string plist_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;";  break;
+            case '>': out += "&gt;";  break;
+            default:  out += c;
+        }
+    }
+    return out;
+}
+
+// Written as XML text directly rather than by shelling out to `plutil`: the
+// content is a handful of string keys this member already holds, and adding
+// a second host tool to discover and invoke would buy nothing over
+// formatting the lines by hand. `LSMinimumSystemVersion` / `MinimumOSVersion`
+// and `CFBundleIconFile` are omitted rather than emitted empty when their
+// inputs are empty -- an empty string in either key is a claim as
+// unsupported as omitting the key, so omission is the honest one.
+//
+// `is_ios` AND `is_sim` DECIDE FOUR KEYS, NOT ONE BRANCH. `MinimumOSVersion`
+// replaces `LSMinimumSystemVersion`; `CFBundleSupportedPlatforms`,
+// `UIDeviceFamily` and `LSRequiresIPhoneOS` are iOS-only and absent from
+// every macOS bundle this member has ever written, which is the
+// byte-identical property the macOS fixture depends on; `NSHighResolutionCapable`
+// is a macOS concept (Retina-aware drawing on a platform that also has
+// non-Retina displays) with nothing to opt into on iOS, so it is macOS-only
+// in the other direction.
+inline std::string plist_document(const std::string& executable, const std::string& bundle_id,
+                                  const std::string& name, const std::string& version,
+                                  bool is_ios, bool is_sim,
+                                  const std::string& min_os_version,
+                                  // The project's own entries (0.11.0), already
+                                  // formatted, inserted before `</dict>`; and the
+                                  // defaulted keys they replace.
+                                  const std::string& extra_entries,
+                                  const std::vector<std::string>& replaced_keys,
+                                  // macOS: the icon FILE's basename, extension
+                                  // included, exactly as `CFBundleIconFile` has
+                                  // always taken it. iOS: unused (see
+                                  // `ios_icon_stems`) and always empty.
+                                  const std::string& mac_icon_name,
+                                  // iOS: every PNG stem found in
+                                  // `options::icon`'s directory. macOS: unused
+                                  // and always empty.
+                                  const std::vector<std::string>& ios_icon_stems) {
+    std::string doc;
+    doc += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    doc += "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+           "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
+    doc += "<plist version=\"1.0\">\n<dict>\n";
+    doc += std::format("    <key>CFBundleExecutable</key>\n    <string>{}</string>\n",
+                       plist_escape(executable));
+    doc += std::format("    <key>CFBundleIdentifier</key>\n    <string>{}</string>\n",
+                       plist_escape(bundle_id));
+    doc += std::format("    <key>CFBundleName</key>\n    <string>{}</string>\n",
+                       plist_escape(name));
+    doc += std::format("    <key>CFBundleShortVersionString</key>\n    <string>{}</string>\n",
+                       plist_escape(version));
+    doc += std::format("    <key>CFBundleVersion</key>\n    <string>{}</string>\n",
+                       plist_escape(version));
+    doc += "    <key>CFBundlePackageType</key>\n    <string>APPL</string>\n";
+    if (!min_os_version.empty())
+        doc += std::format("    <key>{}</key>\n    <string>{}</string>\n",
+                           is_ios ? "MinimumOSVersion" : "LSMinimumSystemVersion",
+                           plist_escape(min_os_version));
+    if (is_ios) {
+        // `env == "sim"` is the engine's own distinction between the two
+        // rows (triple.cppm: "the simulator is deliberately not a row of
+        // its own identity... it has its own SDK"); this key is the one
+        // place a bundle has to restate it, because `simctl install` and a
+        // real device's installer both read it to refuse the other kind.
+        doc += std::format(
+            "    <key>CFBundleSupportedPlatforms</key>\n    <array>\n"
+            "        <string>{}</string>\n    </array>\n",
+            is_sim ? "iPhoneSimulator" : "iPhoneOS");
+        // `[1, 2]`: iPhone and iPad. Nothing here narrows a project to one
+        // idiom -- that is a project decision (a size class, a storyboard)
+        // this member has no basis for making.
+        const auto replaced = [&](std::string_view k) {
+            return std::ranges::find(replaced_keys, k) != replaced_keys.end();
+        };
+        if (!replaced("UIDeviceFamily"))
+            doc += "    <key>UIDeviceFamily</key>\n    <array>\n"
+                   "        <integer>1</integer>\n        <integer>2</integer>\n    </array>\n";
+        if (!replaced("LSRequiresIPhoneOS"))
+            doc += "    <key>LSRequiresIPhoneOS</key>\n    <true/>\n";
+        if (!ios_icon_stems.empty()) {
+            doc += "    <key>CFBundleIcons</key>\n    <dict>\n"
+                   "        <key>CFBundlePrimaryIcon</key>\n        <dict>\n"
+                   "            <key>CFBundleIconFiles</key>\n            <array>\n";
+            for (auto const& stem : ios_icon_stems)
+                doc += std::format("                <string>{}</string>\n", plist_escape(stem));
+            doc += "            </array>\n        </dict>\n    </dict>\n";
+        }
+    } else {
+        if (std::ranges::find(replaced_keys, std::string_view("NSHighResolutionCapable")) == replaced_keys.end())
+            doc += "    <key>NSHighResolutionCapable</key>\n    <true/>\n";
+        // Not in the letter of this member's key list, but added
+        // deliberately: without it, an icon file this member went to the
+        // trouble of copying into `Contents/Resources/` is inert -- nothing
+        // in the bundle would ever reference it, and Finder would show the
+        // generic application icon regardless of `options::icon`. Wiring the
+        // file up once it exists is what makes the option do what its name
+        // says.
+        if (!mac_icon_name.empty())
+            doc += std::format("    <key>CFBundleIconFile</key>\n    <string>{}</string>\n",
+                               plist_escape(mac_icon_name));
+    }
+    doc += extra_entries;
+    doc += "</dict>\n</plist>\n";
+    return doc;
+}
+inline std::string plist_document(const std::string& executable, const std::string& bundle_id,
+                                  const std::string& name, const std::string& version,
+                                  bool is_ios, bool is_sim,
+                                  const std::string& min_os_version,
+                                  const std::string& mac_icon_name,
+                                  const std::vector<std::string>& ios_icon_stems) {
+    return plist_document(executable, bundle_id, name, version, is_ios, is_sim, min_os_version,
+                          std::string(), std::vector<std::string>(), mac_icon_name, ios_icon_stems);
+}
+
+inline std::string read_text(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+inline std::string resolve_path(const std::string& p) {
+    if (p.empty() || std::filesystem::path(p).is_absolute()) return p;
+    return (std::filesystem::path(mcpp::manifest_dir()) / p).lexically_normal().string();
+}
+
+// The keys `plist_document` derives, which a project's plist may not restate,
+// and the keys it only defaults, which a project's plist replaces.
+inline const std::vector<std::string>& derived_plist_keys() {
+    static const std::vector<std::string> v = {
+        "CFBundleExecutable", "CFBundleIdentifier", "CFBundleName", "CFBundleShortVersionString",
+        "CFBundleVersion", "CFBundlePackageType", "LSMinimumSystemVersion", "MinimumOSVersion",
+        "CFBundleSupportedPlatforms", "CFBundleIconFile", "CFBundleIcons"};
+    return v;
+}
+inline const std::vector<std::string>& defaulted_plist_keys() {
+    static const std::vector<std::string> v = {"UIDeviceFamily", "LSRequiresIPhoneOS", "NSHighResolutionCapable"};
+    return v;
+}
+
+// The top-level `<dict>` of a property list, or null. A document whose root is
+// `<dict>` itself is accepted as well as a full `<plist>`.
+inline const mcpp::plugins::xml::node* top_dict(const mcpp::plugins::xml::node& root) {
+    if (root.name == "dict") return &root;
+    if (root.name != "plist") return nullptr;
+    for (auto const& c : root.children) if (c.name == "dict") return &c;
+    return nullptr;
+}
+
+// The value element after each `<key>` of a `<dict>`, as (key, value) pairs.
+inline bool dict_entries(const mcpp::plugins::xml::node& dict,
+                         std::vector<std::pair<std::string, const mcpp::plugins::xml::node*>>& out,
+                         std::string& error) {
+    namespace xml = mcpp::plugins::xml;
+    for (std::size_t i = 0; i < dict.children.size(); ++i) {
+        const auto& k = dict.children[i];
+        if (k.name.empty()) continue;
+        if (k.name != "key") { error = "<" + k.name + "> appears where a <key> is expected"; return false; }
+        const std::string key = k.children.size() == 1 && k.children.front().name.empty()
+            ? xml::trim_copy(k.children.front().text) : std::string();
+        std::size_t j = i + 1;
+        while (j < dict.children.size() && dict.children[j].name.empty()) ++j;
+        if (key.empty() || j >= dict.children.size()) { error = "a <key> without a value"; return false; }
+        out.emplace_back(key, &dict.children[j]);
+        i = j;
+    }
+    return true;
+}
+
+// One Info.plist entry a fragment states: its key and the plist text of the
+// `<key>` and its value, as `plist_document` inserts it.
+struct plist_entry {
+    std::string key;
+    std::string text;
+};
+
+// Reads one plist fragment's entries. `who` is how a diagnostic names the
+// fragment (`options::info_plist`, or a package's [package.metadata.dist-apple]).
+inline bool read_plist_entries(const std::string& path, const std::string& who,
+                               std::vector<plist_entry>& out, std::string& message) {
+    namespace xml = mcpp::plugins::xml;
+    xml::node root;
+    std::string err;
+    if (!xml::parse(read_text(path), root, err)) {
+        message = std::format("mcpp.dist.apple: {} ({}) cannot be read: {}", who, path, err);
+        return false;
+    }
+    const xml::node* dict = top_dict(root);
+    if (!dict) {
+        message = std::format("mcpp.dist.apple: {} ({}) has no top-level <dict>.", who, path);
+        return false;
+    }
+    std::vector<std::pair<std::string, const xml::node*>> pairs;
+    if (!dict_entries(*dict, pairs, err)) {
+        message = std::format("mcpp.dist.apple: {} ({}): {}", who, path, err);
+        return false;
+    }
+    std::vector<std::string> seen;
+    for (auto const& [key, value] : pairs) {
+        if (std::ranges::find(derived_plist_keys(), key) != derived_plist_keys().end()) {
+            message = std::format(
+                "mcpp.dist.apple: {} ({}) sets {}, which this member derives "
+                "from its options and the engine; set the option instead.", who, path, key);
+            return false;
+        }
+        if (std::ranges::find(seen, key) != seen.end()) {
+            message = std::format("mcpp.dist.apple: {} ({}) sets {} twice.", who, path, key);
+            return false;
+        }
+        seen.push_back(key);
+        plist_entry e;
+        e.key  = key;
+        e.text = "    <key>" + key + "</key>\n";
+        xml::write(*value, e.text, 1);
+        out.push_back(std::move(e));
+    }
+    return true;
+}
+
+// A provisioning profile is a CMS-signed property list. The plist is stored in
+// the signed content as-is, so it is read from between its `<?xml` and
+// `</plist>` rather than through `security cms -D`, which exists only on macOS
+// and would make a plan made elsewhere unable to check anything. The signature
+// is the device's to verify, not this member's.
+inline bool read_profile(const std::string& path, const std::string& bundleId,
+                         std::string& entitlementsPlist, std::string& message) {
+    namespace xml = mcpp::plugins::xml;
+    const std::string bytes = read_text(path);
+    const auto b = bytes.find("<?xml");
+    const auto e = bytes.find("</plist>");
+    if (b == std::string::npos || e == std::string::npos || e < b) {
+        message = std::format(
+            "mcpp.dist.apple: `options::provisioning_profile` ({}) carries no property list, so "
+            "it is not a provisioning profile.", path);
+        return false;
+    }
+    xml::node root;
+    std::string err;
+    if (!xml::parse(std::string_view(bytes).substr(b, e + 8 - b), root, err)) {
+        message = std::format("mcpp.dist.apple: the property list in {} cannot be read: {}", path, err);
+        return false;
+    }
+    const xml::node* dict = top_dict(root);
+    std::vector<std::pair<std::string, const xml::node*>> pairs;
+    if (!dict || !dict_entries(*dict, pairs, err)) {
+        message = std::format("mcpp.dist.apple: the property list in {} has no readable top-level <dict>.", path);
+        return false;
+    }
+    const xml::node* entitlements = nullptr;
+    for (auto const& [key, value] : pairs) if (key == "Entitlements" && value->name == "dict") entitlements = value;
+    std::vector<std::pair<std::string, const xml::node*>> granted;
+    if (!entitlements || !dict_entries(*entitlements, granted, err)) {
+        message = std::format("mcpp.dist.apple: the provisioning profile {} states no Entitlements dictionary.", path);
+        return false;
+    }
+    std::string appIdentifier;
+    for (auto const& [key, value] : granted)
+        if (key == "application-identifier" && value->children.size() == 1 && value->children.front().name.empty())
+            appIdentifier = xml::trim_copy(value->children.front().text);
+    const auto dot = appIdentifier.find('.');
+    const std::string pattern = dot == std::string::npos ? std::string() : appIdentifier.substr(dot + 1);
+    const bool covers = !pattern.empty() &&
+        (pattern == bundleId || pattern == "*" ||
+         (pattern.ends_with(".*") && bundleId.starts_with(pattern.substr(0, pattern.size() - 1))));
+    if (!covers) {
+        message = std::format(
+            "mcpp.dist.apple: the provisioning profile {} is for the application identifier '{}', "
+            "which does not cover the bundle identifier '{}'. Set `options::bundle_id` to match, "
+            "or use the profile made for it.", path,
+            appIdentifier.empty() ? std::string("(none)") : appIdentifier, bundleId);
+        return false;
+    }
+    // A WILDCARD PROFILE GRANTS `<team>.*`, AND THE SIGNATURE STATES THE BUNDLE.
+    // Xcode signs with the application identifier the bundle is, which the
+    // wildcard covers, rather than with the wildcard itself; the other
+    // entitlements are the profile's as it states them.
+    xml::node signedWith = *entitlements;
+    if (pattern != bundleId) {
+        const std::string exact = appIdentifier.substr(0, dot + 1) + bundleId;
+        for (std::size_t k = 0; k + 1 < signedWith.children.size(); ++k) {
+            auto const& key = signedWith.children[k];
+            auto& value = signedWith.children[k + 1];
+            if (key.name == "key" && key.children.size() == 1 &&
+                xml::trim_copy(key.children.front().text) == "application-identifier" &&
+                value.name == "string" && value.children.size() == 1 && value.children.front().name.empty())
+                value.children.front().text = exact;
+        }
+    }
+    entitlementsPlist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+                        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                        "<plist version=\"1.0\">\n";
+    xml::write(signedWith, entitlementsPlist, 0);
+    entitlementsPlist += "</plist>\n";
+    return true;
 }
 
 // ─── Plan ──────────────────────────────────────────────────────────────────
