@@ -1,6 +1,6 @@
 # `rules-qml`
 
-`mcpp.rules.qml` builds a QML application: for each QML module the project states, it declares the chain Qt's `qt_add_qml_module` runs (`moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc`, `qsb`) as actions, so the module is compiled into the executable and loaded with `loadFromModule`; it places the Qt QML modules the program imports beside it, and writes a `qt.conf` that points Qt at them. It builds on [rules-qt](rules-qt.md), which it implies, and takes its options. Module `mcpp.rules.qml`; engine floor 2026.10.1.3 (the floor of `rules-qt`; the package needs 2026.10.30.1, and the lowest release the fixtures were run on is 2026.10.31.3), and 2026.11.23.1 for a `mcpp pack` that carries the libraries the QML plugins load (mcpp#1011); from 0.27.0.
+`mcpp.rules.qml` builds a QML application: for each QML module the project states, it declares the chain Qt's `qt_add_qml_module` runs (`moc`, `qmltyperegistrar`, `qmlcachegen`, `rcc`, `qsb`) as actions, so the module is compiled into the executable and loaded with `loadFromModule`; it places the Qt QML modules the program imports beside it, and writes a `qt.conf` that points Qt at them. It builds on [rules-qt](11-rules-qt.md), which it implies, and takes its options. Module `mcpp.rules.qml`; engine floor 2026.10.1.3 (the floor of `rules-qt`; the package needs 2026.10.30.1, and the lowest release the fixtures were run on is 2026.10.31.3), and 2026.11.23.1 for a `mcpp pack` that carries the libraries the QML plugins load (mcpp#1011); from 0.27.0.
 
 ## Use
 

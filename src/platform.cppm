@@ -89,7 +89,7 @@ inline bool engine_format(std::string_view n) {
 
 // A relative path is the platform package's own. Spelled on strings: a module
 // that instantiates `std::filesystem::path`'s iterator (`lexically_normal`)
-// breaks every importer under MSVC 14.52 (docs/plugin-development.md §4).
+// breaks every importer under MSVC 14.52 (docs/01-plugin-development.md §4).
 inline std::string absolute_in_package(std::string_view path) {
     const bool absolute = path.starts_with('/') || path.starts_with('\\')
         || (path.size() > 2 && path[1] == ':' && (path[2] == '/' || path[2] == '\\'));

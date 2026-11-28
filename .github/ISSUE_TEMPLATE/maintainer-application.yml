@@ -1,0 +1,59 @@
+name: Plugin maintainer application
+description: Apply to become the maintainer of one plugin of mcpp-plugins
+labels: ["maintainer-application"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for wanting to take a plugin's maintainership. One application
+        covers one plugin.
+
+        A maintainer knows the plugin deeply and its application domain, and
+        leads its popularization and ecosystem building — technical articles,
+        videos, tutorials. Development plus outreach is the core of the role,
+        and the application states contributions in both categories. What a
+        maintainer does and knows:
+        [docs/03 — Maintainers](https://github.com/mcpp-community/mcpp-plugins/blob/main/docs/03-maintainers.md).
+  - type: input
+    id: plugin
+    attributes:
+      label: The plugin you apply for
+      description: One plugin per application — for another, open another issue.
+      placeholder: "rules-cuda"
+    validations:
+      required: true
+  - type: textarea
+    id: familiarity
+    attributes:
+      label: Your familiarity with the plugin and its domain
+      description: What you build with it, the related field you work in, how long you have used it.
+    validations:
+      required: true
+  - type: textarea
+    id: technical-contributions
+    attributes:
+      label: Technical contributions to the plugin
+      description: Required. Pull requests or commits — fixes, features, fixture and CI care, documentation. Link them.
+      placeholder: "PR #12 — the manifest-merge fix; PR #18 — the min-sdk fixture"
+    validations:
+      required: true
+  - type: textarea
+    id: outreach-contributions
+    attributes:
+      label: Ecosystem-building and technical outreach contributions
+      description: Required. Technical articles, videos, blogs, tutorials — and indirect ecosystem growth through real projects built on the plugin. Preferably public, and linked.
+      placeholder: "a manifest-merger walkthrough on a blog; a getting-started video for the plugin"
+    validations:
+      required: true
+  - type: textarea
+    id: maintenance-plan
+    attributes:
+      label: Maintenance plan
+      description: Required, and both sides of the role — the daily technical upkeep you commit to (triage, fixes, fixture and CI care), and the ongoing popularization you plan to keep doing.
+    validations:
+      required: true
+  - type: textarea
+    id: referrer
+    attributes:
+      label: Referrer (optional)
+      description: An existing maintainer of a related plugin who supports this application, if one knows your work.

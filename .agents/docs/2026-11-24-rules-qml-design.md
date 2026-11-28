@@ -178,7 +178,7 @@ Windows 与 macOS 没有实测机器：凡依赖它们的结论都标"推断"，
 - QML：部署 `QtQuick/Layouts` 的插件后，包里没有 `libQt6QuickLayouts.so.6`；Controls 的 `libQt6QuickControls2Impl.so.6` 同样缺。
 - **现有 `rules-qt` 的平台插件也有同一缺口**：对已部署 `platforms/` 的打包目录逐个读依赖，缺 `libQt6XcbQpa.so.6`（`libqxcb.so`）、`libQt6WaylandClient.so.6`（`libqwayland.so`）、`libQt6EglFSDeviceIntegration.so.6`（`libqeglfs.so`）。真实 X11 桌面上，xcb 平台插件会因缺 `libQt6XcbQpa` 加载失败；现有 CI 只在 offscreen 下运行，所以没发现。（我没有显示环境，只在静态依赖层面确认，运行层面的失败是推断。）
 
-**与仓库规则的关系**：`docs/plugin-development.md` 的规则 4（运行时闭包属于提供二进制的包；插件只命名库目录）与规则 8（引擎缺口要报告，不要打补丁；已有的补丁要在文档里记录 issue 号并在引擎支持后移除）。因此：
+**与仓库规则的关系**：`docs/01-plugin-development.md` 的规则 4（运行时闭包属于提供二进制的包；插件只命名库目录）与规则 8（引擎缺口要报告，不要打补丁；已有的补丁要在文档里记录 issue 号并在引擎支持后移除）。因此：
 
 1. **向 mcpp 提 issue**（你同意后已提交）：**mcpp-community/mcpp#1011**，建议能力是"`mcpp pack` 把 `role: library` 的已部署文件也作为闭包的根"。正文见 §15。提交前搜索过，没有重复（相关的 #615、#634、#630、#701 都是已关闭的、讨论别的缺口）。
 2. **本 PR 带 `link_plugin_libs` 补丁，按规则 8 标注**（这是你的决定：先 workaround，用户与开发者层面无感，mcpp 修复后自动没问题）：
@@ -193,7 +193,7 @@ Windows 与 macOS 没有实测机器：凡依赖它们的结论都标"推断"，
      //   note:        idempotent: linking a library the engine also stages changes nothing
      ```
 
-     `docs/rules-qt.md`、`docs/rules-qml.md` 各有"引擎缺口"一节，写 mcpp#1011 与移除条件（规则 8）；README 不提。
+     `docs/11-rules-qt.md`、`docs/12-rules-qml.md` 各有"引擎缺口"一节，写 mcpp#1011 与移除条件（规则 8）；README 不提。
    - **自动退场**：补丁是幂等的——引擎一旦把已部署库的依赖纳入闭包，我们多链的同一批库对结果没有任何影响（同一个文件、同一个目的地）。引擎没有向 build 程序暴露版本接口（`hostprogram.cppm` 只有 `package_version` 等，已查），所以不做版本门；退场靠下一条。
    - **金丝雀**：`qml-deploy` 的脚本多做一次构建：用环境变量让 fixture 的 `build.mcpp` 设 `plugin_closure = false`，打包，再用读取器检查闭包。若这次包里**已经**没有缺库，说明引擎修好了，脚本打印 `NOTICE: the engine now closes deployed libraries (mcpp#1011); remove the plugin_closure workaround` 并以成功退出（不失败，是提示）；仍缺库则打印 `ok: the engine gap still exists (mcpp#1011)`。引擎修好后，CI 日志里会自动出现这条提示，不需要有人记得。
    - **链接旗标要防"未引用的库被丢弃"**（评审指出的风险，已用 lld 实测）：Linux 上 lld 默认保留按全路径给出的库（NEEDED 保留），但加 `--as-needed`（Ubuntu 的 gcc 默认就是）后被丢弃（NEEDED 为 0）；用 `-Wl,--push-state,--no-as-needed <库> -Wl,--pop-state` 包住后保留（实测，且包外的库仍按 `--as-needed` 处理）。macOS：`ld64.lld` 默认保留，`-dead_strip_dylibs` 丢弃，`-needed_library <路径>` 保留（实测，直接用 `ld64.lld` 与手工构建的 dylib）。因此补库在 ELF 上用 push/pop 包住，在 Mach-O 上用 `-needed_library`。
@@ -437,7 +437,7 @@ Qml2Imports = qml
 Translations = <qt.i18n.deploy_to>        # 仅在不是默认的 translations 时写出
 ```
 
-并 `deploy` 到 `.`。检测到项目自己的 `qt.conf` 时不写（Q3）。副作用见 Q3，写进 `docs/rules-qml.md`。
+并 `deploy` 到 `.`。检测到项目自己的 `qt.conf` 时不写（Q3）。副作用见 Q3，写进 `docs/12-rules-qml.md`。
 
 **Qt Quick 所需的插件目录**用一个独立字段 `options::quick_plugins`，与 `qt.deploy_plugins` 取并集，而不是"检测 `deploy_plugins` 是否为默认值再替换"（`std::vector` 分不清"没设置"和"设成了默认值"，评审指出）。`quick_plugins` 的默认值：Linux `xcbglintegrations`、`platforminputcontexts`、`imageformats`；Windows/macOS `imageformats`、`platforminputcontexts`（目录不存在则只是 `rules-qt` 已有的警告）。用户把它设为空即不加。**这一项是推断**（真实 GL 窗口无法在无显示环境测试），由打包清单断言与 offscreen 运行约束，可按 CI 调整。`plugin_closure` 在两个规则里默认都是 `true`，不存在"未设置"问题。
 
@@ -547,10 +547,10 @@ PE 与 Mach-O **读取器**的正确性已用真实构建的样本验证（样�
 | `src/binary.cppm` | 新增（`mcpp.plugins.binary`） |
 | `rules/qt.cppm` | §7 的 a–f；头注释增加"见 `mcpp.rules.qml`" |
 | `mcpp.toml` | `version` 0.26.1 → 0.27.0；`[features.plugins-binary]`、`[features.rules-qml]`；`rules-qt` 的 `implies` 增加 `plugins-binary`；`src/plugins.cppm` 的版本常量同步 |
-| `docs/rules-qml.md` | 新增：开头一段摘要，随后用法、选项表、动作清单、部署与闭包、`qt.conf` 副作用、限制（§1 非目标）、平台表、"引擎缺口"一节（同上）；遵守 `plugin-development.md` 规则 10 |
-| `docs/rules-qt.md` | `moc_json`、`moc_includes`、`compile_ex`、`i18n.extensions`、`plugin_closure`；新增"引擎缺口"一节（平台插件的闭包缺口、issue 号、移除条件、金丝雀）；指向 `rules-qml` |
-| `docs/engine-and-rules.md` | `rules-qml` 不认领扩展名、不写 `rule_module` 的原因 |
-| `docs/plugin-development.md` | §3 的分层表加入 L2 单元 `mcpp.plugins.binary`；规则 8 的"已有补丁"一节指向 `check-engine-gaps.sh` |
+| `docs/12-rules-qml.md` | 新增：开头一段摘要，随后用法、选项表、动作清单、部署与闭包、`qt.conf` 副作用、限制（§1 非目标）、平台表、"引擎缺口"一节（同上）；遵守 `01-plugin-development.md` 规则 10 |
+| `docs/11-rules-qt.md` | `moc_json`、`moc_includes`、`compile_ex`、`i18n.extensions`、`plugin_closure`；新增"引擎缺口"一节（平台插件的闭包缺口、issue 号、移除条件、金丝雀）；指向 `rules-qml` |
+| `docs/00-engine-and-rules.md` | `rules-qml` 不认领扩展名、不写 `rule_module` 的原因 |
+| `docs/01-plugin-development.md` | §3 的分层表加入 L2 单元 `mcpp.plugins.binary`；规则 8 的"已有补丁"一节指向 `check-engine-gaps.sh` |
 | `.github/scripts/check-engine-gaps.sh` | 新增（Q9 的标记检查），并接入现有 `check-compat-retirement.sh` 所在的步骤 |
 | `README.md` | Members 表增加 `rules-qml`（mcpp 下限列 2026.10.1.3，注明整个包需要 2026.10.30.1、最低验证 2026.10.31.3）；`plugins-binary` 进"通用库"一段；示例版本号 |
 | `tests/plugin-logic/…` | §10.1 |
@@ -564,7 +564,7 @@ PE 与 Mach-O **读取器**的正确性已用真实构建的样本验证（样�
 
 1. `mcpp.plugins.binary` 与单测（合成样本、截断扫描）。
 2. `rules-qt`：`moc_json`、`moc_includes`、`compile_ex`、导出函数，`plugin-logic` 的"现有 argv 不变"用例（先证明零回归）。
-3. `rules-qt`：`link_plugin_libs`、`plugin_closure`（默认开，带 `ENGINE-GAP WORKAROUND` 标记）、`check-engine-gaps.sh` 与对应单测（单独一个提交；`docs/rules-qt.md` 的"引擎缺口"一节随它提交，便于你单独审这一处行为变更）。
+3. `rules-qt`：`link_plugin_libs`、`plugin_closure`（默认开，带 `ENGINE-GAP WORKAROUND` 标记）、`check-engine-gaps.sh` 与对应单测（单独一个提交；`docs/11-rules-qt.md` 的"引擎缺口"一节随它提交，便于你单独审这一处行为变更）。
 4. `rules-qml` 的模块链路（§6），及其 `plugin-logic` 用例。
 5. 部署：文本闭包、`qt.conf`、补库（§8）及用例。
 6. `qsb`、`qmllint`、`lupdate` 扩展。
@@ -616,14 +616,14 @@ PE 与 Mach-O **读取器**的正确性已用真实构建的样本验证（样�
 
 | # | 意见（摘要） | 核实 | 处理 |
 |---|---|---|---|
-| 1 | 闭包补丁违反 `plugin-development.md` 规则 4、8；建议不打补丁、默认关或放进带到期日的 `compat/` | 属实：规则 8 原文是"引擎缺口要报告，不打补丁" | **你的决定**：先 workaround、默认开、无感、引擎修好后自动无事。我采纳了其中的"标注与强制移除"思想，做成与 `compat/` 同构的 `ENGINE-GAP` 标记 + `check-engine-gaps.sh`（因没有固定日期，不用到期日），并加金丝雀（Q9） |
+| 1 | 闭包补丁违反 `01-plugin-development.md` 规则 4、8；建议不打补丁、默认关或放进带到期日的 `compat/` | 属实：规则 8 原文是"引擎缺口要报告，不打补丁" | **你的决定**：先 workaround、默认开、无感、引擎修好后自动无事。我采纳了其中的"标注与强制移除"思想，做成与 `compat/` 同构的 `ENGINE-GAP` 标记 + `check-engine-gaps.sh`（因没有固定日期，不用到期日），并加金丝雀（Q9） |
 | 2 | `plugin_closure`、`deploy_plugins` 用普通类型分不清"未设置"与"设成默认值" | 属实 | 采纳：`plugin_closure` 两处都默认 `true`；Quick 插件目录改用独立字段 `quick_plugins` 取并集（§8） |
 | 3 | `qt.conf` 固定文本，`deploy_to` 非默认会丢翻译；未处理项目自带 `qt.conf` | 属实 | 采纳（Q3）：`Translations` 随 `deploy_to`；检测并警告用户自己的 `qt.conf`。内嵌到 qrc 的方案未采纳：文件方案已实测，内嵌的 `Prefix` 相对谁未验证 |
 | 4 | README 下限列语义；`action::env` 是否存在 | README 列语义属实；`action::env` 存在（`hostprogram.cppm:441`，协议 13） | 采纳（Q4）：列写 2026.10.1.3 并注明；Q4 证据改为只声称验证过的 API |
 | 5 | §6 的"都跑通"过度概括：单模块、`qsb`/`qmllint` 未运行、G4/C++ 单例无证据；延迟导入等没有真实样本；`closure.py` 写死路径、只认整行 `import` | 属实 | 采纳：补做多模块（`sum=19`）、跨模块继承、C++ `QML_SINGLETON`、无 C++ 类型模块、`lupdate` 的 qml 提取；§6 标题如实写明；Q2 列出只有合成样本覆盖的路径；`closure.py` 容忍行尾 `;`（4 个样本仍与 scanner 一致）。"40 个模块的样本用的是 Qt 自己的文件而不是用户代码"：属实，写在 Q1 的覆盖说明里，结论限于 SDK 内部的 import 图 |
 | 6 | 规则 9：`qml-shaders` 永远不会失败；G9 无 fixture；`aot=false`、`styles` 等无运行用例 | 属实 | 采纳：G9 加进 `qml-consumer`；加三个变体（§10.2）；`qml-shaders` 的跳过用 `::notice::` 可见，并在限制里承认 G7 在 `xim:qt-addons` 修复前只有 argv 级覆盖 |
 | 7 | 计划期读 `.qml` 内容，只声明 glob 不够 | 属实（`rules/qt.cppm` 对读过的头文件逐个声明） | 采纳（§5.1） |
-| 8 | 文档清单缺项：`plugin-development.md` L2 表、脚本的 usage/case；交叉引用错；`--format` 写法；`compile_ex`、`tool_path` 扩大契约；`rule_module` 的说法含糊 | 属实 | 采纳（§4.1、§7 e、§11、§15、spikes README） |
+| 8 | 文档清单缺项：`01-plugin-development.md` L2 表、脚本的 usage/case；交叉引用错；`--format` 写法；`compile_ex`、`tool_path` 扩大契约；`rule_module` 的说法含糊 | 属实 | 采纳（§4.1、§7 e、§11、§15、spikes README） |
 | 9 | 测试：`env -i` 挡不住 RUNPATH；`.qmltypes` 文本非契约；mtime 粒度；`grep -a` 不证明 AOT；随机改字节无种子、sanitizer 与模块单元的组合；`dumpbin` 需要 VS | 属实 | 采纳（§10.1、§10.3）：挪走 SDK 目录；运行时断言继承；`sleep 2.2`；`llvm-nm` 符号；固定种子、sanitizer 不进 CI；统一用 `llvm-readobj`（也是你关于 LLVM 的意见的落点） |
 | S1 | `link_flag` 的库可能被 `--as-needed` 丢弃 | **实测属实**（lld `--as-needed` 下 NEEDED 为 0） | 采纳（Q9、§7）：push/pop 包住；Mach-O 用 `-needed_library` |
 | S2 | macOS bundle 里 `Prefix = .` 含义不同 | 无法验证 | 写入 Q3，归入 Q7 的范围，标明推断 |

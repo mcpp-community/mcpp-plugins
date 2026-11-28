@@ -99,7 +99,7 @@ struct options {
     // the toolset mcpp builds the program with, named by path, with the Ninja
     // generator and mcpp's own ninja. `detected` lets CMake find its own
     // toolset, as 0.16.0 did, until 2027-03-28. Compilers or a toolchain file
-    // in `cache_args` decide instead. See docs/deps.md.
+    // in `cache_args` decide instead. See docs/40-deps.md.
     mcpp::plugins::toolset::choice toolset;
     // Which generator (0.18.0). `default` is Ninja wherever the toolset is
     // named, a Visual Studio instance's included, as vcpkg builds its CMake
@@ -118,7 +118,7 @@ struct options {
     // (`%LOCALAPPDATA%/mcpp-plugins/deps-cmake`,
     // `$XDG_CACHE_HOME/mcpp-plugins/deps-cmake` or
     // `~/.cache/mcpp-plugins/deps-cmake`). Read when the action runs; the place
-    // is no part of what is built. See docs/deps.md.
+    // is no part of what is built. See docs/40-deps.md.
     std::string cache;
     // `CMAKE_SYSTEM_NAME` of a build for another target (0.21.0). Empty
     // derives it from the target's system: Linux, Android, Darwin, iOS,

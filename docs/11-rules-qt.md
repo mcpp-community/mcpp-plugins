@@ -1,6 +1,6 @@
 # `rules-qt`
 
-`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0 (0.27.0 adds `moc_json`, `moc_includes`, `i18n.extensions` and `compile_ex`; QML is [rules-qml](rules-qml.md)), 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
+`mcpp.rules.qt` runs Qt's code generators (`moc`, `uic`, `rcc`) and Linguist tools (`lupdate`, `lrelease`, `lconvert`) as build actions, links the Qt modules and places their runtime beside the program. The rule declares no SDK and pins no version: the project names the Qt it builds with, in `build.mcpp` or in its own `[xlings]` table. Module `mcpp.rules.qt`; engine floor 2026.10.1.3 (mcpp#755) from 0.19.0 (0.27.0 adds `moc_json`, `moc_includes`, `i18n.extensions` and `compile_ex`; QML is [rules-qml](12-rules-qml.md)), 2026.9.27.1 (mcpp#704, mcpp#715) from 0.16.0, 2026.9.26.2 (mcpp#702) before; from 0.13.0.
 
 ## Use
 

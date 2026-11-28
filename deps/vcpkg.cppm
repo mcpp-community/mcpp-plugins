@@ -94,7 +94,7 @@ struct options {
     // other toolset is named in a derived triplet `<base>-mcpp-<hash>`
     // (CMake and make ports build; an MSBuild port needs Visual Studio and is
     // refused by name). `detected` lets vcpkg find its own toolset, as 0.16.0
-    // did, until 2027-03-28. See docs/deps.md.
+    // did, until 2027-03-28. See docs/40-deps.md.
     mcpp::plugins::toolset::choice toolset;
     // The C runtime linkage of the ports on the MSVC ABI, "static" or
     // "dynamic". Empty follows the program's C++ runtime contract
